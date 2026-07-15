@@ -18,6 +18,7 @@ from pyrogram.types import BotCommand, Message
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
 from kage.shared.ui_helpers import reply_with_screen
+from nekofetch.ui.artwork import pick_artwork
 
 LEVI_COMMANDS = [
     BotCommand("start", "View your assigned download tasks"),
@@ -57,34 +58,139 @@ def build_levi(container: Container, token: str) -> Client:
     register_all(client, container)
 
     # ── Catch-all menu callback ─────────────────────────────────────────────
-    # Inline buttons on /start route to `levi|<action>`. Whatever doesn't
-    # match a real handler gets a one-line alert rather than silent failure.
-    from pyrogram.types import CallbackQuery
+    # Inline buttons on /start route to `levi|<action>`. The dispatcher below
+    # maps every action to a real screen — no more "Type /X in chat" toasts.
+    from pyrogram.types import (CallbackQuery, InlineKeyboardButton,
+                                InlineKeyboardMarkup)
+    from kage.shared.menu_router import settings_hub, settings_onboarding, tool_screen
+    from kage.shared.settings_content import ALL_BY_BOT
+    from nekofetch.ui.components import cb
+    from nekofetch.ui.screens import Screen, send_screen
 
     @client.on_callback_query(filters.regex(r"^levi\|"))
-    async def _levi_menu_fallback(_: Client, q: CallbackQuery) -> None:
-        # Inline-query-based callbacks can have q.message=None (callback
-        # via an inline keyboard never has it, but Pyrogram types lie) —
-        # skip silently rather than dereferencing q.message.chat.id below.
+    async def _levi_menu_fallback(client: Client, q: CallbackQuery) -> None:
         if q.message is None:
             await q.answer()
             return
-        try:
-            _, action = q.data.split("|", 1)
-        except ValueError:
-            action = "help"
-        await q.answer(f"Type /{action} in chat.", show_alert=False)
-        try:
-            await reply_with_screen(
-                client, q.message.chat.id,
-                f"<b>📍 Type /{action} in chat.</b>",
-                bot_name="levi", old_msg=q.message,
+        parts = q.data.split("|", 2)
+        action = parts[1] if len(parts) > 1 else "home"
+        arg = parts[2] if len(parts) > 2 else ""
+        bot = "levi"
+
+        # ¬¬ Home ¬¬
+        if action == "home":
+            caption = (
+                "<b>⚔️ Levi Ackerman — Downloader</b>\n\n"
+                "<i>\"No task is impossible. Only tasks I haven't cut down yet.\"</i>\n\n"
+                "I handle the download pipeline:\n"
+                "• Select the source manually\n"
+                "• Download and process files\n"
+                "• Upload thumbnails and generate headers"
             )
-        except Exception as exc:
-            log.warning(
-                "menu_fallback.screen_failed",
-                bot="levi", action=action, error=str(exc),
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 Tasks", callback_data=cb(bot, "tasks")),
+                 InlineKeyboardButton("🌐 Sources", callback_data=cb(bot, "sources"))],
+                [InlineKeyboardButton("🎯 Assign", callback_data=cb(bot, "assign")),
+                 InlineKeyboardButton("📝 Header", callback_data=cb(bot, "header"))],
+                [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
+            ])
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=keyboard), old_msg=q.message)
+            await q.answer()
+            return
+
+        # ¬¬ Tool panels ¬¬
+        if action in ("tasks", "sources", "assign", "header"):
+            titles = {"tasks": "📋 Your Tasks",
+                      "sources": "🌐 Source Browser",
+                      "assign": "🎯 Assign a Source",
+                      "header": "📝 Generate Header"}
+            body_map = {
+                "tasks": [
+                    "<b>/tasks</b> — exact command-line form of this panel.",
+                    "<b>What you see here:</b>",
+                    "  🔹 <b>Code</b>  ·  <b>Anime</b>  ·  <b>Stage</b>",
+                    "  🔹 <i>Stage icons: ⏳ queued, ⬇️ downloading, ⚙️ processing</i>",
+                    "<blockquote>Tasks are assigned by the request bot. The queue auto-picks the lightest worker.</blockquote>",
+                    "💡 <b>Example:</b> Just tap <b>📋 Tasks</b> — no command needed.",
+                ],
+                "sources": [
+                    "<b>/sources</b> — exact command-line form.",
+                    "<b>What you see here:</b>",
+                    "  🔹 Browse available download providers",
+                    "  🔹 Tap one to assign it to the current task",
+                    "<blockquote>Source selection is manual — you decide which provider to use for each anime.</blockquote>",
+                    "💡 <b>Example:</b> <code>/sources</code>",
+                ],
+                "assign": [
+                    "<b>/assign REQ-XXXX source</b> — assigns a source to a task.",
+                    "<b>Steps:</b>",
+                    "  1. Pick a task from <b>📋 Tasks</b>",
+                    "  2. Pick a source from <b>🌐 Sources</b>",
+                    "  3. Use <code>/assign REQ-XXXX source_name</code>",
+                    "<blockquote>Once assigned, the downloader worker picks it up automatically.</blockquote>",
+                    "💡 <b>Example:</b> <code>/assign REQ-12AB anikoto</code>",
+                ],
+                "header": [
+                    "<b>/header REQ-XXXX</b> — generates a header card.",
+                    "<b>What it does:</b>",
+                    "  🔹 Renders the main-channel header image",
+                    "  🔹 Reads the franchise metadata you uploaded",
+                    "<blockquote>You review the header, then approve or edit the Markdown/HTML before publishing.</blockquote>",
+                    "💡 <b>Example:</b> <code>/header REQ-12AB</code>",
+                ],
+            }
+            caption, keyboard = tool_screen(
+                bot, title=titles[action],
+                kicker="Tap a button from /start — no typing needed.",
+                lines=body_map[action],
+                back="home",
             )
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=keyboard), old_msg=q.message)
+            await q.answer()
+            return
+
+        # ¬¬ Settings hub ¬¬
+        if action == "settings":
+            caption, keyboard = settings_hub(
+                bot, title="Levi Settings",
+                body=("Configure download concurrency, retry behavior, and the "
+                      "post-download processing pipeline.\n\n"
+                      "<i>Tap a row to open the help panel for that key, then "
+                      "send the new value as a chat message.</i>"),
+                items=[("Download Settings", "downloads"),
+                       ("Processing Options", "processing")],
+            )
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=keyboard), old_msg=q.message)
+            await q.answer()
+            return
+
+        # ¬¬ set|<key> onboarding ¬¬
+        if action == "set" and arg:
+            info = ALL_BY_BOT.get(bot, {}).get(arg)
+            if info:
+                caption, keyboard = settings_onboarding(
+                    bot, arg, title=info["title"], about=info["about"],
+                    when_to_use=info.get("when_to_use", ""),
+                    options=info.get("options"),
+                    placeholders=info.get("placeholders"),
+                    supports_html=info.get("supports_html", False),
+                    example=info.get("example", ""),
+                    danger=info.get("danger", ""),
+                    hint=info.get("hint", "Send the new value as a chat message."),
+                )
+                await send_screen(client, q.message.chat.id,
+                                  Screen(caption=caption, image=pick_artwork(bot),
+                                         keyboard=keyboard), old_msg=q.message)
+                await q.answer()
+                return
+
+        await q.answer(f"Action “{action}” not wired yet.", show_alert=True)
 
     # ── /start ────────────────────────────────────────────────────────────────
     # Rich UI: sticker → loading animation → welcome screen with inline keyboard

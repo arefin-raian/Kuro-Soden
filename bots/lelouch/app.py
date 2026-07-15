@@ -19,6 +19,7 @@ from pyrogram.types import BotCommand, Message
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
 from kage.shared.ui_helpers import reply_with_screen
+from nekofetch.ui.artwork import pick_artwork
 
 LELOUCH_COMMANDS = [
     BotCommand("start", "Submit a new anime request"),
@@ -58,35 +59,133 @@ def build_lelouch(container: Container, token: str) -> Client:
     register_all(client, container)
 
     # ── Catch-all menu callback ─────────────────────────────────────────────
-    # Inline buttons on /start route to `lelouch|<action>`. Real handlers
-    # match `req|`, `ver_pick`, `series_yes/no`, `noop`. Whatever falls through
-    # gets a one-line alert so the user isn't left with a silent dead button.
-    from pyrogram.types import CallbackQuery
+    # Inline buttons on /start route to `lelouch|<action>`. The dispatcher below
+    # maps every action to a real screen — no more "Type /X in chat" toasts.
+    from pyrogram.types import (CallbackQuery, InlineKeyboardButton,
+                                InlineKeyboardMarkup)
+    from kage.shared.menu_router import settings_hub, settings_onboarding, tool_screen
+    from kage.shared.settings_content import ALL_BY_BOT
+    from nekofetch.ui.components import cb
+    from nekofetch.ui.screens import Screen, send_screen
+    from nekofetch.domain.enums import Role
 
     @client.on_callback_query(filters.regex(r"^lelouch\|"))
-    async def _lelouch_menu_fallback(_: Client, q: CallbackQuery) -> None:
-        # Inline-query-based callbacks can have q.message=None (callback
-        # via an inline keyboard never has it, but Pyrogram types lie) —
-        # skip silently rather than dereferencing q.message.chat.id below.
+    async def _lelouch_menu_fallback(client: Client, q: CallbackQuery) -> None:
         if q.message is None:
             await q.answer()
             return
-        try:
-            _, action = q.data.split("|", 1)
-        except ValueError:
-            action = "help"
-        await q.answer(f"Type /{action} in chat.", show_alert=False)
-        try:
-            await reply_with_screen(
-                client, q.message.chat.id,
-                f"<b>📍 Type /{action} in chat.</b>",
-                bot_name="lelouch", old_msg=q.message,
+        parts = q.data.split("|", 2)
+        action = parts[1] if len(parts) > 1 else "home"
+        arg = parts[2] if len(parts) > 2 else ""
+        bot = "lelouch"
+
+        # ¬¬ Home ¬¬
+        if action == "home":
+            caption = (
+                "<b>🎭 Lelouch — Request Bot</b>\n\n"
+                "<i>\"The only ones who should kill are those prepared to die.\"</i>\n\n"
+                "I handle the intake pipeline:\n"
+                "â€¢ Search AniList / TMDB\n"
+                "â€¢ Franchise confirmation\n"
+                "â€¢ Dedup across main / dist / in-progress\n"
+                "â€¢ Auto-assign to downloader admins"
             )
-        except Exception as exc:
-            log.warning(
-                "menu_fallback.screen_failed",
-                bot="lelouch", action=action, error=str(exc),
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎬 Request Anime", callback_data=cb("req", "new")),
+                 InlineKeyboardButton("📥 My Requests", callback_data=cb("req", "mine", 0))],
+                [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings")),
+                 InlineKeyboardButton("🛡 Admin Panel", callback_data=cb(bot, "admin"))],
+            ])
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=keyboard), old_msg=q.message)
+            await q.answer()
+            return
+
+        # ¬¬ Admin ¬¬
+        if action == "admin":
+            user = getattr(q, "nf_user", None)
+            role = Role(user.role) if user else Role.USER
+            if role not in (Role.STAFF, Role.ADMIN):
+                await q.answer("🔒 Staff only.", show_alert=True)
+                return
+            caption = (
+                "<b>🎭 Lelouch — Admin Panel</b>\n\n"
+                "<i>Manage requests, admins, and availability.</i>\n\n"
+                "<blockquote>Staff-only tools. Non-staff tap = access denied toast.</blockquote>"
             )
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 Pending Requests", callback_data=cb(bot, "pending")),
+                 InlineKeyboardButton("👥 Manage Admins", callback_data=cb(bot, "manage"))],
+                [InlineKeyboardButton("📊 Availability", callback_data=cb(bot, "avail")),
+                 InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
+                [InlineKeyboardButton("⇐ Back to Home", callback_data=cb(bot, "home"))],
+            ])
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=keyboard), old_msg=q.message)
+            await q.answer()
+            return
+
+        # ¬¬ Settings hub ¬¬
+        if action == "settings":
+            caption, keyboard = settings_hub(
+                bot, title="Lelouch Settings",
+                body=("Configure request limits, admin pools, and availability.\n\n"
+                      "<i>Tap a row to open the help panel for that key, then "
+                      "send the new value as a chat message.</i>"),
+                items=[("Request Limits", "limits"), ("Admin Pool", "admins")],
+            )
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=keyboard), old_msg=q.message)
+            await q.answer()
+            return
+
+        # ¬¬ set|<key> onboarding ¬¬
+        if action == "set" and arg:
+            info = ALL_BY_BOT.get(bot, {}).get(arg)
+            if info:
+                caption, keyboard = settings_onboarding(
+                    bot, arg, title=info["title"], about=info["about"],
+                    when_to_use=info.get("when_to_use", ""),
+                    options=info.get("options"),
+                    placeholders=info.get("placeholders"),
+                    supports_html=info.get("supports_html", False),
+                    example=info.get("example", ""),
+                    danger=info.get("danger", ""),
+                    hint=info.get("hint", "Send the new value as a chat message."),
+                )
+                await send_screen(client, q.message.chat.id,
+                                  Screen(caption=caption, image=pick_artwork(bot),
+                                         keyboard=keyboard), old_msg=q.message)
+                await q.answer()
+                return
+
+        # ¬¬ Admin placeholder actions (staff actions land next round) ¬¬
+        if action in ("pending", "manage", "avail"):
+            tmap = {"pending": "Pending Requests",
+                    "manage": "Manage Admins",
+                    "avail": "Availability"}
+            caption, _ = tool_screen(
+                bot, title=tmap[action],
+                kicker="Tap from the panel — full controls land next round.",
+                lines=[f"<b>Coming up:</b> {action} controls."],
+                back="admin",
+                back_label="⇐ Back to Admin",
+            )
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=InlineKeyboardMarkup([[
+                                         InlineKeyboardButton(
+                                             "⇐ Back to Admin",
+                                             callback_data=cb(bot, "admin"),
+                                         ),
+                                     ]])), old_msg=q.message)
+            await q.answer()
+            return
+
+        await q.answer(f"Action “{action}” not wired yet.", show_alert=True)
 
     # ── /start ────────────────────────────────────────────────────────────────
     # Rich UI: sticker → loading animation → welcome screen with inline keyboard
