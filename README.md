@@ -44,16 +44,16 @@
 <br />
 
 ```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                              ║
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                                                                               ║
 ║   🎭 Lelouch           ⚔️ Levi            🧪 Senku           🔮 Gojo        ║
-║   ──────────           ────────           ──────────         ────────        ║
-║   Request Intake  →    Download      →    Distribution   →   Publishing     ║
-║   Dedup Check           Source Select      Channel Create      Main Channel  ║
+║   ──────────           ────────           ──────────         ────────         ║
+║   Request Intake  →    Download      →    Distribution   →   Publishing       ║
+║   Dedup Check           Source Select      Channel Create      Main Channel   ║
 ║   Admin Assign          Process Files      Content Generate     Index Update  ║
 ║   Management            Thumbnails         Stickers/Footer      Recovery      ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 </div>
@@ -338,17 +338,17 @@ Kuro Sōden runs as a standalone Python project with NekoFetch vendored inside (
 
 ```
                         ┌──────────────────────────────────────────────┐
-  Telegram users  ◄────►│  KURO SŌDEN BOTS  (4 Pyrogram clients)      │
+  Telegram users  ◄────►│  KURO SŌDEN BOTS  (4 Pyrogram clients)       │
   Staff / admins  ◄────►│  Lelouch · Levi · Senku · Gojo               │
                         │  Each: handlers → callback routing → FSM     │
                         └───────────────────┬──────────────────────────┘
                                             │ calls
-                        ┌───────────────────▼──────────────────────────┐
-                        │  NEKOFETCH SERVICES  (reused — no rewrite)   │
+                        ┌───────────────────▼────────────────────────────┐
+                        │  NEKOFETCH SERVICES  (reused — no rewrite)     │
                         │  RequestService · QueueService · DownloadWorker│
-                        │  BotContentService · PublishingService · etc.│
-                        │  BotFactory · BotOrchestrator · FranchiseFlow│
-                        └───────┬────────────────────────┬─────────────┘
+                        │  BotContentService · PublishingService · etc.  │
+                        │  BotFactory · BotOrchestrator · FranchiseFlow  │
+                        └───────┬────────────────────────┬───────────────┘
                                 │                        │
              ┌──────────────────▼──────┐   ┌─────────────▼────────────┐
              │ SOURCES (6 plugins)     │   │ PROCESSING (7 stages)    │
