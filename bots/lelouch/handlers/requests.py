@@ -28,6 +28,7 @@ from nekofetch.domain.enums import DownloadScope, RequestStatus
 from nekofetch.localization.messages import M, t
 from nekofetch.ui.components import lock_buttons
 from nekofetch.ui.progress import SPINNER, animate_until
+from nekofetch.ui.artwork import pick_artwork
 from nekofetch.ui.screens import (
     Screen,
     ask_title,
@@ -392,7 +393,7 @@ def register(client: Client, container: Container) -> None:
             await send_screen(
                 client,
                 card_msg.chat.id,
-                Screen(caption=t(exc.message_key)),
+                Screen(caption=t(exc.message_key), image=pick_artwork("lelouch")),
                 old_msg=card_msg,
             )
             return

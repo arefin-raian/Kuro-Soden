@@ -18,6 +18,7 @@ from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
 from nekofetch.localization.messages import t
 from nekofetch.ui.components import cb, keyboard
+from nekofetch.ui.artwork import pick_artwork
 from nekofetch.ui.screens import Screen, send_screen
 
 log = get_logger(__name__)
@@ -161,6 +162,7 @@ def register(client: Client, container: Container) -> None:
                  ("Index Settings", cb("gojo", "set", "index"))],
                 [("Back", cb("gojo", "home"))],
             ),
+            image=pick_artwork("gojo"),
         )
         await send_screen(client, message.chat.id, screen)
 
