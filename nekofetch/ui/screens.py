@@ -94,7 +94,8 @@ def lifecycle_labels() -> list[str]:
 
 # ── User screens ───────────────────────────────────────────────────────────
 
-def welcome(user_name: str, *, is_staff: bool = False, is_admin: bool = False) -> Screen:
+def welcome(user_name: str, *, is_staff: bool = False, is_admin: bool = False,
+           bot_name: str | None = None) -> Screen:
     name = _esc(user_name) or "there"
     caption = "\n\n".join([
         t(M.WELCOME_TITLE, name=name),
@@ -109,10 +110,11 @@ def welcome(user_name: str, *, is_staff: bool = False, is_admin: bool = False) -
         rows.append([(t(M.ADMIN_BTN_QUEUE), cb("queue", "view", 0))])
     if is_admin:
         rows.append([(t(M.ADMIN_BTN_PANEL), cb("admin", "home"))])
-    return Screen(caption=caption, image=pick_artwork(), keyboard=_kb(rows))
+    return Screen(caption=caption, image=pick_artwork(bot_name), keyboard=_kb(rows))
 
 
-def my_requests(user_name: str, requests: list[dict]) -> Screen:
+def my_requests(user_name: str, requests: list[dict],
+                *, bot_name: str | None = None) -> Screen:
     name = _esc(user_name) or "you"
     lines = [t(M.MYREQ_TITLE, name=name), ""]
     if not requests:
@@ -130,11 +132,11 @@ def my_requests(user_name: str, requests: list[dict]) -> Screen:
                         progress=prog, waiting=wait)]
     kb = _kb([[(t(M.BTN_REQUEST_ANIME), cb("req", "new"))],
               [(t(M.BTN_BACK), cb("home"))]])
-    return Screen(caption="\n".join(lines), image=pick_artwork(), keyboard=kb)
+    return Screen(caption="\n".join(lines), image=pick_artwork(bot_name), keyboard=kb)
 
 
-def ask_title() -> Screen:
-    return Screen(caption=t(M.ASK_TITLE), image=pick_artwork(),
+def ask_title(*, bot_name: str | None = None) -> Screen:
+    return Screen(caption=t(M.ASK_TITLE), image=pick_artwork(bot_name),
                   keyboard=_kb([[(t(M.BTN_BACK), cb("home"))]]))
 
 
@@ -239,7 +241,8 @@ def confirm_franchise(
     return Screen(caption=caption, image=image or pick_artwork(), keyboard=kb)
 
 
-def choose_version(query: str, versions: list[dict]) -> Screen:
+def choose_version(query: str, versions: list[dict],
+                  *, bot_name: str | None = None) -> Screen:
     rows = [t(M.VERSION_HEADER, query=_esc(query)), ""]
     width = min(24, max((len(v["title"]) for v in versions), default=0))
     for v in versions:
@@ -252,28 +255,29 @@ def choose_version(query: str, versions: list[dict]) -> Screen:
     # 'Both' folds every adaptation into one combined request; 'Neither' restarts.
     btns.append([(t(M.BTN_VERSION_BOTH), cb("ver_pick_both")),
                  (t(M.BTN_VERSION_NEITHER), cb("series_no"))])
-    return Screen(caption="\n".join(rows), image=pick_artwork(), keyboard=_kb(btns))
+    return Screen(caption="\n".join(rows), image=pick_artwork(bot_name), keyboard=_kb(btns))
 
 
-def retry_title() -> Screen:
-    return Screen(caption=t(M.RETRY_TITLE), image=pick_artwork(),
+def retry_title(*, bot_name: str | None = None) -> Screen:
+    return Screen(caption=t(M.RETRY_TITLE), image=pick_artwork(bot_name),
                   keyboard=_kb([[(t(M.BTN_BACK), cb("home"))]]))
 
 
-def request_received(user_name: str, title: str, queue_pos: int | None = None) -> Screen:
+def request_received(user_name: str, title: str, queue_pos: int | None = None,
+                     *, bot_name: str | None = None) -> Screen:
     rows = [t(M.REQ_RECEIVED, name=_esc(user_name) or "there"), "",
             _field(M.F_ANIME, title),
             _field(M.F_STATUS, t(M.VALUE_QUEUED))]
     if queue_pos is not None:
         rows.append(_field(M.F_QUEUE, f"#{queue_pos}"))
     rows += ["", t(M.REQ_RECEIVED_BODY)]
-    return Screen(caption="\n".join(rows), image=pick_artwork(),
+    return Screen(caption="\n".join(rows), image=pick_artwork(bot_name),
                   keyboard=_kb([[(t(M.BTN_MY_REQUESTS), cb("req", "mine", 0))]]))
 
 
 # ── Log channel: one live card per request, edited as state advances ─────────
 
-def log_card(req: dict) -> Screen:
+def log_card(req: dict, *, bot_name: str | None = None) -> Screen:
     """``req`` keys: id, title, requester, source, state, optional substate,
     optional failed/reason/detail, and completed-summary fields."""
     title = _esc(req.get("title", "Unknown"))
@@ -290,7 +294,7 @@ def log_card(req: dict) -> Screen:
         kb = _kb([[(t(M.BTN_RETRY), cb("log_retry", req.get("id", ""))),
                    (t(M.BTN_REASSIGN), cb("log_reassign", req.get("id", ""))),
                    (t(M.BTN_DISMISS), cb("log_dismiss", req.get("id", "")))]])
-        return Screen(caption="\n".join(rows), image=pick_artwork(), keyboard=kb)
+        return Screen(caption="\n".join(rows), image=pick_artwork(bot_name), keyboard=kb)
 
     if state == t(M.LC_COMPLETED):
         rows = [t(M.LOG_COMPLETED_TITLE, title=title), ""]
@@ -299,7 +303,7 @@ def log_card(req: dict) -> Screen:
                                 ("took", M.F_TOOK)):
             if req.get(key):
                 rows.append(_field(field_key, str(req[key])))
-        return Screen(caption="\n".join(rows), image=pick_artwork())
+        return Screen(caption="\n".join(rows), image=pick_artwork(bot_name))
 
     sub = f"  {t(M.SEP_DOT)}  {_esc(req['substate'])}" if req.get("substate") else ""
     rows = [t(M.LOG_PROGRESS_TITLE, title=title), "",
@@ -311,7 +315,7 @@ def log_card(req: dict) -> Screen:
     for i, step in enumerate(labels):
         glyph = DONE if i < cur_idx else (CURRENT if i == cur_idx else PENDING)
         rows.append(f"{glyph}  {'<b>' + step + '</b>' if i == cur_idx else step}")
-    return Screen(caption="\n".join(rows), image=pick_artwork())
+    return Screen(caption="\n".join(rows), image=pick_artwork(bot_name))
 
 
 async def show(

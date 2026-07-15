@@ -1,0 +1,37 @@
+services:
+  - type: worker
+    name: kuro-soden
+    env: python
+    buildCommand: pip install --no-cache-dir -r requirements.txt && pip install -e .
+    startCommand: python main.py
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONPATH
+        value: /app
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: ADMIN_BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: TMDB_API_READ_ACCESS_TOKEN
+        sync: false
+      - key: TMDB_API_KEY
+        sync: false
+    disk:
+      name: storage
+      mountPath: /data/storage
+      sizeGB: 10

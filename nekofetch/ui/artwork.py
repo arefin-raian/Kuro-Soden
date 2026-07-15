@@ -3,6 +3,10 @@
 Every major UI surface shows a 16:9 image. We rotate through the pool in
 ``images/`` randomly, but never return the same artwork twice in a row, so a
 message that re-renders (e.g. an edit) doesn't keep showing the same picture.
+
+Kuro Sōden: each bot character (levi / senku / gojo / lelouch) has its own
+subdirectory under ``images/``. Pass ``bot_name`` to ``pick_artwork()`` to
+pick from a character-specific pool; omit it for the shared default pool.
 """
 
 from __future__ import annotations
@@ -10,8 +14,8 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
-# repo-root/images  (this file is src/nekofetch/ui/artwork.py)
-ART_DIR = Path(__file__).resolve().parents[3] / "images"
+# kage flattens the src/ layer — parents[2] reaches the project root
+ART_DIR = Path(__file__).resolve().parents[2] / "images"
 
 
 class ArtworkPicker:
@@ -40,9 +44,23 @@ class ArtworkPicker:
 
 # Module-level default so callers share the same no-repeat history.
 _default = ArtworkPicker()
+# Per-character pools (lazy, created on first use).
+_pools: dict[str, ArtworkPicker] = {}
 
 
-def pick_artwork() -> Path | None:
+def pick_artwork(bot_name: str | None = None) -> Path | None:
     """Return the path to a random section artwork (never the same one twice
-    consecutively), or ``None`` if the image pool is empty."""
+    consecutively), or ``None`` if the image pool is empty.
+
+    When ``bot_name`` is given, picks from ``images/<bot_name>/`` first;
+    falls back to the shared pool if the character directory is empty.
+    """
+    if bot_name:
+        char_dir = ART_DIR / bot_name.lower()
+        if char_dir.is_dir():
+            if bot_name not in _pools:
+                _pools[bot_name] = ArtworkPicker(char_dir)
+            result = _pools[bot_name].pick()
+            if result is not None:
+                return result
     return _default.pick()

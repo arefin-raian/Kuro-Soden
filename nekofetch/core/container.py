@@ -106,10 +106,21 @@ class Container:
         await seed_index_sections(self.pg_sessionmaker)
 
         try:
+            # On Render, MongoDB Atlas M0 free-tier clusters sometimes reject TLS
+            # handshakes due to CA-certificate mismatches in the Docker slim image.
+            # ``tlsAllowInvalidCertificates`` is already set on the URI via .env;
+            # we also try ``certifi`` as a CA bundle fallback when available.
+            mongo_kw: dict = {
+                "serverSelectionTimeoutMS": 15000,
+                "connectTimeoutMS": 10000,
+            }
+            try:
+                import certifi  # type: ignore[import-untyped]
+                mongo_kw["tlsCAFile"] = certifi.where()
+            except ImportError:
+                pass
             self.mongo = AsyncIOMotorClient(
-                self.env.mongo_uri,
-                serverSelectionTimeoutMS=15000,
-                connectTimeoutMS=10000,
+                self.env.mongo_uri, **mongo_kw
             )[self.env.mongo_db]
             await self.mongo.list_collection_names()  # force connection check
         except Exception as exc:
