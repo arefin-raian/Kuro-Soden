@@ -20,9 +20,12 @@ import signal
 import sys
 from pathlib import Path
 
-# Standalone: kage/ IS the project root. NekoFetch is vendored inside.
-_HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))
+# Standalone: the project root is the kage/ package directory.
+# Add the PARENT to sys.path so `from kage.shared...` resolves correctly
+# (Python finds kage/ as a subdirectory of the parent on sys.path).
+_HERE = Path(__file__).resolve().parent        # .../kage/
+_PROJECT_ROOT = _HERE.parent                    # .../ (parent of kage/)
+sys.path.insert(0, str(_PROJECT_ROOT))
 os.chdir(str(_HERE))
 
 
