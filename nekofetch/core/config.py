@@ -104,6 +104,8 @@ class EnvSettings(BaseSettings):
     @field_validator("admin_ids", mode="before")
     @classmethod
     def _split_admin_ids(cls, v: Any) -> Any:
+        if v is None or v == "":
+            return []
         if isinstance(v, int):
             return [v]
         if isinstance(v, str):
