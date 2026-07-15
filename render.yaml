@@ -31,6 +31,14 @@ services:
         sync: false
       - key: TMDB_API_KEY
         sync: false
+      - key: REQUEST_BOT_TOKEN
+        sync: false
+      - key: DOWNLOADER_BOT_TOKEN
+        sync: false
+      - key: DISTRIBUTION_BOT_TOKEN
+        sync: false
+      - key: PUBLISHER_BOT_TOKEN
+        sync: false
     disk:
       name: storage
       mountPath: /data/storage

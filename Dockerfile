@@ -17,10 +17,12 @@ WORKDIR /app
 # Layer 1: install wheel deps first (cached unless deps change)
 COPY pyproject.toml requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir -e .
 
-# Layer 2: app code (fast to rebuild)
+# Layer 2: app code
 COPY . .
+
+# Editable install AFTER source is present so setuptools finds the package
+RUN pip install --no-cache-dir -e .
 
 # Runtime paths
 ENV PYTHONUNBUFFERED=1 \

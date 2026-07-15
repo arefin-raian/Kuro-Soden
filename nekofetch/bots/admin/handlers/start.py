@@ -56,6 +56,7 @@ def register(client: Client, container: Container) -> None:
             name,
             is_staff=role in (Role.STAFF, Role.ADMIN),
             is_admin=role is Role.ADMIN,
+            bot_name="lelouch",
         )
 
         await asyncio.sleep(ui_cfg.sticker_delete_delay)
