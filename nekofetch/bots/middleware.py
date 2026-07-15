@@ -32,13 +32,28 @@ def install_auth_middleware(client: Client, container: Container) -> None:
         )
 
     async def _rate_limited(user_id: int) -> bool:
+        """Returns True when the user is over the rate-limit budget.
+
+        Fails OPEN: if Redis is unreachable (DNS error, connection drop,
+        Render-internal hostname only resolvable from a different region),
+        we don't rate-limit — better to accept extra messages than to
+        crash every handler with a ConnectionError traceback mid-flight.
+        """
         if container.redis is None:
             return False
         key = REDIS_RATELIMIT.format(user_id=user_id)
-        count = await container.redis.incr(key)
-        if count == 1:
-            await container.redis.expire(key, 60)
-        return count > rate_limit
+        try:
+            count = await container.redis.incr(key)
+            if count == 1:
+                await container.redis.expire(key, 60)
+            return count > rate_limit
+        except Exception as exc:
+            log.warning(
+                "middleware.rate_limit.redis_unreachable",
+                user_id=user_id,
+                error=str(exc),
+            )
+            return False
 
     # Group -1 runs before feature handlers (group 0+).
     @client.on_message(group=-1)

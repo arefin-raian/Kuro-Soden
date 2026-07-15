@@ -30,9 +30,10 @@ from __future__ import annotations
 import asyncio
 
 from pyrogram import Client
-from pyrogram.types import Message
+from pyrogram.types import InlineKeyboardMarkup, Message
 
 from nekofetch.core.container import Container
+from nekofetch.ui.artwork import pick_artwork
 from nekofetch.ui.screens import Screen, send_screen
 
 
@@ -102,3 +103,33 @@ async def send_rich_welcome(
 
     # ── 5. The actual welcome screen ────────────────────────────────────
     await send_screen(client, chat_id, screen)
+
+
+async def reply_with_screen(
+    client: Client,
+    chat_id: int,
+    caption: str,
+    *,
+    bot_name: str,
+    keyboard: InlineKeyboardMarkup | None = None,
+    old_msg: Message | None = None,
+) -> Message:
+    """Reply (or replace a previous message) with a character-image Screen.
+
+    Centralises the ``every reply carries the bot's recurring artwork``
+    pattern. Calls ``pick_artwork(bot_name)`` (no back-to-back repeats
+    handled per-bot in ``nekofetch.ui.artwork._pools``) and falls back
+    to the shared default pool when the character directory is empty.
+
+    Use this instead of ``message.reply_text(...)`` for any reply that
+    should look like a NekoFetch card -- ``/help``, ``/myrequests``,
+    fallback alerts, brief admin panels, etc. ``old_msg`` lets the
+    helper replace an existing message in place so the user sees the
+    new screen on the same bubble as the navigation button.
+    """
+    screen = Screen(
+        caption=caption,
+        image=pick_artwork(bot_name),
+        keyboard=keyboard,
+    )
+    return await send_screen(client, chat_id, screen, old_msg=old_msg)

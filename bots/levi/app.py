@@ -17,6 +17,7 @@ from pyrogram.types import BotCommand, Message
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
+from kage.shared.ui_helpers import reply_with_screen
 
 LEVI_COMMANDS = [
     BotCommand("start", "View your assigned download tasks"),
@@ -62,11 +63,28 @@ def build_levi(container: Container, token: str) -> Client:
 
     @client.on_callback_query(filters.regex(r"^levi\|"))
     async def _levi_menu_fallback(_: Client, q: CallbackQuery) -> None:
+        # Inline-query-based callbacks can have q.message=None (callback
+        # via an inline keyboard never has it, but Pyrogram types lie) —
+        # skip silently rather than dereferencing q.message.chat.id below.
+        if q.message is None:
+            await q.answer()
+            return
         try:
             _, action = q.data.split("|", 1)
         except ValueError:
             action = "help"
         await q.answer(f"Type /{action} in chat.", show_alert=False)
+        try:
+            await reply_with_screen(
+                client, q.message.chat.id,
+                f"<b>📍 Type /{action} in chat.</b>",
+                bot_name="levi", old_msg=q.message,
+            )
+        except Exception as exc:
+            log.warning(
+                "menu_fallback.screen_failed",
+                bot="levi", action=action, error=str(exc),
+            )
 
     # ── /start ────────────────────────────────────────────────────────────────
     # Rich UI: sticker → loading animation → welcome screen with inline keyboard
@@ -98,7 +116,7 @@ def build_levi(container: Container, token: str) -> Client:
             image=pick_artwork("levi"),
             keyboard=keyboard(*rows),
         )
-        await send_rich_welcome(client, container, message, screen, bot_name="levi")
+        await send_rich_welcome(client, container, message, screen)
 
     # ── /settings ─────────────────────────────────────────────────────────────
     @client.on_message(filters.command("settings"))
@@ -114,13 +132,14 @@ def build_levi(container: Container, token: str) -> Client:
                  ("Processing Options", cb("levi", "set", "processing"))],
                 [("Back", cb("levi", "home"))],
             ),
+            image=pick_artwork("levi"),
         )
         await send_screen(client, message.chat.id, screen)
 
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))
     async def _help(_: Client, message: Message) -> None:
-        await message.reply(
+        caption = (
             "<b>⚔️ Levi — Downloader Bot</b>\n\n"
             "<b>How it works:</b>\n"
             "1. View your tasks with /tasks\n"
@@ -130,8 +149,10 @@ def build_levi(container: Container, token: str) -> Client:
             "5. Upload a 1:1 square thumbnail\n"
             "6. Generate the header with /header REQ-XXXX\n\n"
             "<b>The download is automatic after you assign a source — "
-            "you don't need to do anything else!</b>",
-            parse_mode=ParseMode.HTML,
+            "you don't need to do anything else!</b>"
+        )
+        await reply_with_screen(
+            client, message.chat.id, caption, bot_name="levi",
         )
 
     return client

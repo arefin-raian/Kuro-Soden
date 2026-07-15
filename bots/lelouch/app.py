@@ -18,6 +18,7 @@ from pyrogram.types import BotCommand, Message
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
+from kage.shared.ui_helpers import reply_with_screen
 
 LELOUCH_COMMANDS = [
     BotCommand("start", "Submit a new anime request"),
@@ -64,11 +65,28 @@ def build_lelouch(container: Container, token: str) -> Client:
 
     @client.on_callback_query(filters.regex(r"^lelouch\|"))
     async def _lelouch_menu_fallback(_: Client, q: CallbackQuery) -> None:
+        # Inline-query-based callbacks can have q.message=None (callback
+        # via an inline keyboard never has it, but Pyrogram types lie) —
+        # skip silently rather than dereferencing q.message.chat.id below.
+        if q.message is None:
+            await q.answer()
+            return
         try:
             _, action = q.data.split("|", 1)
         except ValueError:
             action = "help"
         await q.answer(f"Type /{action} in chat.", show_alert=False)
+        try:
+            await reply_with_screen(
+                client, q.message.chat.id,
+                f"<b>📍 Type /{action} in chat.</b>",
+                bot_name="lelouch", old_msg=q.message,
+            )
+        except Exception as exc:
+            log.warning(
+                "menu_fallback.screen_failed",
+                bot="lelouch", action=action, error=str(exc),
+            )
 
     # ── /start ────────────────────────────────────────────────────────────────
     # Rich UI: sticker → loading animation → welcome screen with inline keyboard
@@ -92,12 +110,12 @@ def build_lelouch(container: Container, token: str) -> Client:
             is_admin=role is Role.ADMIN,
             bot_name="lelouch",
         )
-        await send_rich_welcome(client, container, message, screen, bot_name="lelouch")
+        await send_rich_welcome(client, container, message, screen)
 
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))
     async def _help(_: Client, message: Message) -> None:
-        await message.reply(
+        caption = (
             "<b>🎭 Lelouch Vi Britannia — Request Bot</b>\n\n"
             "<b>How to request:</b>\n"
             "1. Send me any anime title.\n"
@@ -110,8 +128,10 @@ def build_lelouch(container: Container, token: str) -> Client:
             "<b>Commands:</b>\n"
             "/start — New request\n"
             "/myrequests — Your requests\n"
-            "/help — This help",
-            parse_mode=ParseMode.HTML,
+            "/help — This help"
+        )
+        await reply_with_screen(
+            client, message.chat.id, caption, bot_name="lelouch",
         )
 
     # ── /myrequests ───────────────────────────────────────────────────────────
@@ -123,10 +143,11 @@ def build_lelouch(container: Container, token: str) -> Client:
 
         rows = await RequestService(container).list_for_user(message.from_user.id)
         if not rows:
-            await message.reply(
+            await reply_with_screen(
+                client, message.chat.id,
                 "📭 <b>No requests yet!</b>\n\n"
                 "Send me an anime title to get started.",
-                parse_mode=ParseMode.HTML,
+                bot_name="lelouch",
             )
             return
 
@@ -143,7 +164,9 @@ def build_lelouch(container: Container, token: str) -> Client:
                 f"<code>{r.code}</code> ({status_val})"
             )
 
-        await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
+        await reply_with_screen(
+            client, message.chat.id, "\n".join(lines), bot_name="lelouch",
+        )
 
     # ── /admin ────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("admin"))
@@ -169,6 +192,7 @@ def build_lelouch(container: Container, token: str) -> Client:
             caption="<b>🎭 Lelouch Vi Britannia — Admin Panel</b>\n\n"
                      "Manage requests, admins, and availability.",
             keyboard=keyboard(*rows),
+            image=pick_artwork("lelouch"),
         )
         await send_screen(client, message.chat.id, screen)
 
@@ -186,6 +210,7 @@ def build_lelouch(container: Container, token: str) -> Client:
                  ("Admin Pool", cb("lelouch", "set", "admins"))],
                 [("Back", cb("lelouch", "home"))],
             ),
+            image=pick_artwork("lelouch"),
         )
         await send_screen(client, message.chat.id, screen)
 

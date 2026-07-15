@@ -18,6 +18,7 @@ from pyrogram.types import BotCommand, Message
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
+from kage.shared.ui_helpers import reply_with_screen
 
 SENKU_COMMANDS = [
     BotCommand("start", "View your assigned distribution tasks"),
@@ -59,11 +60,28 @@ def build_senku(container: Container, token: str) -> Client:
 
     @client.on_callback_query(filters.regex(r"^senku\|"))
     async def _senku_menu_fallback(_: Client, q: CallbackQuery) -> None:
+        # Inline-query-based callbacks can have q.message=None (callback
+        # via an inline keyboard never has it, but Pyrogram types lie) —
+        # skip silently rather than dereferencing q.message.chat.id below.
+        if q.message is None:
+            await q.answer()
+            return
         try:
             _, action = q.data.split("|", 1)
         except ValueError:
             action = "help"
         await q.answer(f"Type /{action} in chat.", show_alert=False)
+        try:
+            await reply_with_screen(
+                client, q.message.chat.id,
+                f"<b>📍 Type /{action} in chat.</b>",
+                bot_name="senku", old_msg=q.message,
+            )
+        except Exception as exc:
+            log.warning(
+                "menu_fallback.screen_failed",
+                bot="senku", action=action, error=str(exc),
+            )
 
     # ── /start ────────────────────────────────────────────────────────────────
     # Rich UI: sticker → loading animation → welcome screen with inline keyboard
@@ -78,7 +96,7 @@ def build_senku(container: Container, token: str) -> Client:
         rows = [
             [("📋 Tasks", cb("senku", "tasks")),
              ("🧪 Generate", cb("senku", "generate"))],
-            [("📢 Create Channel", cb("senku", "create")),
+            [("📢 Create Channel", cb("senku", "create"))],
             [("⚙️ Settings", cb("senku", "settings")),
              ("❓ Help", cb("misc", "help"))],
         ]
@@ -95,7 +113,7 @@ def build_senku(container: Container, token: str) -> Client:
             image=pick_artwork("senku"),
             keyboard=keyboard(*rows),
         )
-        await send_rich_welcome(client, container, message, screen, bot_name="senku")
+        await send_rich_welcome(client, container, message, screen)
 
     # ── /settings ─────────────────────────────────────────────────────────────
     @client.on_message(filters.command("settings"))
@@ -111,6 +129,7 @@ def build_senku(container: Container, token: str) -> Client:
                  ("Content Layout", cb("senku", "set", "layout"))],
                 [("Back", cb("senku", "home"))],
             ),
+            image=pick_artwork("senku"),
         )
         await send_screen(client, message.chat.id, screen)
 
