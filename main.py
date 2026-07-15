@@ -20,13 +20,41 @@ import signal
 import sys
 from pathlib import Path
 
-# Standalone: the project root is the kage/ package directory.
-# Add the PARENT to sys.path so `from kage.shared...` resolves correctly
-# (Python finds kage/ as a subdirectory of the parent on sys.path).
-_HERE = Path(__file__).resolve().parent        # .../kage/
-_PROJECT_ROOT = _HERE.parent                    # .../ (parent of kage/)
-sys.path.insert(0, str(_PROJECT_ROOT))
+# Standalone: the project has a FLAT layout — ``docs/``, ``bots/``,
+# ``shared/``, ``nekofetch/``, ``tests/`` all live at the repo root. Python
+# imports use the prefix ``kage.<sub>`` (legacy of when this was a sub-folded
+# repo called ``kage/`` inside ``NekoFetch/``). The handoff below registers a
+# synthetic ``kage`` namespace whose subpackages map back to the real dirs
+# via ``__path__`` shims — so ``from kage.shared.X import Y`` resolves to
+# ``./shared/X.py`` regardless of where the project is unpacked (parented
+# locally, or at ``/app/`` on Render / Railway).
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))                  # /app/ — picks up top-level
+                                                 # packages like ``nekofetch``
 os.chdir(str(_HERE))
+
+# ── ``kage`` namespace alias ─────────────────────────────────────────────────
+# Register ``kage`` and its top-level subpackages as lightweight ``ModuleType``
+# shims whose ``__path__`` points at the real directories. Once these entries
+# are in ``sys.modules``, Python's normal importer resolves
+# ``kage.<sub>.<mod>`` by searching ``__path__`` exactly as it would for any
+# regular package — no more fragile parent-directory sys.path manipulation.
+#
+# Caveat (theoretical, not active here): if any code ever does BOTH
+# ``from shared.X import ...`` and ``from kage.shared.X import ...``, Python
+# will cache them as two distinct module objects. The kage codebase uniformly
+# uses the ``kage.`` prefix, so this is inert. If that ever changes, switch to
+# git-tracked symlinks or rename the project root to a ``kage/`` sub-folder.
+import types as _types
+_kage = _types.ModuleType("kage")
+_kage.__path__ = [str(_HERE)]
+sys.modules["kage"] = _kage
+for _sub in ("shared", "bots", "nekofetch", "tests"):
+    if (_HERE / _sub / "__init__.py").is_file():
+        _shim = _types.ModuleType(f"kage.{_sub}")
+        _shim.__path__ = [str(_HERE / _sub)]
+        sys.modules[f"kage.{_sub}"] = _shim
+# ────────────────────────────────────────────────────────────────────────────
 
 
 async def _run() -> None:
