@@ -1,0 +1,514 @@
+"""Configuration system.
+
+Three layers, in increasing precedence:
+
+1. ``.env`` / environment  -> secrets & connection strings  (``EnvSettings``)
+2. ``config.yaml``         -> feature toggles & behaviour    (``AppConfig``)
+3. MongoDB ``settings``    -> runtime overrides from the admin panel
+                              (applied by ``ConfigService``, see services layer)
+
+``EnvSettings`` and ``AppConfig`` are immutable, typed snapshots loaded at startup.
+Runtime overrides are layered on read so the admin can change behaviour without a
+restart — see ``nekofetch.services.config_service.ConfigService``.
+"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import yaml
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _portable_path(value: Any, default: str) -> Path:
+    """Coerce a configured filesystem path to something valid on the current OS.
+
+    A Windows-style path (drive letter like ``C:\\`` or backslash separators) is
+    meaningless on a POSIX host — pathlib treats it as one literal segment, so it
+    leaks into ffmpeg as ``C:\\data\\storage/work/...`` and fails with "Protocol
+    not found". When that mismatch is detected, fall back to a portable,
+    project-relative default so a clone runs anywhere without editing paths.
+    (main.py chdir's to the project root, so a relative default lands there.)
+    """
+    s = str(value).strip().strip('"').strip("'")
+    if not s:
+        return Path(default)
+    looks_windows = ("\\" in s) or (len(s) >= 2 and s[1] == ":" and s[0].isalpha())
+    if os.name != "nt" and looks_windows:
+        return Path(default)
+    return Path(s)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Layer 1 — secrets & connection strings (.env)
+# ─────────────────────────────────────────────────────────────────────────────
+class EnvSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
+    # Telegram
+    telegram_api_id: int = Field(..., alias="TELEGRAM_API_ID")
+    telegram_api_hash: str = Field(..., alias="TELEGRAM_API_HASH")
+    admin_bot_token: str = Field(..., alias="ADMIN_BOT_TOKEN")
+    admin_ids: list[int] = Field(default_factory=list, alias="ADMIN_IDS")
+
+    # Security
+    secret_key: str = Field(..., alias="SECRET_KEY")
+
+    # PostgreSQL
+    postgres_host: str = Field("postgres", alias="POSTGRES_HOST")
+    postgres_port: int = Field(5432, alias="POSTGRES_PORT")
+    postgres_user: str = Field("nekofetch", alias="POSTGRES_USER")
+    postgres_password: str = Field("change-me", alias="POSTGRES_PASSWORD")
+    postgres_db: str = Field("nekofetch", alias="POSTGRES_DB")
+
+    # MongoDB
+    mongo_uri: str = Field("mongodb://mongo:27017", alias="MONGO_URI")
+    mongo_db: str = Field("nekofetch", alias="MONGO_DB")
+
+    # Redis
+    redis_url: str = Field("redis://redis:6379/0", alias="REDIS_URL")
+
+    # Storage. Portable, project-relative defaults so a fresh clone runs on any OS
+    # without root or manual path edits; override in .env (Docker uses /data/...).
+    storage_path: Path = Field(Path("data/storage"), alias="STORAGE_PATH")
+    session_path: Path = Field(Path("data/sessions"), alias="SESSION_PATH")
+
+    @field_validator("storage_path", mode="before")
+    @classmethod
+    def _coerce_storage_path(cls, v: Any) -> Path:
+        return _portable_path(v, "data/storage")
+
+    @field_validator("session_path", mode="before")
+    @classmethod
+    def _coerce_session_path(cls, v: Any) -> Path:
+        return _portable_path(v, "data/sessions")
+
+    # TMDB
+    tmdb_read_access_token: str = Field("", alias="TMDB_API_READ_ACCESS_TOKEN")
+    tmdb_api_key: str = Field("", alias="TMDB_API_KEY")
+
+    # Logging
+    log_level: str = Field("INFO", alias="LOG_LEVEL")
+    log_json: bool = Field(False, alias="LOG_JSON")
+
+    # Schema management: True auto-creates tables on startup (dev convenience).
+    # Set False in production and manage the schema with Alembic migrations.
+    auto_create_schema: bool = Field(True, alias="AUTO_CREATE_SCHEMA")
+
+    @field_validator("admin_ids", mode="before")
+    @classmethod
+    def _split_admin_ids(cls, v: Any) -> Any:
+        if isinstance(v, int):
+            return [v]
+        if isinstance(v, str):
+            return [int(x) for x in v.replace(" ", "").split(",") if x]
+        return v
+
+    @property
+    def postgres_dsn(self) -> str:
+        return (
+            f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+            f"?ssl=require"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Layer 2 — feature toggles & behaviour (config.yaml)
+# Each section mirrors a block in config.yaml. Defaults make the file optional.
+# ─────────────────────────────────────────────────────────────────────────────
+class Features(BaseModel):
+    request_system: bool = True
+    download_queue: bool = True
+    distribution_bots: bool = True
+    watermarking: bool = False
+    metadata_editing: bool = True
+    thumbnail_generation: bool = True
+    auto_delete: bool = False
+    temporary_links: bool = True
+    analytics: bool = True
+    audit_logs: bool = True
+    # When True, ``BotContentService.generate_posts`` uploads every image-bearing
+    # post's poster to catbox.moe and stores the public URL on
+    # ``BotContentPost.image_cached_url``. The distribution bot serves from this
+    # URL on /start so Telegram doesn't refetch from TMDB/AniList CDNs every
+    # delivery. Disable for operators behind firewalls that block catbox, or
+    # for transient DR runs where you don't want the small dependency on a
+    # third-party file host.
+    catbox_image_cache: bool = True
+
+
+class DownloadsConfig(BaseModel):
+    concurrent_downloads: int = 5
+    retry_attempts: int = 3
+    retry_backoff_seconds: int = 10
+    resume_interrupted: bool = True
+    chunk_size_kb: int = 1024
+    progress_update_interval_seconds: int = 3
+
+
+class ProcessingConfig(BaseModel):
+    verify_files: bool = True
+    rename: bool = True
+    metadata: bool = True
+    branding: bool = True
+    thumbnail: bool = True
+    # When False, the pipeline automatically publishes to the main channel +
+    # index channel and brings up the distribution bot right after the storage
+    # upload finishes — no admin click required. When True, the existing
+    # approval card gates the publish step.
+    require_approval_before_publish: bool = False
+
+
+class RenameConfig(BaseModel):
+    enabled: bool = True
+    # Default (TV season) filename pattern.
+    template: str = "{title} S{season}E{episode} [{resolution}] [{audio}] - {group}"
+    # Per-type overrides. Movies and OVAs/specials have no meaningful S/E pair, so
+    # forcing them into the season template ("S90E01") reads terribly. When a
+    # per-type template is empty, that type falls back to ``template``.
+    # ``movie_template`` is used for single-file movies; ``special_template`` for
+    # OVAs/ONAs/specials (keeps an entry index via {episode}, drops the season).
+    # Same variables as ``template`` plus {content_type} (Movie / OVA / Special).
+    movie_template: str = "{short_title} - Movie [{resolution}] [{audio}] - {group}"
+    special_template: str = "{short_title} - {content_type} E{episode} [{resolution}] [{audio}] - {group}"
+
+
+class MetadataConfig(BaseModel):
+    enabled: bool = True
+    update_title: bool = True
+    update_author: bool = True
+    update_comment: bool = True
+    update_tags: bool = True
+    update_description: bool = True
+    supported_containers: list[str] = Field(default_factory=lambda: ["mkv", "mp4", "avi", "mov"])
+
+
+class ThumbnailConfig(BaseModel):
+    enabled: bool = True
+    attach_to_video: bool = True
+    attach_to_document: bool = True
+    generate_previews: bool = True
+
+
+class WatermarkConfig(BaseModel):
+    enabled: bool = False
+    type: str = "text"
+    text: str = "Anime Weebs"
+    image_path: str = ""
+    corner: str = "bottom_right"
+    opacity: float = 0.6
+    scale: float = 0.12
+
+
+class BrandingConfig(BaseModel):
+    enabled: bool = True
+    channel_name: str = "Anime Weebs"
+    footer_text: str = "Anime Weebs"
+    website: str = ""
+    telegram_channel: str = ""
+    community_link: str = ""
+    watermark_text: str = "Anime Weebs"
+    metadata_author: str = "Anime Weebs"
+    metadata_comment: str = "Provided by Anime Weebs"
+
+
+class DistributionConfig(BaseModel):
+    mode: str = "season_package"
+    protect_content: bool = True
+    temporary_links: bool = True
+    link_expiry_minutes: int = 60
+    auto_delete: bool = False
+    auto_delete_after_minutes: int = 60
+
+
+class QueueConfig(BaseModel):
+    max_visible: int = 10
+    position_recalc_seconds: int = 5
+
+
+class SecurityConfig(BaseModel):
+    rate_limit_per_minute: int = 20
+    anti_spam_cooldown_seconds: int = 2
+    # NekoFetch (admin) bot force-subscription.
+    force_subscribe: bool = False
+    force_subscribe_channels: list[int] = Field(default_factory=list)
+    # Distribution bots force-subscription (separate from admin bot).
+    dist_force_subscribe: bool = False
+    dist_force_subscribe_channels: list[int] = Field(default_factory=list)
+    owner_id: int = 0
+
+
+class StorageChannelConfig(BaseModel):
+    """The database channel where content packs live (header -> files -> end sticker)."""
+
+    enabled: bool = False
+    channel_id: int = 0                       # -100... id of the database channel
+    # Header text posted before each pack. Variables: {title} {season} {resolution}
+    # {language} {episode_from} {episode_to} {content_type} {group}
+    header_template: str = "{title} — Season {season} [{resolution}] [{language}]"
+    # Per-type header overrides (empty = fall back to header_template). Seasons get
+    # a season number; movies/OVAs/specials don't, so their headers read naturally
+    # instead of "Season —". Same variables as header_template.
+    movie_header_template: str = "{title} — {content_type} [{resolution}] [{language}]"
+    special_header_template: str = "{title} — {content_type} [{resolution}] [{language}]"
+    end_sticker_id: str = ""                  # file_id of the end-of-pack sticker
+    copy_mode: str = "copy"                   # copy | forward
+    include_header_in_delivery: bool = True
+    include_sticker_in_delivery: bool = False
+
+
+class LogChannelConfig(BaseModel):
+    """The operational control center: one channel of persistent, edited-in-place
+    section messages (dashboard, pending, active, completed, notices, catalog)
+    plus a pool of preallocated reserved messages used when a section message can
+    no longer be edited (Telegram's ~48h edit window)."""
+
+    enabled: bool = False
+    channel_id: int = 0
+    pinned_dashboard: bool = True             # live stats summary (edited in place)
+    pinned_catalog: bool = True               # published catalog index (edited in place)
+    sections: bool = True                     # full sectioned control center
+    reserved_slots: int = 2                   # reserved msgs per growth-prone section
+    notices_lines: int = 12                   # rolling event-stream length
+    # Sticker posted between sections as a permanent visual divider.
+    divider_sticker_id: str = (
+        "CAACAgUAAxkBAAI0vGpAOaZ7gJ6Yk9MtJ63jm0sYmDysAAIYAANDc8kSzixbXL29lfc8BA"
+    )
+    # Cover image at the very top of the channel (URL or file_id). Empty = skip.
+    cover_image: str = ""
+    refresh_seconds: int = 60                 # full rebuild of all sections
+    # The active-tasks panel gets a fast lane: live downloads/processing update on
+    # this short interval so the progress bar feels responsive, while the heavier
+    # dashboard/catalog/completed panels stay on the slower full refresh above.
+    active_refresh_seconds: int = 5
+    # 'all' = everything; otherwise a subset of categories to forward.
+    events: list[str] = Field(default_factory=lambda: ["all"])
+
+    # When True, every rebuild also wipes any message newer than the cover/
+    # intro — even when posted by a different admin or by another user.
+    # Only messages more recent than the intro message are touched (older
+    # history is preserved). Capped by ``wipe_max_history`` so a runaway
+    # bug can't nuke weeks of context. Set False for deployments where
+    # admins draft notes in the channel between rebuilds.
+    wipe_all_on_rebuild: bool = True
+    # Safety cap on the number of recent messages the wipe sweeps — keeps
+    # a single Telegram history-window fetch well under any flood-wait
+    # threshold while still clearing the relevant working set.
+    wipe_max_history: int = 200
+
+
+class ThumbnailChannelConfig(BaseModel):
+    """Thumbnail control center channel — asset selection & generation workflow.
+
+    A dedicated private channel where admins browse assets via Telegraph galleries
+    and select logos, posters, and backdrops for custom thumbnail generation.
+    """
+
+    enabled: bool = False
+    channel_id: int = 0
+    cover_image: str = ""                  # URL or file_id for the channel intro
+    # Sticker posted between sections as a visual divider.
+    divider_sticker_id: str = (
+        "CAACAgUAAxkBAAI0vGpAOaZ7gJ6Yk9MtJ63jm0sYmDysAAIYAANDc8kSzixbXL29lfc8BA"
+    )
+    # Telegraph API access token for creating galleries.
+    telegraph_access_token: str = ""
+    # Maximum entries in the thumbnail queue at once.
+    max_queue_size: int = 20
+
+    # When True, every rebuild also wipes any message newer than the intro
+    # — even when posted by a different admin or another user. Older history
+    # (before the intro) is preserved. Capped by ``wipe_max_history`` so a
+    # runaway bug can't nuke weeks of context.
+    wipe_all_on_rebuild: bool = True
+    # Safety cap on the number of recent messages the wipe sweeps.
+    wipe_max_history: int = 200
+
+
+class AccessConfig(BaseModel):
+    """Time-based access: a free trial, then renew via a shortlink token."""
+
+    enabled: bool = False
+    free_trial: bool = True
+    trial_days: int = 3
+    token_days: int = 3
+    token_link_ttl_hours: int = 24       # how long a generated token link stays valid
+    forward_to_saved_hint: bool = True   # nudge users to forward files to Saved Messages
+
+
+class ShortlinkConfig(BaseModel):
+    """URL shortener used to gate token generation (AroLinks / VPLinks)."""
+
+    enabled: bool = False
+    provider: str = "vplinks"            # arolinks | vplinks
+    arolinks_api_key: str = ""           # AroLinks API token
+    vplinks_api_key: str = ""            # VPLinks API token
+    api_token: str = ""                  # generic api token (legacy)
+    base_url: str = ""                   # generic provider base url (legacy)
+
+
+class AcquisitionConfig(BaseModel):
+    """What to fetch when a request doesn't pin a specific quality/language.
+
+    A request with no resolution/audio fans out into the full matrix below. ``languages``
+    map to audio tracks: english = Dub, japanese = Sub (always with English subtitles).
+    """
+
+    resolutions: list[str] = Field(default_factory=lambda: ["360p", "540p", "720p", "1080p"])
+    languages: list[str] = Field(default_factory=lambda: ["english", "japanese"])
+    require_english_subs: bool = True
+    # Mandatory qualities to grab for every request (best-first). Each is fetched
+    # when the source offers it; 480p is special-cased with a fallback ladder
+    # below so we never ship nothing at the SD tier.
+    target_resolutions: list[str] = Field(
+        default_factory=lambda: ["1080p", "720p", "480p"]
+    )
+    # When a target resolution is missing, try these alternates in order. Only the
+    # first available alternate is taken, so we don't double up the same tier.
+    resolution_fallbacks: dict[str, list[str]] = Field(
+        default_factory=lambda: {"480p": ["540p", "360p"]}
+    )
+
+
+class MainChannelConfig(BaseModel):
+    """The public 'main' channel where each published anime is posted."""
+
+    enabled: bool = False
+    channel_id: int = 0
+    # Variables: {title} {tag} {episodes} {qualities} {languages} {genres} {overview}
+    caption_template: str = (
+        "<blockquote><b>{title}『 </b>#{tag} <b>』</b></blockquote>\n\n"
+        "<b>⌬ EPISODES :</b> {episodes}\n"
+        "<b>⌬ QUALITY :</b> {qualities}\n"
+        "<b>⌬ LANGUAGE :</b> {languages}\n"
+        "<b>⌬ GENRE :</b> {genres}\n\n"
+        "<blockquote><b>‣ OverView :</b> {overview}</blockquote>"
+    )
+    index_button_text: str = "ɪɴᴅᴇx"
+    download_button_text: str = "ᴅᴏᴡɴʟᴏᴀᴅ"
+
+
+class IndexChannelConfig(BaseModel):
+    """A channel holding stylized, per-letter index posts the bot maintains."""
+
+    enabled: bool = False
+    channel_id: int = 0
+    # Rendered per first-letter. Variables: {letter} {entries}
+    letter_header_template: str = "•──────────•°• {letter} •°•──────────•"
+    entry_template: str = "⦿ {title}"
+
+
+class SourcesConfig(BaseModel):
+    enabled: list[str] = Field(
+        default_factory=lambda: ["local", "telegram", "anikoto", "anizone", "kickassanime", "nyaa"]
+    )
+    default: str = "telegram"
+
+
+class UIConfig(BaseModel):
+    start_sticker_id: str = "CAACAgUAAyEFAASAgUwqAAJh_mckw2STkeY1WMOHJGY4Hs9_1-2fAAIPFAACYLShVon-N6AFLnIiHgQ"
+    start_image_url: str = "https://envs.sh/odE.png"
+    start_image_has_spoiler: bool = True
+    sticker_delete_delay: float = 1.5
+    loading_dot_delay: float = 0.32
+    loading_steps: int = 3
+
+
+class LocalizationConfig(BaseModel):
+    default_language: str = "en"
+    directory: str = "resources/language"
+
+
+class BotConfig(BaseModel):
+    """Distribution-bot creation and content configuration."""
+
+    auto_create_on_publish: bool = True
+    health_check_interval_minutes: int = 60
+    delivery_retention_days: int = 7
+    avatar_source: str = "tmdb"  # "tmdb" | "anilist"
+    # External file-store bot usernames for delivery links.
+    # These are separate Telegram bot instances that serve files to users.
+    # Bot tokens/API credentials are configured on the Fstore deployment side.
+    filestore_bots: list[str] = Field(
+        default_factory=list,
+        description="Comma-separated usernames of Fstore file-delivery bots (e.g. KiloxBot, MarkySayBot)",
+    )
+    # Footer shown on the last post of every distribution bot.
+    footer_image_url: str = ""   # URL or Telegram file_id; empty = no image
+    footer_text: str = ""        # override the built-in bot_footer template (empty = use en.json)
+    # Operator overrides for the bot's Telegram profile text. The defaults
+    # bake in the AniXWeebs branding block (see BotFactory._BRANDING_*),
+    # but operators can drop in their own copy without forking the bot.
+    description_text: str = ""   # full /setdescription body (Telegram: 512-char cap)
+    about_text: str = ""         # short /setabouttext    (Telegram: 120-char cap)
+    # Divider sticker sent between content sections (info → seasons → guide → footer).
+    divider_sticker_id: str = (
+        "CAACAgUAAxkBAAI5pmpE1uh9_sD-z2tYJ3wlado6vS29AAIYAANDc8kSzixbXL29lfc8BA"
+    )
+    # Per-account limits for distribution entities. When the bot limit is exhausted
+    # for a userbot session, the orchestrator falls back to creating public channels.
+    max_bots_per_account: int = 20
+    max_channels_per_account: int = 10
+    # Days between comprehensive entity health checks (bots + channels).
+    # Set to 0 to disable the scheduled full sweep (periodic bot checks still run).
+    entity_full_check_days: int = 30
+    # Username suffix formatting. The base suffix is shared; ``format_bot_username``
+    # appends "_bot" for bot entities (Telegram requirement) and leaves it off for
+    # channels. Both entities use the same base, but only bots get the "_bot" tail.
+    bot_username_suffix: str = "axw"
+    channel_username_suffix: str = "axw"
+
+
+class AppConfig(BaseModel):
+    """Typed view of config.yaml. Every section is optional with sane defaults."""
+
+    features: Features = Field(default_factory=Features)
+    downloads: DownloadsConfig = Field(default_factory=DownloadsConfig)
+    processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
+    rename: RenameConfig = Field(default_factory=RenameConfig)
+    metadata: MetadataConfig = Field(default_factory=MetadataConfig)
+    thumbnail: ThumbnailConfig = Field(default_factory=ThumbnailConfig)
+    watermark: WatermarkConfig = Field(default_factory=WatermarkConfig)
+    branding: BrandingConfig = Field(default_factory=BrandingConfig)
+    distribution: DistributionConfig = Field(default_factory=DistributionConfig)
+    queue: QueueConfig = Field(default_factory=QueueConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
+    storage_channel: StorageChannelConfig = Field(default_factory=StorageChannelConfig)
+    log_channel: LogChannelConfig = Field(default_factory=LogChannelConfig)
+    thumbnail_channel: ThumbnailChannelConfig = Field(default_factory=ThumbnailChannelConfig)
+    main_channel: MainChannelConfig = Field(default_factory=MainChannelConfig)
+    index_channel: IndexChannelConfig = Field(default_factory=IndexChannelConfig)
+    acquisition: AcquisitionConfig = Field(default_factory=AcquisitionConfig)
+    access: AccessConfig = Field(default_factory=AccessConfig)
+    shortlink: ShortlinkConfig = Field(default_factory=ShortlinkConfig)
+    sources: SourcesConfig = Field(default_factory=SourcesConfig)
+    localization: LocalizationConfig = Field(default_factory=LocalizationConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
+    bot: BotConfig = Field(default_factory=BotConfig)
+
+    @classmethod
+    def load(cls, path: str | Path = "config.yaml") -> "AppConfig":
+        p = Path(path)
+        if not p.exists():
+            return cls()
+        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        return cls.model_validate(data)
+
+
+@lru_cache(maxsize=1)
+def get_env() -> EnvSettings:
+    """Cached environment settings (loaded once per process)."""
+    return EnvSettings()  # type: ignore[call-arg]
+
+
+@lru_cache(maxsize=1)
+def get_app_config() -> AppConfig:
+    """Cached static config.yaml snapshot. Runtime overrides are applied by ConfigService."""
+    return AppConfig.load()

@@ -1,0 +1,154 @@
+"""Dependency-injection container.
+
+A single composition root that builds and holds long-lived singletons (DB clients,
+cipher, config) and lazily constructs repositories and services. Bots and handlers
+receive the container rather than importing infrastructure directly, keeping the
+dependency arrows pointing inward.
+
+Infrastructure imports are deferred to ``startup()`` so importing this module is cheap
+and free of side effects (useful for tests and tooling).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from nekofetch.core.config import AppConfig, EnvSettings, get_app_config, get_env
+from nekofetch.core.logging import get_logger
+from nekofetch.core.security import TokenCipher
+from nekofetch.sources.registry import SourceRegistry, build_default_registry
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from motor.motor_asyncio import AsyncIOMotorDatabase
+    from redis.asyncio import Redis
+    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+    from nekofetch.infrastructure.database.mongo.collections import Collections
+    from nekofetch.infrastructure.database.redis.progress import ProgressStore
+
+log = get_logger(__name__)
+
+
+class Container:
+    """Composition root. Build with :meth:`create`, then ``await startup()``."""
+
+    def __init__(self, env: EnvSettings, config: AppConfig) -> None:
+        self.env = env
+        self.config = config
+        self.cipher = TokenCipher(env.secret_key)
+
+        # Stateless singletons available immediately. Reuse the one shared catalog
+        # (absolute path, CWD-independent) so t() and container.localizer.get()
+        # read the same en.json and edits propagate on restart.
+        from nekofetch.localization import messages as _messages
+
+        _messages.reload()  # pick up any en.json edits made since import
+        self.localizer = _messages.localizer
+        log.info(
+            "localization.loaded",
+            path=str(_messages.LANG_DIR / "en.json"),
+            keys=len(self.localizer._catalogs.get("en", {})),
+        )
+        self.sources: SourceRegistry = build_default_registry()
+
+        # Metadata enrichment provider (the pluggable scraping seam). It is safe to
+        # construct unconditionally: until its scraper is implemented it no-ops.
+        from nekofetch.providers.metadata.registry import build_metadata_provider
+        from nekofetch.providers.shortlink.registry import build_shortlink_provider
+
+        self.metadata_provider = build_metadata_provider()
+        self.shortlink_provider = build_shortlink_provider(config.shortlink)
+
+        # Populated by startup()
+        self.pg_engine: AsyncEngine | None = None
+        self.pg_sessionmaker: async_sessionmaker | None = None
+        self.mongo: AsyncIOMotorDatabase | None = None
+        self.collections: Collections | None = None
+        self.redis: Redis | None = None
+        self.progress: ProgressStore | None = None
+        self._services: dict[str, Any] = {}
+
+        # API clients (thin, constructed immediately — no I/O until used)
+        from nekofetch.providers.metadata.tmdb import TmdbClient
+        from nekofetch.sources.telegram.resilient_client import ResilientMetadataClient
+        self.anilist = ResilientMetadataClient()
+        self.tmdb = TmdbClient(
+            token=env.tmdb_read_access_token,
+            api_key=env.tmdb_api_key,
+        )
+
+        from nekofetch.providers.metadata.series import SeriesResolver
+        self.series_resolver = SeriesResolver(self.anilist)
+
+    @classmethod
+    def create(cls) -> "Container":
+        return cls(env=get_env(), config=get_app_config())
+
+    async def startup(self) -> None:
+        """Open all infrastructure connections. Idempotent per process."""
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from redis.asyncio import Redis
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from nekofetch.infrastructure.database.mongo.collections import Collections
+        from nekofetch.infrastructure.database.postgres.session import create_all
+        from nekofetch.infrastructure.database.redis.progress import ProgressStore
+
+        log.info("container.startup", db="postgres+mongo+redis")
+
+        self.pg_engine = create_async_engine(self.env.postgres_dsn, pool_pre_ping=True)
+        self.pg_sessionmaker = async_sessionmaker(self.pg_engine, expire_on_commit=False)
+        if self.env.auto_create_schema:
+            await create_all(self.pg_engine)  # dev convenience; Alembic owns prod schema
+
+        # Seed dynamic index-section mapping (idempotent).
+        from nekofetch.services.index_channel_service import seed_index_sections
+        await seed_index_sections(self.pg_sessionmaker)
+
+        try:
+            self.mongo = AsyncIOMotorClient(
+                self.env.mongo_uri,
+                serverSelectionTimeoutMS=15000,
+                connectTimeoutMS=10000,
+            )[self.env.mongo_db]
+            await self.mongo.list_collection_names()  # force connection check
+        except Exception as exc:
+            log.error("mongo.connect.failed", error=str(exc))
+            raise
+        self.collections = Collections(self.mongo)
+        await self.collections.ensure_indexes()
+
+        self.redis = Redis.from_url(self.env.redis_url, decode_responses=True)
+        self.progress = ProgressStore(self.redis)
+
+        # Apply persisted runtime overrides (admin settings panel) over config.yaml.
+        from nekofetch.services.settings_service import SettingsService
+
+        await SettingsService(self).apply_overrides()
+
+        # Activate only authorized sources listed in config.
+        self.sources.activate(
+            self.config.sources.enabled, default=self.config.sources.default
+        )
+
+        self.env.storage_path.mkdir(parents=True, exist_ok=True)
+        self.env.session_path.mkdir(parents=True, exist_ok=True)
+
+    def session(self) -> "AsyncSession":
+        """Open a new Postgres session (caller manages the transaction scope)."""
+        assert self.pg_sessionmaker is not None, "Container not started"
+        return self.pg_sessionmaker()
+
+    async def shutdown(self) -> None:
+        log.info("container.shutdown")
+        close = getattr(self.metadata_provider, "close", None)
+        if close is not None:
+            await close()
+        if hasattr(self, 'anilist'):
+            await self.anilist.close()
+        if hasattr(self, 'tmdb'):
+            await self.tmdb.close()
+        if self.redis is not None:
+            await self.redis.aclose()
+        if self.pg_engine is not None:
+            await self.pg_engine.dispose()

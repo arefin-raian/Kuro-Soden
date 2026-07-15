@@ -1,0 +1,254 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# NekoFetch — application configuration
+# Feature toggles & behaviour. Editable here or, at runtime, via the admin panel
+# (runtime overrides are stored in MongoDB and take precedence over this file).
+# Secrets belong in .env, not here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Master feature switches — turn whole subsystems on/off instantly.
+features:
+  request_system: true
+  download_queue: true
+  distribution_bots: true
+  watermarking: false
+  metadata_editing: true
+  thumbnail_generation: true
+  auto_delete: false
+  temporary_links: true
+  analytics: true
+  audit_logs: true
+  # When true (default), distribution bots cache their card posters on
+  # catbox.moe so Telegram doesn't refetch from TMDB/AniList CDNs on every
+  # /start. Set false if your network blocks catbox or you don't want the
+  # small dependency on a third-party file host.
+  catbox_image_cache: true
+
+downloads:
+  concurrent_downloads: 5
+  retry_attempts: 3
+  retry_backoff_seconds: 10
+  resume_interrupted: true
+  chunk_size_kb: 1024
+  progress_update_interval_seconds: 3
+
+processing:
+  # Pipeline stages, each independently toggleable.
+  verify_files: true
+  rename: true
+  metadata: true
+  branding: true
+  thumbnail: true
+  # Set to true to gate post-storage-upload publishing behind an admin
+  # approval card; false (default) auto-publishes to the main channel +
+  # index channel and brings up the distribution bot right after storage
+  # upload completes — no admin click required.
+  require_approval_before_publish: false
+
+rename:
+  enabled: true
+  # Variables: {title} {season} {episode} {resolution} {audio} {source} {group}
+  template: "{title} S{season}E{episode} [{resolution}] [{audio}] {group}"
+
+metadata:
+  enabled: true
+  update_title: true
+  update_author: true
+  update_comment: true
+  update_tags: true
+  update_description: true
+  supported_containers: [mkv, mp4, avi, mov]
+
+thumbnail:
+  enabled: true
+  attach_to_video: true
+  attach_to_document: true
+  generate_previews: true
+
+watermark:
+  enabled: false
+  type: text            # text | image
+  text: "Anime Weebs"
+  image_path: ""
+  corner: bottom_right  # top_left | top_right | bottom_left | bottom_right
+  opacity: 0.6
+  scale: 0.12
+
+branding:
+  enabled: true
+  channel_name: "Anime Weebs"
+  footer_text: "Anime Weebs"
+  website: ""
+  telegram_channel: ""
+  community_link: ""
+  watermark_text: "Anime Weebs"
+  metadata_author: "Anime Weebs"
+  metadata_comment: "Provided by Anime Weebs"
+
+distribution:
+  # Season-centric delivery by default.
+  mode: season_package           # season_package | individual
+  protect_content: true
+  temporary_links: true
+  link_expiry_minutes: 60         # 15 | 30 | 60 | 360 | 1440
+  auto_delete: false
+  auto_delete_after_minutes: 60
+
+queue:
+  max_visible: 10
+  position_recalc_seconds: 5
+
+security:
+  rate_limit_per_minute: 20
+  anti_spam_cooldown_seconds: 2
+  force_subscribe: false
+  force_subscribe_channels: []
+  # Distribution bots have their own independent force-subscription settings.
+  dist_force_subscribe: false
+  dist_force_subscribe_channels: []
+
+# Database channel: content is stored as ordered packs (header -> files -> end sticker),
+# one pack per (anime, season, resolution, language). Delivery copies the recorded range.
+storage_channel:
+  enabled: true
+  channel_id: -1002383780897                 # -100... id of your database channel
+  header_template: "<b>{title} — {content_type} {season} [{resolution}] [{language}]</b>"
+  end_sticker_id: "CAACAgUAAxkBAAIxQGo4UAizFl3C4Y_aIz86iuNbyJHLAAJOFwACoa8gVlT9gR8Fr550PAQ"            # file_id of the sticker that marks end of a pack
+  copy_mode: copy              # copy | forward
+  include_header_in_delivery: true
+  include_sticker_in_delivery: false
+
+# Log channel: every event goes here, plus two auto-updated pinned messages.
+log_channel:
+  enabled: true
+  channel_id: -1004429939823
+  pinned_dashboard: true        # live stats summary (edited in place)
+  pinned_catalog: true          # published catalog index (edited in place)
+  refresh_seconds: 60
+  events: [all]                 # 'all' = everything; or a subset of categories
+  cover_image: "https://files.catbox.moe/how89x.jpg"   # cover photo atop the control center
+  # When true (default), the rebuild also wipes every message newer than the
+  # cover/intro — including admin-typed notes, failure-card echoes, and
+  # anything posted by other users — so the layout always lands on a true
+  # clean slate. Set false if you draft notes in the channel between
+  # rebuilds and want them preserved.
+  wipe_all_on_rebuild: true
+  # Safety cap on the sweep count. Telegram caps single history fetches at
+  # 200 anyway; this just makes the limit explicit.
+  wipe_max_history: 200
+
+# Access: free trial, then renew via a shortlink token.
+access:
+  enabled: false
+  free_trial: true
+  trial_days: 3
+  token_days: 3
+  token_link_ttl_hours: 24
+  forward_to_saved_hint: true
+
+# Shortener used to gate token generation (AroLinks / VPLinks).
+shortlink:
+  enabled: false
+  provider: vplinks            # arolinks | vplinks
+  arolinks_api_key: ""          # AroLinks API token (get yours at https://arolinks.com/member/tools/api)
+  vplinks_api_key: ""           # VPLinks API token (get yours at https://vplink.in/member/tools/api)
+  api_token: ""
+  base_url: ""
+
+# Acquisition matrix: when a request doesn't pin a quality/language, fetch all of these.
+# languages map to audio: english = Dub, japanese = Sub (always with English subtitles).
+acquisition:
+  resolutions: [360p, 540p, 720p, 1080p]
+  languages: [english, japanese]
+  require_english_subs: true
+
+# Main channel: each published anime is posted here with poster + [Index][Download].
+main_channel:
+  enabled: true
+  channel_id: -1004230173919
+  caption_template: |-
+    <blockquote><b>{title}『 </b>#{tag} <b>』</b></blockquote>
+
+    <b>⌬ EPISODES :</b> {episodes}
+    <b>⌬ QUALITY :</b> {qualities}
+    <b>⌬ LANGUAGE :</b> {languages}
+    <b>⌬ GENRE :</b> {genres}
+
+    <blockquote><b>‣ OverView :</b> {overview}</blockquote>
+  index_button_text: "Iɴᴅᴇx"
+  download_button_text: "Dᴏᴡɴʟᴏᴀᴅ"
+
+# Thumbnail channel: custom banner generation via asset selection in a dedicated channel.
+# When enabled, published anime are queued here for admins to select logos, posters,
+# and backdrops (fetched from TMDB, displayed via Telegraph galleries) before the
+# Playwright-based renderer generates custom thumbnail images for each entry.
+# Requires a Telegraph API access token (get one at https://api.telegra.ph/createAccount).
+thumbnail_channel:
+  enabled: true
+  channel_id: -1004417091364
+  cover_image: "https://im.gurl.eu.org/file/AgACAgEAAxkDAAEBkp9qTTIfT1ycV-GJUUR48oXqo338wgAC2A1rGyYwaEaxdNmL5swENAEAAwIAA3cAAzwE.png"
+  divider_sticker_id: "CAACAgUAAxkBAAI0vGpAOaZ7gJ6Yk9MtJ63jm0sYmDysAAIYAANDc8kSzixbXL29lfc8BA"
+  telegraph_access_token: "99c2fbf9fe90b54f94b4a3d8ac4e0a12a594b126dea5b1bcd8773a898b9a"
+  max_queue_size: 20
+  # When true (default), the rebuild wipes every message newer than the
+  # cover/intro — including thumbnail-picker detail cards, admin notes,
+  # and any other user's chatter. Set false to preserve staff notes.
+  wipe_all_on_rebuild: true
+  # Safety cap on the sweep count (matches Telegram's single-fetch limit).
+  wipe_max_history: 200
+
+# Index channel: stylized per-letter index posts the bot maintains.
+
+index_channel:
+  enabled: true
+  channel_id: -1002760647238
+  letter_header_template: "•──────────•°• {letter} •°•──────────•"
+  entry_template: "⦿ {title}"
+
+sources:
+  # Only authorized sources are enabled. Pirate-site plugins are not shipped.
+  enabled: [local, telegram, anikoto, kickassanime, anizone, nyaa]
+  default: telegram
+
+localization:
+  default_language: en
+  directory: resources/language
+
+bot:
+  auto_create_on_publish: true
+  health_check_interval_minutes: 60
+  delivery_retention_days: 7
+  avatar_source: tmdb
+  # Operator overrides for the bot's Telegram /setdescription (long, 512 chars)
+  # and /setabouttext (short, 120 chars). Empty = use the built-in
+  # AniXWeebs branding block (Main/Index/Ongoing/Movies/Network).
+  description_text: ""
+  about_text: ""
+  # Footer image shown on the last post of every distribution bot.
+  # Leave empty for no image; set to a URL or a Telegram file_id.
+  footer_image_url: "https://files.catbox.moe/31zgzq.jpg"
+  # Override the default footer text (empty = use the built-in en.json template).
+  # Unicode small-caps and special characters are supported.
+  footer_text: ""
+  # Divider sticker sent between content sections (info → seasons → guide → footer).
+  # Set to an empty string to skip divider stickers.
+  divider_sticker_id: "CAACAgUAAxkBAAI5pmpE1uh9_sD-z2tYJ3wlado6vS29AAIYAANDc8kSzixbXL29lfc8BA"
+  # Per-account limits for distribution entities. When the bot limit is exhausted
+  # for a userbot session, the orchestrator falls back to creating public channels.
+  max_bots_per_account: 20
+  max_channels_per_account: 10
+  # Days between comprehensive entity health checks (bots + channels).
+  # Set to 0 to disable the scheduled full sweep (periodic bot checks still run).
+  entity_full_check_days: 30
+  # Username suffix formatting. Both bots and channels use the same base suffix;
+  # ``format_bot_username`` appends "_bot" for bot entities (Telegram requirement)
+  # and leaves the suffix unchanged for channels.
+  bot_username_suffix: "axw"
+  channel_username_suffix: "axw"
+
+ui:
+  start_sticker_id: "CAACAgUAAyEFAASAgUwqAAJh_mckw2STkeY1WMOHJGY4Hs9_1-2fAAIPFAACYLShVon-N6AFLnIiHgQ"
+  start_image_url: "https://envs.sh/odE.png"
+  start_image_has_spoiler: true
+  sticker_delete_delay: 1.5
+  loading_dot_delay: 0.32
+  loading_steps: 3

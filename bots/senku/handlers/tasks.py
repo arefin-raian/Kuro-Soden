@@ -1,0 +1,189 @@
+"""Senku task handlers — REUSES NekoFetch's BotContentService + BotFactory.
+
+Key principle: Senku does NOT reimplement content generation. It delegates to:
+  • BotContentService.generate_posts() — watch guides, info cards, seasons, footer.
+  • BotFactory.create_for_anime() — auto-creates distribution bots/channels.
+  • BotOrchestratorService — orchestrates the full flow.
+"""
+
+from __future__ import annotations
+
+from pyrogram import Client, filters
+from pyrogram.enums import ParseMode
+from pyrogram.types import CallbackQuery, Message
+
+from nekofetch.bots.fsm import FSM
+from nekofetch.core.container import Container
+from nekofetch.core.logging import get_logger
+from nekofetch.localization.messages import t
+from nekofetch.ui.components import cb, keyboard
+from nekofetch.ui.screens import Screen, send_screen
+
+log = get_logger(__name__)
+
+STATE_CHANNEL_USERNAME = "senku:await_channel_username"
+
+
+def register(client: Client, container: Container) -> None:
+    fsm = FSM(container.redis, bot="senku")
+
+    # ── /tasks — View assigned distribution tasks ────────────────────────────
+    @client.on_message(filters.command("tasks"))
+    async def _tasks(_: Client, message: Message) -> None:
+        if not message.from_user:
+            return
+        from kage.shared.admin_assignment import AdminAssignmentEngine
+        from nekofetch.infrastructure.database.postgres.session import session_scope
+        from nekofetch.infrastructure.repositories.request_repo import RequestRepository
+
+        engine = AdminAssignmentEngine(container.pg_sessionmaker)
+        active = await engine.get_active_tasks(message.from_user.id)
+
+        if not active:
+            await message.reply(
+                "<b>🧪 No active distribution tasks.</b>\n\n"
+                "No anime assigned to you for distribution right now.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        lines = ["<b>🧪 Your Distribution Tasks</b>\n"]
+        for a in active[:10]:
+            status_icon = "🔄" if a.status == "in_progress" else "⏳"
+            title = a.request_code
+            try:
+                async with session_scope(container.pg_sessionmaker) as s:
+                    req = await RequestRepository(s).get_by_code(a.request_code)
+                    if req:
+                        title = req.anime_title
+            except Exception:
+                pass
+            lines.append(f"{status_icon} <code>{a.request_code}</code> — <b>{title}</b>")
+        await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
+
+    # ── /create — Channel creation wizard ────────────────────────────────────
+    @client.on_message(filters.command("create"))
+    async def _create(_: Client, message: Message) -> None:
+        """Guide the admin through creating a distribution channel."""
+        caption = (
+            "<b>📺 Create Distribution Channel</b>\n\n"
+            "<b>Step 1:</b> Create a new Telegram <b>public channel</b>.\n"
+            "<b>Step 2:</b> Set the channel title and username.\n"
+            "<b>Step 3:</b> Download the TMDB poster and set it as the profile picture.\n"
+            "<b>Step 4:</b> Remove Telegram's default 'channel created' message.\n"
+            "<b>Step 5:</b> Add <b>this bot</b> as an administrator.\n\n"
+            "<i>When ready, send the channel username or ID.\n"
+            "Reply /cancel to abort.</i>"
+        )
+        await message.reply(caption, parse_mode=ParseMode.HTML)
+
+    # ── /generate — Generate content for a title ─────────────────────────────
+    @client.on_message(filters.command("generate"))
+    async def _generate_cmd(_: Client, message: Message) -> None:
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply(
+                "<b>🎨 Generate Distribution Content</b>\n\n"
+                "Usage: <code>/generate REQ-XXXX</code>\n\n"
+                "This will generate all content posts for the anime:\n"
+                "• Information card\n"
+                "• Stickers & dividers\n"
+                "• Season separators\n"
+                "• Watch guide\n"
+                "• Footer\n\n"
+                "<i>Uses NekoFetch's existing BotContentService.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        request_code = parts[1].strip()
+        await _generate_content_for_request(client, container, message, request_code)
+
+    # ── /help ─────────────────────────────────────────────────────────────────
+    @client.on_message(filters.command("help"))
+    async def _help(_: Client, message: Message) -> None:
+        await message.reply(
+            "<b>🧪 Senku — Distribution Bot</b>\n\n"
+            "<b>How it works:</b>\n"
+            "1. Downloader finishes → task assigned to you.\n"
+            "2. Create a Telegram channel (I guide you through it).\n"
+            "3. I auto-generate all content posts.\n"
+            "4. Posts are delivered in order: info → stickers → seasons → guide → footer.\n\n"
+            "<b>Commands:</b>\n"
+            "/tasks — Your tasks\n"
+            "/create — Channel setup wizard\n"
+            "/generate — Generate content for a title",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+async def _generate_content_for_request(
+    client: Client, container: Container, message: Message, request_code: str,
+) -> None:
+    """Generate distribution content by reusing NekoFetch's BotContentService."""
+    from nekofetch.infrastructure.database.postgres.session import session_scope
+    from nekofetch.infrastructure.database.postgres.models import DistributionBot
+    from nekofetch.infrastructure.repositories.request_repo import RequestRepository
+    from sqlalchemy import select
+
+    async with session_scope(container.pg_sessionmaker) as session:
+        req = await RequestRepository(session).get_by_code(request_code)
+        if req is None:
+            await message.reply(
+                f"❌ <b>Request not found:</b> {request_code}",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        title = req.anime_title
+        anime_doc_id = req.anime_doc_id
+
+    if not anime_doc_id:
+        await message.reply(
+            f"❌ <b>No anime ID found</b> for {request_code}.\n"
+            "The request must have an AniList ID to generate content.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Check if a distribution bot/channel already exists.
+    async with session_scope(container.pg_sessionmaker) as session:
+        existing = (
+            await session.execute(
+                select(DistributionBot).where(
+                    DistributionBot.anime_doc_id == anime_doc_id,
+                    DistributionBot.enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+
+    if existing:
+        # Regenerate content for the existing bot.
+        await message.reply(
+            f"🔄 <b>Regenerating content</b> for <b>{title}</b>...\n"
+            f"Distribution entity: @{existing.username or existing.name}",
+            parse_mode=ParseMode.HTML,
+        )
+        try:
+            from nekofetch.services.bot_content import BotContentService
+            await BotContentService(container).generate_posts(existing.id, anime_doc_id)
+            await message.reply(
+                f"✅ <b>Content regenerated!</b>\n\n"
+                f"📋 Request: <code>{request_code}</code>\n"
+                f"🎬 Anime: <b>{title}</b>\n"
+                f"📺 Channel: @{existing.username or existing.name}",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as exc:
+            await message.reply(
+                f"❌ <b>Generation failed:</b> {str(exc)[:300]}",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    # No existing bot — guide admin to create one.
+    await message.reply(
+        f"<b>📺 No distribution entity exists</b> for <b>{title}</b>.\n\n"
+        "Use <b>/create</b> to start the channel creation wizard, then "
+        "run <b>/generate</b> again with the channel info.",
+        parse_mode=ParseMode.HTML,
+    )
