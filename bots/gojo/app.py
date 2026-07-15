@@ -55,29 +55,53 @@ def build_gojo(container: Container, token: str) -> Client:
     from kage.bots.gojo.handlers import register_all
     register_all(client, container)
 
+    # ── Catch-all menu callback ─────────────────────────────────────────────
+    # Inline buttons on /start route to `gojo|<action>`. Whatever doesn't
+    # match a real handler gets a one-line alert rather than silent failure.
+    from pyrogram.types import CallbackQuery
+
+    @client.on_callback_query(filters.regex(r"^gojo\|"))
+    async def _gojo_menu_fallback(_: Client, q: CallbackQuery) -> None:
+        try:
+            _, action = q.data.split("|", 1)
+        except ValueError:
+            action = "help"
+        await q.answer(f"Type /{action} in chat.", show_alert=False)
+
     # ── /start ────────────────────────────────────────────────────────────────
+    # Rich UI: sticker → loading animation → welcome screen with inline keyboard
+    # and Gojo-themed artwork (images/gojo/).
     @client.on_message(filters.command("start"))
     async def _start(_: Client, message: Message) -> None:
-        from nekofetch.ui.screens import Screen, send_screen
+        from nekofetch.ui.screens import Screen
+        from nekofetch.ui.components import cb, keyboard
+        from nekofetch.ui.artwork import pick_artwork
+        from kage.shared.ui_helpers import send_rich_welcome
 
-        caption = (
-            "<b>🔮 Gojo Satoru — Publisher</b>\n\n"
-            "<i>\"Throughout heaven and earth, I alone am the honored one.\"</i>\n\n"
-            "I handle the final step:\n"
-            "• Generate main channel posts\n"
-            "• Create franchise thumbnails\n"
-            "• Review and edit captions\n"
-            "• Publish or schedule\n"
-            "• Update the index\n"
-            "• Recover banned channels\n\n"
-            "<b>Commands:</b>\n"
-            "/tasks — Your tasks\n"
-            "/publish — Review & publish\n"
-            "/recover — Channel recovery\n"
-            "/schedule — Schedule posts"
+        rows = [
+            [("📋 Tasks", cb("gojo", "tasks")),
+             ("🔮 Publish", cb("gojo", "publish"))],
+            [("📅 Schedule", cb("gojo", "schedule")),
+             ("🛡 Recover", cb("gojo", "recover"))],
+            [("⚙️ Settings", cb("gojo", "settings")),
+             ("❓ Help", cb("misc", "help"))],
+        ]
+        screen = Screen(
+            caption=(
+                "<b>🔮 Gojo Satoru — Publisher</b>\n\n"
+                "<i>\"Throughout heaven and earth, I alone am the honored one.\"</i>\n\n"
+                "I handle the final step:\n"
+                "• Generate main channel posts\n"
+                "• Create franchise thumbnails\n"
+                "• Review and edit captions\n"
+                "• Publish or schedule\n"
+                "• Update the index\n"
+                "• Recover banned channels"
+            ),
+            image=pick_artwork("gojo"),
+            keyboard=keyboard(*rows),
         )
-        screen = Screen(caption=caption)
-        await send_screen(client, message.chat.id, screen)
+        await send_rich_welcome(client, container, message, screen, bot_name="gojo")
 
     # ── /settings ─────────────────────────────────────────────────────────────
     @client.on_message(filters.command("settings"))

@@ -55,27 +55,50 @@ def build_levi(container: Container, token: str) -> Client:
 
     register_all(client, container)
 
+    # ── Catch-all menu callback ─────────────────────────────────────────────
+    # Inline buttons on /start route to `levi|<action>`. Whatever doesn't
+    # match a real handler gets a one-line alert rather than silent failure.
+    from pyrogram.types import CallbackQuery
+
+    @client.on_callback_query(filters.regex(r"^levi\|"))
+    async def _levi_menu_fallback(_: Client, q: CallbackQuery) -> None:
+        try:
+            _, action = q.data.split("|", 1)
+        except ValueError:
+            action = "help"
+        await q.answer(f"Type /{action} in chat.", show_alert=False)
+
     # ── /start ────────────────────────────────────────────────────────────────
+    # Rich UI: sticker → loading animation → welcome screen with inline keyboard
+    # and Levi-themed artwork (images/levi/).
     @client.on_message(filters.command("start"))
     async def _start(_: Client, message: Message) -> None:
-        from nekofetch.ui.screens import Screen, send_screen
+        from nekofetch.ui.screens import Screen
+        from nekofetch.ui.components import cb, keyboard
+        from nekofetch.ui.artwork import pick_artwork
+        from kage.shared.ui_helpers import send_rich_welcome
 
-        caption = (
-            "<b>⚔️ Levi Ackerman — Downloader</b>\n\n"
-            "<i>\"No task is impossible. Only tasks I haven't cut down yet.\"</i>\n\n"
-            "I handle the download pipeline:\n"
-            "• Select the source manually\n"
-            "• Download and process files\n"
-            "• Upload thumbnails and generate headers\n\n"
-            "<b>Commands:</b>\n"
-            "/tasks — Your assigned tasks\n"
-            "/sources — Available sources\n"
-            "/assign — Assign source + queue download\n"
-            "/header — Generate header\n"
-            "/settings — Configuration"
+        rows = [
+            [("📋 Tasks", cb("levi", "tasks")),
+             ("🌐 Sources", cb("levi", "sources"))],
+            [("🎯 Assign", cb("levi", "assign")),
+             ("📝 Header", cb("levi", "header"))],
+            [("⚙️ Settings", cb("levi", "settings")),
+             ("❓ Help", cb("misc", "help"))],
+        ]
+        screen = Screen(
+            caption=(
+                "<b>⚔️ Levi Ackerman — Downloader</b>\n\n"
+                "<i>\"No task is impossible. Only tasks I haven't cut down yet.\"</i>\n\n"
+                "I handle the download pipeline:\n"
+                "• Select the source manually\n"
+                "• Download and process files\n"
+                "• Upload thumbnails and generate headers"
+            ),
+            image=pick_artwork("levi"),
+            keyboard=keyboard(*rows),
         )
-        screen = Screen(caption=caption)
-        await send_screen(client, message.chat.id, screen)
+        await send_rich_welcome(client, container, message, screen, bot_name="levi")
 
     # ── /settings ─────────────────────────────────────────────────────────────
     @client.on_message(filters.command("settings"))

@@ -52,27 +52,50 @@ def build_senku(container: Container, token: str) -> Client:
     from kage.bots.senku.handlers import register_all
     register_all(client, container)
 
+    # ── Catch-all menu callback ─────────────────────────────────────────────
+    # Inline buttons on /start route to `senku|<action>`. Whatever doesn't
+    # match a real handler gets a one-line alert rather than silent failure.
+    from pyrogram.types import CallbackQuery
+
+    @client.on_callback_query(filters.regex(r"^senku\|"))
+    async def _senku_menu_fallback(_: Client, q: CallbackQuery) -> None:
+        try:
+            _, action = q.data.split("|", 1)
+        except ValueError:
+            action = "help"
+        await q.answer(f"Type /{action} in chat.", show_alert=False)
+
     # ── /start ────────────────────────────────────────────────────────────────
+    # Rich UI: sticker → loading animation → welcome screen with inline keyboard
+    # and Senku-themed artwork (images/senku/).
     @client.on_message(filters.command("start"))
     async def _start(_: Client, message: Message) -> None:
-        from nekofetch.ui.screens import Screen, send_screen
+        from nekofetch.ui.screens import Screen
+        from nekofetch.ui.components import cb, keyboard
+        from nekofetch.ui.artwork import pick_artwork
+        from kage.shared.ui_helpers import send_rich_welcome
 
-        caption = (
-            "<b>🧪 Senku Ishigami — Distribution</b>\n\n"
-            "<i>\"Ten billion percent — this channel will be perfect.\"</i>\n\n"
-            "I handle distribution:\n"
-            "• Guide channel creation\n"
-            "• Generate info cards & stickers\n"
-            "• Create season separators & watch guides\n"
-            "• Add footers and branding\n\n"
-            "<b>Commands:</b>\n"
-            "/tasks — Your tasks\n"
-            "/create — New channel setup\n"
-            "/generate — Generate content\n"
-            "/settings — Configuration"
+        rows = [
+            [("📋 Tasks", cb("senku", "tasks")),
+             ("🧪 Generate", cb("senku", "generate"))],
+            [("📢 Create Channel", cb("senku", "create")),
+            [("⚙️ Settings", cb("senku", "settings")),
+             ("❓ Help", cb("misc", "help"))],
+        ]
+        screen = Screen(
+            caption=(
+                "<b>🧪 Senku Ishigami — Distribution</b>\n\n"
+                "<i>\"Ten billion percent — this channel will be perfect.\"</i>\n\n"
+                "I handle distribution:\n"
+                "• Guide channel creation\n"
+                "• Generate info cards & stickers\n"
+                "• Create season separators & watch guides\n"
+                "• Add footers and branding"
+            ),
+            image=pick_artwork("senku"),
+            keyboard=keyboard(*rows),
         )
-        screen = Screen(caption=caption)
-        await send_screen(client, message.chat.id, screen)
+        await send_rich_welcome(client, container, message, screen, bot_name="senku")
 
     # ── /settings ─────────────────────────────────────────────────────────────
     @client.on_message(filters.command("settings"))

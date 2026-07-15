@@ -56,28 +56,43 @@ def build_lelouch(container: Container, token: str) -> Client:
 
     register_all(client, container)
 
+    # ── Catch-all menu callback ─────────────────────────────────────────────
+    # Inline buttons on /start route to `lelouch|<action>`. Real handlers
+    # match `req|`, `ver_pick`, `series_yes/no`, `noop`. Whatever falls through
+    # gets a one-line alert so the user isn't left with a silent dead button.
+    from pyrogram.types import CallbackQuery
+
+    @client.on_callback_query(filters.regex(r"^lelouch\|"))
+    async def _lelouch_menu_fallback(_: Client, q: CallbackQuery) -> None:
+        try:
+            _, action = q.data.split("|", 1)
+        except ValueError:
+            action = "help"
+        await q.answer(f"Type /{action} in chat.", show_alert=False)
+
     # ── /start ────────────────────────────────────────────────────────────────
+    # Rich UI: sticker → loading animation → welcome screen with inline keyboard
+    # and Lelouch-themed artwork (images/lelouch/).
     @client.on_message(filters.command("start"))
     async def _start(_: Client, message: Message) -> None:
-        from nekofetch.ui.screens import Screen, send_screen
         from nekofetch.domain.enums import Role
+        from nekofetch.ui.screens import welcome as welcome_screen
+        from kage.shared.ui_helpers import send_rich_welcome
 
         user = getattr(message, "nf_user", None)
         role = Role(user.role) if user else Role.USER
-        is_staff = role in (Role.STAFF, Role.ADMIN)
+        name = message.from_user.first_name if message.from_user else ""
 
-        caption = (
-            f"{'<b>🎭 Lelouch Vi Britannia</b>\n\n' if is_staff else ''}"
-            '<i>"I am Lelouch Vi Britannia, the shadow commander."</i>\n\n'
-            "<b>What I do:</b>\n"
-            "• Accept anime requests\n"
-            "• Check if they already exist\n"
-            "• Assign them to our download team\n\n"
-            "<b>Send me any anime title to begin!</b>\n\n"
-            f"{'🔹 <b>Staff:</b> /admin — Management panel' if is_staff else ''}"
+        # welcome_screen() builds a NekoFetch-parity screen with the
+        # Request Anime / My Requests inline buttons + staff/admin extras;
+        # passing bot_name="lelouch" picks artwork from images/lelouch/.
+        screen = welcome_screen(
+            name,
+            is_staff=role in (Role.STAFF, Role.ADMIN),
+            is_admin=role is Role.ADMIN,
+            bot_name="lelouch",
         )
-        screen = Screen(caption=caption)
-        await send_screen(client, message.chat.id, screen)
+        await send_rich_welcome(client, container, message, screen, bot_name="lelouch")
 
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))
