@@ -29,7 +29,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
-VOLUME ["/data/storage", "/data/sessions"]
+# Persistent /data/storage + /data/sessions is wired through the host
+# platform's volume mechanism (Render disk mount, Railway Volume, K8s PVC,
+# or a mounted VM disk) — NOT declared as a Docker VOLUME so the image stays
+# portable across Render / Railway / Docker-Compose / bare-metal.
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import asyncio; asyncio.get_event_loop()" || exit 1
