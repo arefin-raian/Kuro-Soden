@@ -21,7 +21,6 @@
   "owner_only": "🔒 Owner only — this is reserved for the bot owner.",
   "error_generic": "⚠️ Something went wrong.",
   "rate_limited": "⏳ You're going too fast.",
-  "request_limit_reached": "⚠️ <b>One request at a time!</b>\n\nYou already have an active request. Please wait for it to be processed before submitting a new one.\n\nUse /myrequests to check your current request status.",
   "link_expired": "🔗 This link has expired.",
   "sep_dot": " · ",
   "welcome_body": "I fetch anime for you. Ask for any title and I'll source it, clean it up, brand it, and deliver it — <b>subs, dual audio, the works</b>.",

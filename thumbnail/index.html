@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Suzume Movie Presentation Layout</title>
+
+  <!-- Tailwind v4 browser script compilation engine -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+  <!-- FontAwesome for exact match icon vector assets -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style type="text/css">
+    @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Inter:wght@300;400;500;600&display=swap');
+
+    .custom-bg-frame {
+      background: url('background.webp') no-repeat center center/cover;
+    }
+
+    .font-serif-title {
+      font-family: 'Cinzel', Georgia, serif;
+    }
+
+    .font-body-system {
+      font-family: 'Inter', sans-serif;
+    }
+  </style>
+</head>
+
+<body
+  class="bg-[#030303] text-white min-h-screen flex items-center justify-center overflow-hidden font-body-system antialiased">
+
+  <!-- MAIN CANVAS BOX MATCHING THE EXACT OVERVIEW ASPECT RATIO -->
+  <div class="custom-bg-frame relative w-screen h-screen pt-20 px-25 pb-12 flex flex-col justify-between">
+
+    <!-- HIGH LEGIBILITY AMBIENT GRADIENT BLEND LAYER -->
+    <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-black/10 z-10 pointer-events-none">
+    </div>
+
+    <!-- 1. TOP BRANDING INDICATOR BLOCK -->
+
+    <!-- MIDDLE TO BOTTOM WRAPPER SECTION -->
+    <div class="relative z-20 w-full mt-auto flex flex-col gap-5 item-center">
+
+      <div class="relative z-20 flex items-center gap-2 text-xs font-normal opacity-90 tracking-wide">
+        <div class="w-7 h-5 bg-white flex items-center justify-center rounded-xs shadow-[0_0_2px_rgba(0,0,0,0.3)]">
+          <div class="w-3 h-3 bg-[#bc002d] rounded-full"></div>
+        </div>
+        <span class="text-white/95">AniMovie Weebs</span>
+      </div>
+      
+      <!-- 2. GIGANTIC MOVIE TITLE LOGO IMAGE INTERCHANGE -->
+      <!-- 🚀 SWAPPED TEXT BANNERS OUT FOR logo.png IMAGE REFERENCED VERBATIM -->
+      <div class="ml-1 mb-2">
+        <img src="logo.png" alt="Suzume" class="h-[3.5rem] w-auto object-contain filter drop-shadow-[0_4px_20px_rgba(0,0,0,0.6)]" />
+      </div>
+
+      <!-- 3. COMPACT MAIN DETAILS AND POSTER ROW -->
+      <div class="flex items-start gap-6 w-[100vw]">
+
+        <!-- POSTER ART THUMBNAIL (SMALL FIXED SIZE SCALE) -->
+        <div class="flex-shrink-0">
+          <div
+            class="w-[12vw] h-[40vh] rounded-md border border-white/20 shadow-[0_12px_24px_rgba(0,0,0,0.5)] flex items-end justify-center pb-4 relative overflow-hidden"
+            style="background: url('poster.webp') no-repeat center center/cover;">
+
+            <div class="absolute inset-0 z-0"></div>
+          </div>
+        </div>
+
+        <!-- SYNOPSIS METADATA SECTION -->
+        <div class="flex flex-col justify-between h-full">
+          <div>
+            <h2 class="text-xl font-bold tracking-wider text-white">すずめの戸締まり</h2>
+            <h3 class="text-xl font-bold text-white/90">(Suzume no Tojimari)</h3>
+            <!-- META SEGMENT DATA BAR -->
+            <div class="text-md text-zinc-200 font-light tracking-wide space-x-1">
+              <span>2022</span> <span class="text-zinc-300 text-sm">|</span>
+              <span>G</span> <span class="text-zinc-300 text-sm">|</span>
+              <span>2h 1m</span> <span class="text-zinc-300 text-sm">|</span>
+              <span class="opacity-90">Language: Japanese & English</span>
+            </div>
+          </div>
+
+
+          <!-- PARAGRAPH BLURB TEXT -->
+          <div class="flex w-[100vw] justify-between">
+
+
+
+            <p
+              class="text-[16px] leading-[1.65] text-zinc-200 font-normal max-w-[520px] drop-shadow-[0_2px_8px_rgba(0,0,0,0.5)]">
+              Suzume, a 17-year-old from Kyushu, meets a young man searching for a door. They find and open one in the
+              mountains, triggering disasters across Japan. Suzume grows and finds freedom as she closes these doors.
+            </p>
+
+            <!-- RIGHT SIDE COMPACT ACTION GROUP -->
+            <div class="flex items-center gap-6 text-zinc-300 pr-[25%]">
+              <button
+                class="flex items-center gap-2 text-sm font-normal text-white cursor-pointer">
+                <i class="fa-solid fa-heart text-xl"></i> Like
+              </button>
+              <button
+                class="flex items-center gap-2 text-sm font-normal text-white cursor-pointer">
+                <i class="fa-solid fa-bookmark text-xl"></i> Save to watch later
+              </button>
+            </div>
+
+          </div>
+
+          <!-- 🚀 MODIFIED THIS CONTAINER BELOW TO SUPPORT FLEX ALIGNMENTS -->
+          <div class="flex items-center justify-between w-full max-w-[75vw]">
+
+            <div class="flex gap-2">
+              <span
+                class="border border-white/30 bg-black/10 px-[1.1rem] py-1.5 rounded-full text-md font-medium tracking-wider text-zinc-100 backdrop-blur-xs">Adventure</span>
+              <span
+                class="border border-white/30 bg-black/10 px-[1.1rem] py-1.5 rounded-full text-md font-medium tracking-wider text-zinc-100 backdrop-blur-xs">Fantasy</span>
+              <span
+                class="border border-white/30 bg-black/10 px-[1.1rem] py-1.5 rounded-full text-md font-medium tracking-wider text-zinc-100 backdrop-blur-xs">Mystery</span>
+              <span
+                class="border border-white/30 bg-black/10 px-[1.1rem] py-1.5 rounded-full text-md font-medium tracking-wider text-zinc-100 backdrop-blur-xs">Supernatural</span>
+            </div>
+
+            <div class="text-right pl-6">
+              <span class="block text-xl font-black text-white tracking-wider mb-0">Director:</span>
+              <span class="text-[15px] font-normal text-white/90 tracking-wide whitespace-nowrap">Makoto Shinkai</span>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 4. BOTTOM INTERACTION CONTROLS ROW -->
+      <div class="w-full flex justify-between items-end mt-4">
+
+        <!-- ROUNDED TRANS-BORDER GENRE PILLS -->
+
+
+
+
+      </div>
+
+    </div>
+
+    <!-- 5. FIXED ABSOLUTE RIGHT PANEL (METRICS AREA) -->
+    <div class="absolute right-16 top-[22%] z-20 flex flex-col gap-8 items-center">
+
+      <!-- IMDB BOX METRIC -->
+      <div class="text-center flex flex-col items-center gap-0.5">
+        <div class="text-2xl font-bold text-white tracking-wide">7.6</div>
+        <div class="text-[11px] font-medium tracking-wider text-white">IMDB</div>
+      </div>
+
+      <!-- ANILIST SCORE GAUGE RING -->
+      <div class="flex flex-col items-center gap-2">
+        <!-- 🚀 SVG DONUT CHART WITH PERFECT 82% TRACK FILL AND TRANSPARENT CENTER -->
+        <div class="relative w-[96px] h-[96px] flex items-center justify-center">
+          <svg class="w-full h-full -rotate-90" viewBox="0 0 100 100">
+            <!-- Inactive track background layer -->
+            <circle cx="50" cy="50" r="42" stroke="rgba(255, 255, 255, 0.4)" stroke-width="12" fill="transparent" />
+            <!-- Active white progress track layer (82% of 2 * PI * 42 = ~216.4) -->
+            <circle cx="50" cy="50" r="42" stroke="#ffffff" stroke-width="12" fill="transparent"
+              stroke-dasharray="263.89" stroke-dashoffset="47.5" stroke-linecap="round" />
+          </svg>
+          <!-- Absolute centered overlay container for rating label text -->
+          <div class="absolute inset-0 flex items-center justify-center">
+            <span class="text-[22px] font-bold text-white tracking-tight">82%</span>
+          </div>
+        </div>
+        <div class="text-[14px] font-normal tracking-wide text-white whitespace-nowrap mt-1">Anilist Rating</div>
+      </div>
+
+    </div>
+
+    <!-- 6. BOTTOM RIGHT FOOTER CREDIT PANEL -->
+
+
+  </div>
+
+</body>
+
+</html>
