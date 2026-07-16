@@ -176,6 +176,27 @@ def build_senku(container: Container, token: str) -> Client:
                 await q.answer()
                 return
 
+        # ── Help ──
+        if action == "help":
+            caption = (
+                "<b>🧪 Senku — Distribution · Help</b>\n\n"
+                "<b>How distribution works</b>\n"
+                "1. Open <b>📋 Tasks</b> to see titles awaiting a content pack\n"
+                "2. <b>📢 Create Channel</b> spins up the channel + profile picture\n"
+                "3. <b>🧪 Generate</b> builds the info card, season separators,\n"
+                "   watch guide, footer, and stickers — each editable\n"
+                "4. Approve, and the publisher locks it in\n\n"
+                "<i>Everything here is button-driven — no commands required.</i>"
+            )
+            await send_screen(
+                client, q.message.chat.id,
+                Screen(caption=caption, image=pick_artwork(bot),
+                       keyboard=InlineKeyboardMarkup(
+                           [[InlineKeyboardButton("◀ Back", callback_data=cb(bot, "home"))]])),
+                old_msg=q.message)
+            await q.answer()
+            return
+
         await q.answer(f"Action “{action}” not wired yet.", show_alert=True)
 
     # ── /start ────────────────────────────────────────────────────────────────
@@ -193,7 +214,7 @@ def build_senku(container: Container, token: str) -> Client:
              ("🧪 Generate", cb("senku", "generate"))],
             [("📢 Create Channel", cb("senku", "create"))],
             [("⚙️ Settings", cb("senku", "settings")),
-             ("❓ Help", cb("misc", "help"))],
+             ("❓ Help", cb("senku", "help"))],
         ]
         screen = Screen(
             caption=(

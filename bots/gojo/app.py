@@ -196,7 +196,27 @@ def build_gojo(container: Container, token: str) -> Client:
                 await q.answer()
                 return
 
-        await q.answer(f"Action “{action}” not wired yet.", show_alert=True)
+        # ── Help ──
+        if action == "help":
+            caption = (
+                "<b>🔮 Gojo — Publisher · Help</b>\n\n"
+                "<b>How publishing works</b>\n"
+                "1. Open <b>📋 Tasks</b> to see what's ready to publish\n"
+                "2. <b>🔮 Publish</b> a task — review the caption, then post\n"
+                "3. <b>📅 Schedule</b> it for later, or publish now\n"
+                "4. <b>🛡 Recover</b> rebuilds a banned channel and fixes every button\n\n"
+                "<i>Everything here is button-driven — no commands required.</i>"
+            )
+            await send_screen(
+                client, q.message.chat.id,
+                Screen(caption=caption, image=pick_artwork(bot),
+                       keyboard=InlineKeyboardMarkup(
+                           [[InlineKeyboardButton("◀ Back", callback_data=cb(bot, "home"))]])),
+                old_msg=q.message)
+            await q.answer()
+            return
+
+        await q.answer(f"Action “{action}” isn't available here.", show_alert=True)
 
     # ── /start ────────────────────────────────────────────────────────────────
     # Rich UI: sticker → loading animation → welcome screen with inline keyboard
@@ -214,7 +234,7 @@ def build_gojo(container: Container, token: str) -> Client:
             [("📅 Schedule", cb("gojo", "schedule")),
              ("🛡 Recover", cb("gojo", "recover"))],
             [("⚙️ Settings", cb("gojo", "settings")),
-             ("❓ Help", cb("misc", "help"))],
+             ("❓ Help", cb("gojo", "help"))],
         ]
         screen = Screen(
             caption=(

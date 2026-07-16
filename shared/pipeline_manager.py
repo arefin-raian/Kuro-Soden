@@ -82,16 +82,16 @@ class PipelineManager:
 
         try:
             if name == "lelouch":
-                from kage.bots.lelouch.app import build_lelouch
+                from kage.bots.lelouch.app import build_lelouch, publish_commands
                 client = build_lelouch(self._c, token)
             elif name == "levi":
-                from kage.bots.levi.app import build_levi
+                from kage.bots.levi.app import build_levi, publish_commands
                 client = build_levi(self._c, token)
             elif name == "senku":
-                from kage.bots.senku.app import build_senku
+                from kage.bots.senku.app import build_senku, publish_commands
                 client = build_senku(self._c, token)
             elif name == "gojo":
-                from kage.bots.gojo.app import build_gojo
+                from kage.bots.gojo.app import build_gojo, publish_commands
                 client = build_gojo(self._c, token)
             else:
                 log.error("kuro-soden.bot.unknown", name=name)
@@ -99,6 +99,12 @@ class PipelineManager:
 
             await client.start()
             self._clients[name] = client
+            # Populate the Telegram burger-menu command list (best-effort — a
+            # failed set_bot_commands must never stop the bot from running).
+            try:
+                await publish_commands(client)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("kuro-soden.bot.commands_failed", bot=name, error=str(exc))
             log.info("kuro-soden.bot.started", bot=name)
         except Exception as exc:
             log.error("kuro-soden.bot.start_failed", bot=name, error=str(exc))

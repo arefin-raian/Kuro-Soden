@@ -79,7 +79,7 @@ def register(client: Client, container: Container) -> None:
     assignment = AdminAssignmentEngine(container.pg_sessionmaker)
 
     # ── /start handler (already in app.py, but register the FSM trigger too) ──
-    @client.on_callback_query(filters.regex(r"^req\\|new"))
+    @client.on_callback_query(filters.regex(r"^req\|new"))
     async def _new(_: Client, q: CallbackQuery) -> None:
         await fsm.set(q.from_user.id, STATE_NAME)
         screen = ask_title()
@@ -270,7 +270,7 @@ def register(client: Client, container: Container) -> None:
         msg = await send_screen(client, message.chat.id, screen, old_msg=msg)
 
     # ── Version picker callbacks ──────────────────────────────────────────────
-    @client.on_callback_query(filters.regex(r"^ver_pick\\|"))
+    @client.on_callback_query(filters.regex(r"^ver_pick\|"))
     async def _ver_pick(_: Client, q: CallbackQuery) -> None:
         await lock_buttons(q)
         _, args = q.data.split("|", 1)
@@ -318,7 +318,7 @@ def register(client: Client, container: Container) -> None:
         await q.answer()
 
     # ── Confirmation / rejection ──────────────────────────────────────────────
-    @client.on_callback_query(filters.regex(r"^series_yes\\|"))
+    @client.on_callback_query(filters.regex(r"^series_yes\|"))
     async def _confirm(_: Client, q: CallbackQuery) -> None:
         await lock_buttons(q)
         _, data = await fsm.get(q.from_user.id)
@@ -424,7 +424,7 @@ def register(client: Client, container: Container) -> None:
         await send_screen(client, card_msg.chat.id, screen, old_msg=card_msg)
 
     # ── My Requests ───────────────────────────────────────────────────────────
-    @client.on_callback_query(filters.regex(r"^req\\|mine"))
+    @client.on_callback_query(filters.regex(r"^req\|mine"))
     async def _mine(_: Client, q: CallbackQuery) -> None:
         from nekofetch.services.request_service import RequestService
         from nekofetch.ui.screens import my_requests as my_reqs_screen

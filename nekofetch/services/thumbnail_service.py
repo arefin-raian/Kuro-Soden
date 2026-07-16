@@ -1,16 +1,24 @@
 """Thumbnail renderer — uses Playwright to render the HTML template to an image.
 
-Takes ``thumbnail/index.html`` as the base template and substitutes actual images
-and text data at render time. Uses headless Chromium for faithful rendering of
-CSS, fonts, SVGs, gradients, and custom typography.
+Takes ``thumbnail/index.html`` as the base template and substitutes real
+per-anime data into ``{{TOKENS}}`` at render time. Uses headless Chromium for
+faithful rendering of CSS, fonts, SVGs, gradients, and custom typography.
 
-The output is a high-quality ``.webp`` image that matches the reference card
-design exactly.
+The template is entirely viewport-relative (``vw``/``vh``/``%``), tuned for a
+wide ~2.13:1 canvas — so we render at that aspect (1366×641, ×2 for crispness)
+to match the reference design exactly instead of squishing it into 16:9.
+
+Data sources (wired by the caller): TMDB supplies the backdrop (textless),
+logo, meta line, rating, studio, and origin-country flag; AniList supplies the
+romaji/native titles, the seasonal poster, and the score ring.
+
+The output is a high-quality ``.webp`` image.
 """
 
 from __future__ import annotations
 
 import html as html_module
+import math
 from pathlib import Path
 from typing import Any
 
@@ -24,37 +32,58 @@ _TEMPLATE_DIR = Path(__file__).resolve().parents[3] / "thumbnail"
 _DEFAULT_TEMPLATE = _TEMPLATE_DIR / "index.html"
 _OUTPUT_DIR = Path(__file__).resolve().parents[3] / "data" / "thumbnails"
 
-# The template layout is viewport-relative (poster is 12vw×40vh; panels use
-# vw/vh/%), tuned for a wide ~2.13:1 banner — the exact ratio the design was
-# authored at. Rendering at any other aspect ratio reflows and crops it, so we
-# render at the native ratio and scale ×2 for a crisp output.
+# The template's native design ratio (matches the reference browser render at
+# 1366×641). device_scale_factor=2 doubles the output resolution for crisp text.
 _THUMBNAIL_WIDTH = 1366
 _THUMBNAIL_HEIGHT = 641
-_SYNOPSIS_MAX_CHARS = 230
+_SYNOPSIS_MAX_CHARS = 300
 
-# Genre pill styling, verbatim from the template, so code-generated pills match.
-_PILL_CLS = ("border border-white/30 bg-black/10 px-[1.1rem] py-1.5 rounded-full "
-             "text-md font-medium tracking-wider text-zinc-100 backdrop-blur-xs")
-# The SVG ring's stroke-dasharray (2·π·42 ≈ 263.89); offset encodes the percent.
-_RING_CIRCUMFERENCE = 263.89
+# The SVG score ring: r=42 → circumference = 2·π·42 ≈ 263.89. dashoffset is the
+# UNfilled remainder, so offset = C · (1 - pct/100).
+_RING_CIRCUMFERENCE = 2 * math.pi * 42
+
+# How many genre pills fit before the row visually overflows the design width.
+# We budget by rendered character count rather than a fixed count, since "Slice
+# of Life" eats far more room than "Action".
+_GENRE_CHAR_BUDGET = 42
+_GENRE_MAX_PILLS = 5
 
 
-def _truncate(text: str, max_chars: int = _SYNOPSIS_MAX_CHARS) -> str:
-    """Truncate text and append ``...`` if too long."""
-    text = text.strip()
+def _truncate(text: str, max_chars: int) -> str:
+    """Truncate text and append ``…`` if too long."""
+    text = (text or "").strip()
     if len(text) <= max_chars:
         return text
-    return text[:max_chars - 3].rstrip() + "..."
+    return text[:max_chars - 1].rstrip() + "…"
 
 
-def _fmt_runtime(minutes: int | None) -> str:
-    """Minutes → '2h 1m' / '1h' / '24m' (empty when unknown)."""
-    if not minutes or minutes <= 0:
-        return ""
-    h, m = divmod(int(minutes), 60)
-    if h and m:
-        return f"{h}h {m}m"
-    return f"{h}h" if h else f"{m}m"
+def _fit_genres(genres: list[str]) -> list[str]:
+    """Pick as many genres as fit the row budget — never fewer than one, never
+    so many they wrap and break the layout. Small genre sets show in full; long
+    ones are trimmed by a rendered-width budget, not a hard count."""
+    out: list[str] = []
+    used = 0
+    for g in genres:
+        g = (g or "").strip()
+        if not g:
+            continue
+        # +3 approximates the pill padding/gap in character-width terms.
+        cost = len(g) + 3
+        if out and (used + cost > _GENRE_CHAR_BUDGET or len(out) >= _GENRE_MAX_PILLS):
+            break
+        out.append(g)
+        used += cost
+    return out
+
+
+def _genre_pill(label: str) -> str:
+    """One genre pill — markup copied verbatim from the template so the dynamic
+    pills are pixel-identical to the original hardcoded ones."""
+    return (
+        '<span class="border border-white/30 bg-black/10 px-[1.1rem] py-1.5 '
+        'rounded-full text-md font-medium tracking-wider text-zinc-100 '
+        f'backdrop-blur-xs">{html_module.escape(label)}</span>'
+    )
 
 
 async def _download_image(url: str, dest: Path) -> Path | None:
@@ -66,7 +95,7 @@ async def _download_image(url: str, dest: Path) -> Path | None:
             dest.write_bytes(resp.content)
             return dest
     except Exception as exc:
-        log.warning("thumbnail.download.failed", url=url[:80], error=str(exc))
+        log.warning("thumbnail.download.failed", url=(url or "")[:80], error=str(exc))
         return None
 
 
@@ -82,6 +111,14 @@ def _load_template() -> str:
             log.warning("thumbnail.template.not_found", path=str(_DEFAULT_TEMPLATE))
             _HTML_TEMPLATE = "<html><body><h1>No template</h1></body></html>"
     return _HTML_TEMPLATE
+
+
+# Country (ISO-3166 alpha-2, as TMDB returns in ``origin_country``) → the flag
+# emoji-free approach: we use a flag image CDN so the card can show any country,
+# not just Japan. flagcdn serves clean PNG flags by lowercase code.
+def _flag_url(country: str | None) -> str:
+    code = (country or "JP").strip().lower()[:2] or "jp"
+    return f"https://flagcdn.com/w80/{code}.png"
 
 
 class ThumbnailRenderService:
@@ -128,28 +165,33 @@ class ThumbnailRenderService:
         *,
         title: str,
         native_title: str = "",
-        romaji: str = "",
+        romaji_title: str = "",
         synopsis: str = "",
-        year: str | int | None = None,
-        cert: str = "",
-        runtime_minutes: int | None = None,
-        language: str = "",
-        genres: list[str] | None = None,
-        director: str = "",
-        imdb: float | str | None = None,
-        anilist_pct: int | None = None,
-        brand: str = "AniMovie Weebs",
         logo_url: str | None = None,
         poster_url: str | None = None,
         bg_url: str | None = None,
-        entry_label: str = "",          # deprecated/back-compat; no longer used
+        meta_label: str = "",
+        language: str = "",
+        genres: list[str] | None = None,
+        studio: str = "",
+        tmdb_rating: float | str | None = None,
+        anilist_score: int | float | None = None,
+        country: str | None = None,
+        flag_url: str | None = None,
         output_dir: str | Path | None = None,
+        # Back-compat: older callers passed ``entry_label`` for the meta bar.
+        entry_label: str = "",
     ) -> Path | None:
-        """Fill the template's ``{{tokens}}`` with real data and render to WebP.
+        """Render a thumbnail image from the tokenized HTML template.
 
-        Returns the output path, or ``None`` on failure.
+        Every field maps to a ``{{TOKEN}}`` in ``thumbnail/index.html``. Missing
+        fields degrade gracefully (blank text, bundled fallback art) so the card
+        never renders with broken placeholders.
+
+        Returns:
+            Path to the generated WebP image, or None on failure.
         """
-        esc = html_module.escape
+        meta_label = meta_label or entry_label
         genres = genres or []
 
         work_dir = Path(output_dir or _OUTPUT_DIR)
@@ -158,66 +200,73 @@ class ThumbnailRenderService:
         images_dir = work_dir / f"assets_{safe_name}"
         images_dir.mkdir(parents=True, exist_ok=True)
 
-        # Download art; when a URL is missing/fails, fall back to the bundled
-        # template asset so a card never renders with a broken image (the html
-        # lives in images_dir, so defaults are copied in next to it).
+        # ── Images — download real art; fall back to bundled assets so the card
+        # is never a broken box. The HTML lives in images_dir, so a fallback must
+        # be copied next to it for the relative ref to resolve. ──
         import shutil
 
-        def _with_default(local: Path | None, asset: str) -> Path | None:
+        def _with_default(local: Path | None, asset: str) -> str:
             if local is not None:
-                return local
+                return local.name
             src = _TEMPLATE_DIR / asset
             if src.exists():
-                dest = images_dir / asset
-                shutil.copyfile(src, dest)
-                return dest
-            return None
+                shutil.copyfile(src, images_dir / asset)
+            return asset
 
         bg_local = await _download_image(bg_url, images_dir / "background.webp") if bg_url else None
         logo_local = await _download_image(logo_url, images_dir / "logo.png") if logo_url else None
         poster_local = await _download_image(poster_url, images_dir / "poster.webp") if poster_url else None
-        bg_local = _with_default(bg_local, "background.webp")
-        logo_local = _with_default(logo_local, "logo.png")
-        poster_local = _with_default(poster_local, "poster.webp")
+        flag_local = await _download_image(flag_url or _flag_url(country),
+                                           images_dir / "flag.png")
 
-        html = _load_template()
-        # Assets are saved under the html's own dir with the template's names, so
-        # the relative refs already resolve; this keeps them correct regardless.
-        html = html.replace("background.webp", bg_local.name if bg_local else "background.webp")
-        html = html.replace("logo.png", logo_local.name if logo_local else "logo.png")
-        html = html.replace("poster.webp", poster_local.name if poster_local else "poster.webp")
+        bg_path = _with_default(bg_local, "background.webp")
+        logo_path = _with_default(logo_local, "logo.png")
+        poster_path = _with_default(poster_local, "poster.webp")
+        flag_path = flag_local.name if flag_local else ""
 
-        # Build genre pills (verbatim styling) and the Anilist ring offset.
-        pills = "\n".join(f'<span class="{_PILL_CLS}">{esc(g)}</span>'
-                          for g in genres[:4]) or f'<span class="{_PILL_CLS}">Anime</span>'
-        pct = max(0, min(100, int(anilist_pct))) if anilist_pct is not None else 0
-        dash = round(_RING_CIRCUMFERENCE * (1 - pct / 100), 2)
-        imdb_txt = (f"{imdb:.1f}" if isinstance(imdb, (int, float))
-                    else esc(str(imdb))) if imdb not in (None, "") else "—"
+        # ── Score ring maths (AniList 0-100). Blank score → full-neutral ring. ──
+        try:
+            score = float(anilist_score) if anilist_score is not None else 0.0
+        except (TypeError, ValueError):
+            score = 0.0
+        score = max(0.0, min(100.0, score))
+        dashoffset = round(_RING_CIRCUMFERENCE * (1 - score / 100), 2)
+        score_text = f"{int(round(score))}%" if score else "—"
 
+        rating_text = ""
+        if tmdb_rating not in (None, "", 0):
+            rating_text = str(tmdb_rating)
+
+        genre_html = "\n".join(_genre_pill(g) for g in _fit_genres(genres))
+
+        # ── Token substitution ──
+        esc = html_module.escape
         tokens = {
-            "{{BRAND}}": esc(brand or "AniMovie Weebs"),
-            "{{TITLE}}": esc(title),
-            "{{TITLE_NATIVE}}": esc(native_title or title),
-            "{{TITLE_ROMAJI}}": f"({esc(romaji)})" if romaji else "",
-            "{{YEAR}}": esc(str(year)) if year else "—",
-            "{{CERT}}": esc(cert) if cert else "NR",
-            "{{RUNTIME}}": esc(_fmt_runtime(runtime_minutes)) or "—",
-            "{{LANGUAGE}}": esc(language) if language else "Japanese",
-            "{{SYNOPSIS}}": esc(_truncate(synopsis)) if synopsis else "",
-            "{{GENRE_PILLS}}": pills,
-            "{{DIRECTOR}}": esc(director) if director else "—",
-            "{{IMDB}}": imdb_txt,
-            "{{ANILIST_PCT}}": str(pct),
-            "{{ANILIST_DASH}}": str(dash),
+            "{{BRAND_NAME}}": esc("Anime Weebs"),
+            "{{TITLE}}": esc(_truncate(title, 40)),
+            "{{NATIVE_TITLE}}": esc(native_title or title),
+            "{{ROMAJI_TITLE}}": esc(romaji_title or title),
+            "{{META_LABEL}}": esc(meta_label),
+            "{{LANGUAGE}}": esc(language),
+            "{{SYNOPSIS}}": esc(_truncate(synopsis, _SYNOPSIS_MAX_CHARS)),
+            "{{STUDIO}}": esc(studio or "—"),
+            "{{TMDB_RATING}}": esc(rating_text),
+            "{{ANILIST_SCORE}}": score_text,
+            "{{ANILIST_DASHOFFSET}}": str(dashoffset),
+            "{{GENRE_PILLS}}": genre_html,
+            "{{BG_IMAGE}}": bg_path,
+            "{{LOGO_IMAGE}}": logo_path,
+            "{{POSTER_IMAGE}}": poster_path,
+            "{{FLAG_IMAGE}}": flag_path,
         }
-        for k, v in tokens.items():
-            html = html.replace(k, v)
-        html = html.replace("Suzume Movie Presentation Layout", esc(title))  # <title>
+        html = _load_template()
+        for token, value in tokens.items():
+            html = html.replace(token, value)
 
         output_html = images_dir / "thumbnail.html"
         output_html.write_text(html, encoding="utf-8")
 
+        # ── Render with Playwright at the template's native aspect ratio ──
         browser = await self._ensure_browser()
         context = page = None
         try:
@@ -226,39 +275,22 @@ class ThumbnailRenderService:
                 device_scale_factor=2,
             )
             page = await context.new_page()
-            page.set_default_timeout(30000)
             file_url = output_html.absolute().as_uri()
-            # 'domcontentloaded' returns fast; the explicit Tailwind + fonts waits
-            # below gate the screenshot. ('load'/'networkidle' can block for the
-            # full timeout waiting on slow CDN font/script requests.)
+            # domcontentloaded is instant; the real gate is Tailwind's browser
+            # JIT + webfonts finishing. networkidle can hang on the CDN, so we
+            # wait explicitly for both instead.
             await page.goto(file_url, wait_until="domcontentloaded")
-            # The Tailwind v4 browser build compiles classes AFTER load; wait until
-            # it has actually applied (body's `flex` class → computed display:flex)
-            # so we never screenshot a half-styled page, then wait for the webfonts
-            # (Cinzel/Inter) so the title isn't rendered in a fallback face.
-            try:
-                await page.wait_for_function(
-                    "() => getComputedStyle(document.body).display === 'flex'",
-                    timeout=15000,
-                )
-            except Exception:
-                pass
-            try:
-                await page.evaluate("async () => { await document.fonts.ready; }")
-            except Exception:
-                pass
-            await page.wait_for_timeout(1200)
-
+            await self._await_render_ready(page)
             output_path = work_dir / f"thumb_{safe_name}.webp"
-            # Playwright's screenshot only emits png|jpeg; grab lossless PNG and
-            # transcode to the .webp the rest of the pipeline expects.
+            # Playwright's screenshot only emits png|jpeg — grab a lossless PNG
+            # and transcode to the .webp the rest of the pipeline expects.
             png_bytes = await page.screenshot(type="png", full_page=False)
             from io import BytesIO
 
             from PIL import Image
 
             with Image.open(BytesIO(png_bytes)) as im:
-                im.save(output_path, format="WEBP", quality=92, method=6)
+                im.save(output_path, format="WEBP", quality=90, method=6)
             log.info("thumbnail.rendered", path=str(output_path), title=title)
             return output_path
         except Exception as exc:
@@ -269,6 +301,22 @@ class ThumbnailRenderService:
                 await page.close()
             if context:
                 await context.close()
+
+    async def _await_render_ready(self, page: Any) -> None:
+        """Wait until Tailwind's browser build has applied and webfonts loaded,
+        so the screenshot never catches a half-styled frame."""
+        try:
+            # Tailwind browser CDN injects styles asynchronously; wait for the
+            # body to actually pick up its background color as a proxy for "CSS
+            # applied", then for the font set to be ready.
+            await page.wait_for_function(
+                "() => document.fonts && document.fonts.status === 'loaded'",
+                timeout=8000,
+            )
+        except Exception:
+            # Fonts API can stall on some hosts — fall back to a fixed settle.
+            pass
+        await page.wait_for_timeout(1200)
 
     async def __aenter__(self):
         return self

@@ -102,18 +102,27 @@ def register(client: Client, container: Container) -> None:
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))
     async def _help(_: Client, message: Message) -> None:
-        await message.reply(
-            "<b>🧪 Senku — Distribution Bot</b>\n\n"
-            "<b>How it works:</b>\n"
-            "1. Downloader finishes → task assigned to you.\n"
-            "2. Create a Telegram channel (I guide you through it).\n"
-            "3. I auto-generate all content posts.\n"
-            "4. Posts are delivered in order: info → stickers → seasons → guide → footer.\n\n"
-            "<b>Commands:</b>\n"
-            "/tasks — Your tasks\n"
+        from nekofetch.ui.artwork import pick_artwork
+
+        caption = (
+            "<b>🧪 Senku Ishigami — Distribution</b>\n"
+            "<i>\"Ten billion percent — this channel will be perfect.\"</i>\n\n"
+            "<b>✦ What I do</b>\n"
+            "Once a download finishes, I turn it into a fully-built channel — "
+            "info card, season separators, watch guide, and footer, all generated "
+            "for you.\n\n"
+            "<b>⌘ Commands</b>\n"
+            "/tasks — Distribution tasks waiting on you\n"
             "/create — Channel setup wizard\n"
-            "/generate — Generate content for a title",
-            parse_mode=ParseMode.HTML,
+            "/generate — Build content for a title\n"
+            "/settings — Branding &amp; layout\n"
+            "/help — This guide\n\n"
+            "<i>Everything is button-driven — tap /start to begin.</i>"
+        )
+        await send_screen(
+            client, message.chat.id,
+            Screen(caption=caption, image=pick_artwork("senku"),
+                   keyboard=keyboard([("◀ Back to Menu", cb("senku", "home"))])),
         )
 
 

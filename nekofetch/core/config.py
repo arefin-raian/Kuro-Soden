@@ -74,6 +74,25 @@ class EnvSettings(BaseSettings):
     # Redis
     redis_url: str = Field("redis://redis:6379/0", alias="REDIS_URL")
 
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def _coerce_redis_tls(cls, v: Any) -> Any:
+        """Upgrade managed Redis providers that REQUIRE TLS to ``rediss://``.
+
+        Upstash (and most managed Redis) reject plain ``redis://`` with
+        "Connection closed by server" — the exact failure that surfaces on
+        Railway as "middleware Redis unreachable". These hosts only speak TLS,
+        so a plain-scheme URL can never connect. We auto-upgrade the scheme for
+        known TLS-only hosts so a copy-pasted ``redis://...upstash.io`` URL works
+        without the user having to remember the second ``s``.
+        """
+        if not isinstance(v, str) or not v:
+            return v
+        _TLS_HOSTS = ("upstash.io",)
+        if v.startswith("redis://") and any(h in v for h in _TLS_HOSTS):
+            return "rediss://" + v[len("redis://"):]
+        return v
+
     # Storage. Portable, project-relative defaults so a fresh clone runs on any OS
     # without root or manual path edits; override in .env (Docker uses /data/...).
     storage_path: Path = Field(Path("data/storage"), alias="STORAGE_PATH")

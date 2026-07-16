@@ -124,7 +124,7 @@ def register(client: Client, container: Container) -> None:
         )
 
     # ── Callback: source selection from inline buttons ─────────────────────
-    @client.on_callback_query(filters.regex(r"^levi\\|source\\|"))
+    @client.on_callback_query(filters.regex(r"^levi\|source\|"))
     async def _cb_source(_: Client, q: CallbackQuery) -> None:
         _, _, request_code, source_name = q.data.split("|", 3)
         await q.answer()

@@ -85,10 +85,10 @@ def build_lelouch(container: Container, token: str) -> Client:
                 "<b>🎭 Lelouch — Request Bot</b>\n\n"
                 "<i>\"The only ones who should kill are those prepared to die.\"</i>\n\n"
                 "I handle the intake pipeline:\n"
-                "â€¢ Search AniList / TMDB\n"
-                "â€¢ Franchise confirmation\n"
-                "â€¢ Dedup across main / dist / in-progress\n"
-                "â€¢ Auto-assign to downloader admins"
+                "• Search AniList / TMDB\n"
+                "• Franchise confirmation\n"
+                "• Dedup across main / dist / in-progress\n"
+                "• Auto-assign to downloader admins"
             )
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎬 Request Anime", callback_data=cb("req", "new")),
@@ -229,8 +229,10 @@ def build_lelouch(container: Container, token: str) -> Client:
             "/myrequests — Your requests\n"
             "/help — This help"
         )
+        from nekofetch.ui.components import cb, keyboard
         await reply_with_screen(
             client, message.chat.id, caption, bot_name="lelouch",
+            keyboard=keyboard([("⇐ Back to Home", cb("lelouch", "home"))]),
         )
 
     # ── /myrequests ───────────────────────────────────────────────────────────

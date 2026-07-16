@@ -129,7 +129,24 @@ class Container:
         self.collections = Collections(self.mongo)
         await self.collections.ensure_indexes()
 
-        self.redis = Redis.from_url(self.env.redis_url, decode_responses=True)
+        # Managed Redis (Render/Railway/Upstash) silently drops idle connections;
+        # without these, the first command after an idle gap raises
+        # ConnectionError("Connection closed by server") and crashes the handler
+        # mid-flow. health_check_interval pings idle conns; retry_on_* + keepalive
+        # make redis-py transparently reconnect instead of surfacing the drop.
+        from redis.backoff import ExponentialBackoff
+        from redis.retry import Retry
+
+        self.redis = Redis.from_url(
+            self.env.redis_url,
+            decode_responses=True,
+            health_check_interval=30,
+            socket_keepalive=True,
+            socket_connect_timeout=10,
+            socket_timeout=10,
+            retry_on_timeout=True,
+            retry=Retry(ExponentialBackoff(cap=10, base=0.5), retries=3),
+        )
         self.progress = ProgressStore(self.redis)
 
         # Apply persisted runtime overrides (admin settings panel) over config.yaml.

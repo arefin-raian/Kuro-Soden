@@ -133,21 +133,26 @@ def register(client: Client, container: Container) -> None:
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))
     async def _help(_: Client, message: Message) -> None:
-        await message.reply(
-            "<b>🔮 Gojo — Publisher Bot</b>\n\n"
-            "<b>How it works:</b>\n"
-            "1. Distribution finishes → task assigned to you.\n"
-            "2. I generate the main channel post + franchise thumbnail.\n"
-            "3. You review the caption and can edit it (Markdown/HTML).\n"
-            "4. You approve → I publish or schedule.\n"
-            "5. Index updates automatically.\n\n"
-            "<b>Recovery:</b> /recover fixes banned channels.\n\n"
-            "<b>Commands:</b>\n"
-            "/tasks — Your tasks\n"
-            "/publish — Review & publish\n"
-            "/recover — Channel recovery\n"
-            "/schedule — Schedule posts",
-            parse_mode=ParseMode.HTML,
+        caption = (
+            "<b>🔮 Gojo Satoru — Publisher</b>\n\n"
+            "<i>The final step — your work goes live here.</i>\n\n"
+            "<b>How it works</b>\n"
+            "1. Distribution finishes → a task lands with you\n"
+            "2. I build the main-channel post + franchise thumbnail\n"
+            "3. Review the caption — edit it in Markdown/HTML\n"
+            "4. Approve → I publish now or on a schedule\n"
+            "5. The A–Z index updates itself\n\n"
+            "<b>Commands</b>\n"
+            "/tasks — What's waiting to publish\n"
+            "/publish — Review &amp; publish a title\n"
+            "/schedule — Publish at a set time\n"
+            "/recover — Rebuild a banned channel + fix every button\n"
+            "/settings — Caption template, main channel, index"
+        )
+        await send_screen(
+            client, message.chat.id,
+            Screen(caption=caption, image=pick_artwork("gojo"),
+                   keyboard=keyboard([("◀ Back", cb("gojo", "home"))])),
         )
 
     # ── /settings ─────────────────────────────────────────────────────────────

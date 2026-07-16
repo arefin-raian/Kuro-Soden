@@ -190,6 +190,29 @@ def build_levi(container: Container, token: str) -> Client:
                 await q.answer()
                 return
 
+        # ¬¬ Help ¬¬
+        if action == "help":
+            caption, keyboard = tool_screen(
+                bot, title="❓ Levi — Help",
+                kicker="Everything the downloader can do.",
+                lines=[
+                    "I run the <b>download</b> stage of the pipeline.",
+                    "",
+                    "<b>📋 Tasks</b> — jobs assigned to you, with live stage icons.",
+                    "<b>🌐 Sources</b> — browse providers and pick one per title.",
+                    "<b>🎯 Assign</b> — bind a source to a task, then the worker runs it.",
+                    "<b>📝 Header</b> — render the main-channel header from metadata.",
+                    "",
+                    "Everything here is a button — no command memorising needed.",
+                ],
+                back="home",
+            )
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=keyboard), old_msg=q.message)
+            await q.answer()
+            return
+
         await q.answer(f"Action “{action}” not wired yet.", show_alert=True)
 
     # ── /start ────────────────────────────────────────────────────────────────
@@ -208,7 +231,7 @@ def build_levi(container: Container, token: str) -> Client:
             [("🎯 Assign", cb("levi", "assign")),
              ("📝 Header", cb("levi", "header"))],
             [("⚙️ Settings", cb("levi", "settings")),
-             ("❓ Help", cb("misc", "help"))],
+             ("❓ Help", cb("levi", "help"))],
         ]
         screen = Screen(
             caption=(
@@ -257,8 +280,10 @@ def build_levi(container: Container, token: str) -> Client:
             "<b>The download is automatic after you assign a source — "
             "you don't need to do anything else!</b>"
         )
+        from nekofetch.ui.components import cb, keyboard
         await reply_with_screen(
             client, message.chat.id, caption, bot_name="levi",
+            keyboard=keyboard([("⬅ Back", cb("levi", "home"))]),
         )
 
     return client

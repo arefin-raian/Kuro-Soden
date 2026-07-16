@@ -7,6 +7,7 @@ card. Auth uses the v4 read access token (Bearer); falls back to the v3 api_key.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass, field
 
@@ -31,13 +32,14 @@ class TmdbResult:
     overview: str = ""
     seasons: int | None = None
     episodes: int | None = None
-    backdrop_url: str | None = None     # English 16:9 backdrop (original size)
+    backdrop_url: str | None = None     # textless 16:9 backdrop (original size)
     poster_url: str | None = None
-    native_title: str = ""              # original_name/title (e.g. Japanese)
-    logo_url: str | None = None         # transparent title-art PNG (enrich=True)
-    runtime: int | None = None          # minutes (episode run time for TV)
-    director: str = ""                  # enrich=True
-    certification: str = ""             # e.g. "PG-13" / "TV-14" (enrich=True)
+    logo_url: str | None = None         # transparent title-art logo (PNG)
+    runtime: str | None = None          # human label, e.g. "24m" / "2h 1m"
+    certification: str | None = None    # e.g. "TV-MA", "PG-13"
+    studio: str | None = None           # primary production company
+    origin_country: str | None = None   # ISO-3166 alpha-2, e.g. "JP"
+    native_title: str | None = None     # original-language title
 
     def backdrop(self, size: str = "w1280") -> str | None:
         if not self._backdrop_path:
@@ -74,16 +76,32 @@ class TmdbClient:
         return p
 
     async def _get(self, path: str, **params) -> dict:
-        r = await self.http.get(f"{TMDB_API}{path}", params=self._params(**params))
-        r.raise_for_status()
-        return r.json()
+        # TMDB (via httpx on Windows) occasionally flakes on the FIRST request of
+        # a fresh connection with a spurious 401/5xx, then succeeds on retry.
+        # Retry transient statuses a couple of times before giving up so a cold
+        # connection can't null out an entire enrichment.
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                r = await self.http.get(f"{TMDB_API}{path}",
+                                        params=self._params(**params))
+                if r.status_code in (401, 429, 500, 502, 503, 504) and attempt < 2:
+                    await asyncio.sleep(0.4 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                return r.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                last_exc = exc
+                if attempt < 2:
+                    await asyncio.sleep(0.4 * (attempt + 1))
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+        return {}
 
-    async def search(self, title: str, *, enrich: bool = False) -> TmdbResult | None:
-        """Best match for ``title`` — prefers TV, then movie, by popularity.
-
-        ``enrich=True`` also pulls the title logo, runtime, director and content
-        certification (2 extra API calls) — used by the thumbnail composer.
-        """
+    async def search(self, title: str) -> TmdbResult | None:
+        """Best match for ``title`` — prefers TV, then movie, by popularity."""
         candidates: list[dict] = []
         try:
             for media in ("tv", "movie"):
@@ -101,30 +119,25 @@ class TmdbClient:
         candidates.sort(key=lambda c: (c["_media"] == "tv", c.get("popularity", 0)),
                         reverse=True)
         top = candidates[0]
-        return await self.details(top["id"], top["_media"], enrich=enrich)
+        return await self.details(top["id"], top["_media"])
 
-    async def details(self, tmdb_id: int, media_type: str,
-                      *, enrich: bool = False) -> TmdbResult | None:
+    async def details(self, tmdb_id: int, media_type: str) -> TmdbResult | None:
         is_tv = media_type == "tv"
+        # One call pulls the core doc plus credits + certification via
+        # append_to_response (cheaper than 3 round-trips).
+        extra = "credits,content_ratings" if is_tv else "credits,release_dates"
         try:
-            # One call pulls base fields + (when enriching) credits + certification.
-            append = "credits,release_dates,content_ratings" if enrich else ""
             d = await self._get(f"/{media_type}/{tmdb_id}", language="en-US",
-                                **({"append_to_response": append} if append else {}))
-            backdrop_path = await self._english_backdrop(tmdb_id, media_type) \
+                                 append_to_response=extra)
+            backdrop_path = await self._textless_backdrop(tmdb_id, media_type) \
                 or d.get("backdrop_path")
+            logo_path = await self._logo(tmdb_id, media_type)
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("tmdb.details.failed", id=tmdb_id, error=str(exc))
             return None
 
         title = d.get("name") if is_tv else d.get("title")
         date = d.get("first_air_date") if is_tv else d.get("release_date")
-        runtime = None
-        if is_tv:
-            ert = d.get("episode_run_time") or []
-            runtime = int(ert[0]) if ert else None
-        elif d.get("runtime"):
-            runtime = int(d["runtime"])
         res = TmdbResult(
             id=tmdb_id, media_type=media_type, title=title or "",
             year=(date or "")[:4] or None,
@@ -134,48 +147,59 @@ class TmdbClient:
             seasons=d.get("number_of_seasons") if is_tv else None,
             episodes=d.get("number_of_episodes") if is_tv else None,
             poster_url=f"{IMG_BASE}/w500{d['poster_path']}" if d.get("poster_path") else None,
-            native_title=(d.get("original_name") if is_tv else d.get("original_title")) or "",
-            runtime=runtime,
+            logo_url=f"{IMG_BASE}/w500{logo_path}" if logo_path else None,
+            runtime=self._runtime_label(d, is_tv),
+            certification=self._certification(d, is_tv),
+            studio=self._studio(d),
+            origin_country=self._origin_country(d),
+            native_title=(d.get("original_name") if is_tv else d.get("original_title")) or None,
         )
         res._backdrop_path = backdrop_path
         res.backdrop_url = res.backdrop("original")
-        if enrich:
-            res.logo_url = await self._english_logo(tmdb_id, media_type)
-            res.director = self._extract_director(d, is_tv)
-            res.certification = self._extract_certification(d, is_tv)
         return res
 
     @staticmethod
-    def _extract_director(d: dict, is_tv: bool) -> str:
-        # TV: prefer the creator; fall back to a crew Director. Movie: crew Director.
+    def _runtime_label(d: dict, is_tv: bool) -> str | None:
+        mins = None
         if is_tv:
-            creators = d.get("created_by") or []
-            if creators:
-                return creators[0].get("name", "") or ""
-        crew = (d.get("credits") or {}).get("crew") or []
-        directors = [c.get("name", "") for c in crew
-                     if c.get("job") in ("Director", "Series Director")]
-        return directors[0] if directors else ""
+            arr = d.get("episode_run_time") or []
+            mins = arr[0] if arr else None
+        else:
+            mins = d.get("runtime")
+        if not mins:
+            return None
+        h, m = divmod(int(mins), 60)
+        return f"{h}h {m}m" if h else f"{m}m"
 
     @staticmethod
-    def _extract_certification(d: dict, is_tv: bool) -> str:
-        try:
-            if is_tv:
-                for r in (d.get("content_ratings") or {}).get("results", []):
-                    if r.get("iso_3166_1") == "US" and r.get("rating"):
-                        return r["rating"]
-            else:
-                for r in (d.get("release_dates") or {}).get("results", []):
-                    if r.get("iso_3166_1") == "US":
-                        for rd in r.get("release_dates", []):
-                            if rd.get("certification"):
-                                return rd["certification"]
-        except (AttributeError, TypeError, KeyError):
-            pass
-        return ""
+    def _certification(d: dict, is_tv: bool) -> str | None:
+        if is_tv:
+            for r in (d.get("content_ratings", {}) or {}).get("results", []):
+                if r.get("iso_3166_1") == "US" and r.get("rating"):
+                    return r["rating"]
+        else:
+            for r in (d.get("release_dates", {}) or {}).get("results", []):
+                if r.get("iso_3166_1") == "US":
+                    for rd in r.get("release_dates", []):
+                        if rd.get("certification"):
+                            return rd["certification"]
+        return None
 
-    async def _english_logo(self, tmdb_id: int, media_type: str) -> str | None:
-        """Best English (then neutral) transparent title-art logo, PNG preferred."""
+    @staticmethod
+    def _studio(d: dict) -> str | None:
+        companies = d.get("production_companies") or []
+        return companies[0]["name"] if companies and companies[0].get("name") else None
+
+    @staticmethod
+    def _origin_country(d: dict) -> str | None:
+        countries = d.get("origin_country") or []
+        if countries:
+            return countries[0]
+        oc = d.get("production_countries") or []
+        return oc[0]["iso_3166_1"] if oc and oc[0].get("iso_3166_1") else None
+
+    async def _logo(self, tmdb_id: int, media_type: str) -> str | None:
+        """Best English (or neutral) transparent title-art logo."""
         try:
             imgs = await self._get(f"/{media_type}/{tmdb_id}/images",
                                    include_image_language="en,null")
@@ -186,31 +210,25 @@ class TmdbClient:
             return None
 
         def quality(b: dict) -> tuple:
-            # Prefer PNG (transparent) over SVG, then higher rating/votes/width.
-            return (b.get("file_path", "").lower().endswith(".png"),
-                    b.get("vote_average") or 0, b.get("vote_count") or 0,
-                    b.get("width") or 0)
+            # Prefer PNG (transparent) over SVG, then rating/votes.
+            return (b.get("file_path", "").endswith(".png"),
+                    b.get("vote_average") or 0, b.get("vote_count") or 0)
 
         english = sorted((b for b in logos if b.get("iso_639_1") == "en"),
                          key=quality, reverse=True)
-        pool = english or sorted((b for b in logos if not b.get("iso_639_1")),
-                                 key=quality, reverse=True) or sorted(logos, key=quality, reverse=True)
-        path = pool[0].get("file_path") if pool else None
-        return f"{IMG_BASE}/w500{path}" if path else None
+        if english:
+            return english[0].get("file_path")
+        neutral = sorted((b for b in logos if not b.get("iso_639_1")),
+                         key=quality, reverse=True)
+        if neutral:
+            return neutral[0].get("file_path")
+        return sorted(logos, key=quality, reverse=True)[0].get("file_path")
 
-    async def _english_backdrop(self, tmdb_id: int, media_type: str) -> str | None:
-        """Pick the best **English-tagged** backdrop, the way TMDB's
-        ``/images/backdrops?image_language=en`` page shows them.
+    async def _textless_backdrop(self, tmdb_id: int, media_type: str) -> str | None:
+        """Pick the best **textless** backdrop — one with NO title/language art
+        baked in (``iso_639_1 == null``), since the card already shows the logo.
 
-        These are the franchise backdrops that carry English title art / branding,
-        which we want on the confirmation card. Strict preference order:
-
-          1. images explicitly tagged ``iso_639_1 == "en"`` (highest quality first),
-          2. language-neutral images (``null``) as a graceful fallback,
-          3. anything else only as a last resort.
-
-        Within each tier we rank by rating, then vote count, then resolution, so a
-        zero-vote English backdrop still beats a popular neutral one.
+        Falls back to English-tagged, then anything, ranked by rating/votes/res.
         """
         try:
             imgs = await self._get(f"/{media_type}/{tmdb_id}/images",
@@ -226,14 +244,15 @@ class TmdbClient:
                     b.get("vote_count") or 0,
                     b.get("width") or 0)
 
-        english = sorted((b for b in backdrops if b.get("iso_639_1") == "en"),
-                         key=quality, reverse=True)
-        if english:
-            return english[0].get("file_path")
+        # Textless first (no language tag = no title text baked in).
         neutral = sorted((b for b in backdrops if not b.get("iso_639_1")),
                          key=quality, reverse=True)
         if neutral:
             return neutral[0].get("file_path")
+        english = sorted((b for b in backdrops if b.get("iso_639_1") == "en"),
+                         key=quality, reverse=True)
+        if english:
+            return english[0].get("file_path")
         return sorted(backdrops, key=quality, reverse=True)[0].get("file_path")
 
     async def _ranked_posters(self, tmdb_id: int, media_type: str) -> list[str]:
