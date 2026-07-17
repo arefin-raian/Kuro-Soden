@@ -47,11 +47,11 @@
 ╔═══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                               ║
 ║   🎭 Lelouch           ⚔️ Levi            🧪 Senku           🔮 Gojo        ║
-║   ──────────           ────────           ──────────         ────────         ║
-║   Request Intake  →    Download      →    Distribution   →   Publishing       ║
-║   Dedup Check           Source Select      Channel Create      Main Channel   ║
-║   Admin Assign          Process Files      Content Generate     Index Update  ║
-║   Management            Thumbnails         Stickers/Footer      Recovery      ║
+║   ────────────         ─────────          ────────────        ──────────      ║
+║   Request Intake  →    Download      →    Distribution    →   Publishing      ║
+║   Dedup Check          Source Select      Channel Create      Main Channel    ║
+║   Admin Assign         Process Files      Content Generate    Index Update    ║
+║   Management           Thumbnails         Stickers/Footer     Recovery        ║
 ║                                                                               ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
