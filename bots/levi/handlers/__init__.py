@@ -26,6 +26,6 @@ def register_all(client: Client, container: Container) -> None:
     install_auth_middleware(client, container)
 
     # ── Levi task handlers (source selection, download queuing) ────────────
-    from kage.bots.levi.handlers.tasks import register as register_tasks
+    from kurosoden.bots.levi.handlers.tasks import register as register_tasks
 
     register_tasks(client, container)

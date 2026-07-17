@@ -18,7 +18,7 @@ from pyrogram.types import BotCommand, Message
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
-from kage.shared.ui_helpers import reply_with_screen
+from kurosoden.shared.ui_helpers import reply_with_screen
 from nekofetch.ui.artwork import pick_artwork
 
 SENKU_COMMANDS = [
@@ -43,7 +43,7 @@ def build_senku(container: Container, token: str) -> Client:
     All task/generate/create handlers are registered via ``register_all``.
     """
     client = Client(
-        name="kage-senku",
+        name="kurosoden-senku",
         api_id=container.env.telegram_api_id,
         api_hash=container.env.telegram_api_hash,
         bot_token=token,
@@ -51,7 +51,7 @@ def build_senku(container: Container, token: str) -> Client:
     )
     client.container = container
 
-    from kage.bots.senku.handlers import register_all
+    from kurosoden.bots.senku.handlers import register_all
     register_all(client, container)
 
     # ── Catch-all menu callback ─────────────────────────────────────────────
@@ -59,8 +59,8 @@ def build_senku(container: Container, token: str) -> Client:
     # maps every action to a real screen — no more "Type /X in chat" toasts.
     from pyrogram.types import (CallbackQuery, InlineKeyboardButton,
                                 InlineKeyboardMarkup)
-    from kage.shared.menu_router import settings_hub, settings_onboarding, tool_screen
-    from kage.shared.settings_content import ALL_BY_BOT
+    from kurosoden.shared.menu_router import settings_hub, settings_onboarding, tool_screen
+    from kurosoden.shared.settings_content import ALL_BY_BOT
     from nekofetch.ui.components import cb
     from nekofetch.ui.screens import Screen, send_screen
 
@@ -207,7 +207,7 @@ def build_senku(container: Container, token: str) -> Client:
         from nekofetch.ui.screens import Screen
         from nekofetch.ui.components import cb, keyboard
         from nekofetch.ui.artwork import pick_artwork
-        from kage.shared.ui_helpers import send_rich_welcome
+        from kurosoden.shared.ui_helpers import send_rich_welcome
 
         rows = [
             [("📋 Tasks", cb("senku", "tasks")),

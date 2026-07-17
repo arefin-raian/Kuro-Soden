@@ -429,9 +429,11 @@ class AnilistClient:
 
         AniList only returns a node's immediate relations, so the breakdown on a
         single entry misses later seasons/cours/movies. We BFS outward, following
-        only same-franchise edges (SEQUEL / PREQUEL / SIDE_STORY / PARENT /
-        SPIN_OFF / SUMMARY — never ALTERNATIVE, which is a different adaptation),
-        expanding a whole level per request via ``id_in`` batching so it stays fast.
+        only canonical-continuity edges (SEQUEL / PREQUEL / SIDE_STORY / PARENT —
+        the same ``_CONTENT_WALK_RELS`` set the preview/distribution walk uses).
+        SUMMARY (recap/compilation movies), SPIN_OFF, and ALTERNATIVE (a different
+        adaptation) are deliberately excluded so the counts match the "perfect"
+        franchise map, expanding a level per request via ``id_in`` batching.
         """
         visited: set[int] = {root_id}
         frontier: list[int] = [root_id]
@@ -460,7 +462,13 @@ class AnilistClient:
                 nodes[mid] = (m.get("format"), _aired_episodes(m))
                 for edge in m.get("relations", {}).get("edges", []):
                     rtype = edge.get("relationType")
-                    if rtype not in _TRAVERSE_RELATIONS:
+                    # Canonical continuity ONLY (same set the preview/distribution
+                    # walk uses): SEQUEL / PREQUEL / SIDE_STORY / PARENT. This
+                    # deliberately EXCLUDES SUMMARY (recap/compilation movies) and
+                    # SPIN_OFF, so the confirm-card counts match the "perfect"
+                    # franchise map the preview bot produces — no phantom recap
+                    # movies inflating the total.
+                    if rtype not in _CONTENT_WALK_RELS:
                         continue
                     node = edge.get("node") or {}
                     nid = node.get("id")

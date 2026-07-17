@@ -52,7 +52,7 @@ async def engine():
     else:
         eng = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     import nekofetch.infrastructure.database.postgres.models  # noqa: F401
-    import kage.shared.models  # noqa: F401
+    import kurosoden.shared.models  # noqa: F401
     from nekofetch.infrastructure.database.postgres.base import Base
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -69,21 +69,28 @@ async def sessionmaker(engine):
 async def session(sessionmaker):
     """Per-test session; helpers ``commit()`` so cross-session services
     (DedupService, AdminAssignmentEngine) can see fixture data.
-    One-shot CASCADE TRUNCATE for PostgreSQL after the test to guarantee
-    isolation — preceded by a rollback to release any held row locks."""
+
+    Because the helpers commit, rows survive a plain rollback on the
+    session-scoped engine — so we wipe every table after each test to
+    guarantee isolation. PostgreSQL uses one CASCADE TRUNCATE; SQLite has no
+    TRUNCATE, so we DELETE FROM each table in reverse dependency order (FKs
+    resolve child→parent). Preceded by a rollback to release any held locks."""
     async with sessionmaker() as s:
         yield s
         await s.rollback()
-    if not _DATABASE_URL:
-        return
     from nekofetch.infrastructure.database.postgres.base import Base
-    tables = ', '.join(t.name for t in reversed(Base.metadata.sorted_tables))
+    ordered = list(reversed(Base.metadata.sorted_tables))
     async with sessionmaker() as cleanup:
-        await cleanup.execute(text(f"TRUNCATE TABLE {tables} CASCADE"))
+        if _DATABASE_URL:
+            names = ', '.join(t.name for t in ordered)
+            await cleanup.execute(text(f"TRUNCATE TABLE {names} CASCADE"))
+        else:
+            for t in ordered:
+                await cleanup.execute(text(f"DELETE FROM {t.name}"))
         await cleanup.commit()
 
 
-from kage.tests.helpers import (  # noqa: E402
+from kurosoden.tests.helpers import (  # noqa: E402
     _create_user, _create_request, _create_channel_post,
     _create_distribution_bot, _create_admin_availability, _create_admin_assignment,
 )

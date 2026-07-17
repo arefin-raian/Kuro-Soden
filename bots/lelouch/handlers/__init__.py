@@ -29,6 +29,6 @@ def register_all(client: Client, container: Container) -> None:
     register_batch(client, container)
 
     # ── Lelouch request handlers ─────────────────────────────────────────
-    from kage.bots.lelouch.handlers.requests import register as register_requests
+    from kurosoden.bots.lelouch.handlers.requests import register as register_requests
 
     register_requests(client, container)

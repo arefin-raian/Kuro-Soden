@@ -1,4 +1,4 @@
-"""Tests for kage/shared/dedup.py — Duplicate detection service.
+"""Tests for kurosoden/shared/dedup.py — Duplicate detection service.
 
 Covers:
   • DedupResult dataclass defaults, field assignments, edge cases
@@ -20,42 +20,42 @@ class TestDedupResultDefaults:
     """Default values should be sensible."""
 
     def test_default_exists_is_false(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult()
         assert r.exists is False
 
     def test_default_source_is_empty(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult()
         assert r.source == ""
 
     def test_default_title_is_empty(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult()
         assert r.title == ""
 
     def test_default_detail_is_empty(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult()
         assert r.detail == ""
 
     def test_default_bot_username_is_none(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult()
         assert r.bot_username is None
 
     def test_default_main_channel_link_is_none(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult()
         assert r.main_channel_link is None
 
     def test_default_request_code_is_none(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult()
         assert r.request_code is None
 
     def test_default_current_stage_is_none(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult()
         assert r.current_stage is None
 
@@ -64,7 +64,7 @@ class TestDedupResultFields:
     """All fields should be assignable."""
 
     def test_main_channel_result(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult(
             exists=True,
             source="main_channel",
@@ -78,7 +78,7 @@ class TestDedupResultFields:
         assert r.main_channel_link == "https://t.me/c/123/55"
 
     def test_distribution_result(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult(
             exists=True,
             source="distribution",
@@ -90,7 +90,7 @@ class TestDedupResultFields:
         assert r.source == "distribution"
 
     def test_in_progress_result(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult(
             exists=True,
             source="in_progress",
@@ -102,7 +102,7 @@ class TestDedupResultFields:
         assert r.current_stage == "downloading"
 
     def test_no_match_result(self):
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult(exists=False)
         assert r.exists is False
         assert r.source == ""
@@ -111,7 +111,7 @@ class TestDedupResultFields:
 
     def test_unicode_title(self):
         """Japanese/unicode titles should work fine."""
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult(
             exists=True,
             source="main_channel",
@@ -122,13 +122,13 @@ class TestDedupResultFields:
 
     def test_emoji_title(self):
         """Titles with emoji should work."""
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         r = DedupResult(title="🎬 Movie Test ✨")
         assert r.title == "🎬 Movie Test ✨"
 
     def test_very_long_title(self):
         """Extremely long titles shouldn't crash."""
-        from kage.shared.dedup import DedupResult
+        from kurosoden.shared.dedup import DedupResult
         long_title = "A" * 500
         r = DedupResult(title=long_title)
         assert len(r.title) == 500
@@ -143,12 +143,12 @@ class TestBuildInProgressResult:
 
     @pytest.fixture
     def svc(self, sessionmaker):
-        from kage.shared.dedup import DedupService
+        from kurosoden.shared.dedup import DedupService
         return DedupService(sessionmaker)
 
     async def _make_req(self, session, **kw):
         """Create a Request row for _build_in_progress_result testing."""
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         return await _create_request(session, **kw)
 
     @pytest.mark.asyncio
@@ -221,13 +221,13 @@ class TestDedupServiceInit:
     """Initialization tests."""
 
     def test_creates_with_sessionmaker(self, sessionmaker):
-        from kage.shared.dedup import DedupService
+        from kurosoden.shared.dedup import DedupService
         svc = DedupService(sessionmaker)
         assert svc is not None
         assert svc._sm is sessionmaker
 
     def test_in_progress_statuses_set(self, sessionmaker):
-        from kage.shared.dedup import DedupService
+        from kurosoden.shared.dedup import DedupService
         from nekofetch.domain.enums import RequestStatus
         svc = DedupService(sessionmaker)
         assert RequestStatus.PENDING in svc._IN_PROGRESS_STATUSES
@@ -236,7 +236,7 @@ class TestDedupServiceInit:
         assert RequestStatus.PROCESSING in svc._IN_PROGRESS_STATUSES
 
     def test_published_not_in_progress(self, sessionmaker):
-        from kage.shared.dedup import DedupService
+        from kurosoden.shared.dedup import DedupService
         from nekofetch.domain.enums import RequestStatus
         svc = DedupService(sessionmaker)
         assert RequestStatus.PUBLISHED not in svc._IN_PROGRESS_STATUSES
@@ -249,7 +249,7 @@ class TestDedupServiceCheck:
 
     @pytest.fixture
     def svc(self, sessionmaker):
-        from kage.shared.dedup import DedupService
+        from kurosoden.shared.dedup import DedupService
         return DedupService(sessionmaker)
 
     # ── Main channel ──────────────────────────────────────────────────────────
@@ -274,7 +274,7 @@ class TestDedupServiceCheck:
     @pytest.mark.asyncio
     async def test_main_channel_without_message_id(self, svc, session):
         """ChannelPost without main_message_id shouldn't match."""
-        from kage.tests.helpers import _create_channel_post
+        from kurosoden.tests.helpers import _create_channel_post
         await _create_channel_post(session, anime_doc_id="anilist:99999", main_message_id=None)
         r = await svc.check("Unpublished Anime", anime_doc_id="anilist:99999", _session=session)
         assert r.source != "main_channel"
@@ -290,7 +290,7 @@ class TestDedupServiceCheck:
 
     @pytest.mark.asyncio
     async def test_ignores_disabled_bot(self, svc, session):
-        from kage.tests.helpers import _create_distribution_bot
+        from kurosoden.tests.helpers import _create_distribution_bot
         await _create_distribution_bot(session, anime_doc_id="anilist:disabled", enabled=False)
         r = await svc.check("Disabled Anime", anime_doc_id="anilist:disabled", _session=session)
         assert r.source != "distribution"
@@ -298,7 +298,7 @@ class TestDedupServiceCheck:
     @pytest.mark.asyncio
     async def test_distribution_respects_priority(self, svc, session, channel_post):
         """Main channel should take priority over distribution."""
-        from kage.tests.helpers import _create_distribution_bot
+        from kurosoden.tests.helpers import _create_distribution_bot
         await _create_distribution_bot(session, anime_doc_id="anilist:12345")
         r = await svc.check("Test Anime", anime_doc_id="anilist:12345", _session=session)
         # Main channel is checked first and should win.
@@ -314,14 +314,14 @@ class TestDedupServiceCheck:
 
     @pytest.mark.asyncio
     async def test_finds_in_progress_by_title_fuzzy(self, svc, session):
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         await _create_request(session, anime_doc_id="anilist:99999", anime_title="Attack on Titan Final Season", status="downloading")
         r = await svc.check("Attack on Titan", anime_doc_id=None, _session=session)
         assert r.source == "in_progress"
 
     @pytest.mark.asyncio
     async def test_fuzzy_match_case_insensitive(self, svc, session):
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         await _create_request(session, anime_doc_id="anilist:case1", anime_title="Demon Slayer", status="processing")
         r = await svc.check("demon slayer", anime_doc_id=None, _session=session)
         assert r.source == "in_progress"
@@ -334,14 +334,14 @@ class TestDedupServiceCheck:
 
     @pytest.mark.asyncio
     async def test_no_match_for_failed_request(self, svc, session):
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         await _create_request(session, code="REQ-FAIL", status="failed", anime_doc_id="anilist:fail1")
         r = await svc.check("Failed Anime", anime_doc_id="anilist:fail1", _session=session)
         assert r.exists is False
 
     @pytest.mark.asyncio
     async def test_no_match_for_rejected_request(self, svc, session):
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         await _create_request(session, code="REQ-REJ", status="rejected", anime_doc_id="anilist:rej1")
         r = await svc.check("Rejected Anime", anime_doc_id="anilist:rej1", _session=session)
         assert r.exists is False
@@ -371,7 +371,7 @@ class TestDedupServiceCheck:
     @pytest.mark.asyncio
     async def test_unicode_title_matching(self, svc, session):
         """Japanese titles should work for fuzzy matching."""
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         await _create_request(
             session, code="REQ-JP", anime_title="進撃の巨人 The Final Season",
             anime_doc_id="anilist:jp1", status="downloading",

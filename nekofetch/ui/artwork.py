@@ -14,7 +14,7 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
-# kage flattens the src/ layer — parents[2] reaches the project root
+# kurosoden flattens the src/ layer — parents[2] reaches the project root
 ART_DIR = Path(__file__).resolve().parents[2] / "images"
 
 

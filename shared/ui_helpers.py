@@ -68,29 +68,26 @@ async def send_rich_welcome(
         except Exception:
             sticker = None
 
-    # ── 2. Loading placeholder ─────────────────────────────────────────
-    msg = await message.reply(
-        "🎬 <b>loading…</b>", parse_mode=ParseMode.HTML,
-    )
+    # ── 2. Loading placeholder — pure symbol animation, no words ──────
+    # A quick "typing rhythm" that reads as anticipation and clears the
+    # instant verification is done. No "connecting/loading/verifying" text —
+    # it never took that long anyway, so the words just looked slow.
+    msg = await message.reply("·", parse_mode=ParseMode.HTML)
 
-    # ── 3. Animated loading animation from NekoFetch ───────────────────
+    # ── 3. Symbol beat animation (fast; ~0.9s total) ───────────────────
+    _FRAMES = ("· ·", "· · ·", "!", "! !", "?", "✦")
     try:
-        from nekofetch.localization.messages import M, t
-        from nekofetch.ui.progress import staged_loading
-
-        await staged_loading(
-            msg,
-            [t(M.LOADING_STAGE_CONNECTING), t(M.LOADING_STAGE_LOADING),
-             t(M.LOADING_STAGE_VERIFYING)],
-            delay_per_stage=ui_cfg.loading_dot_delay * 3,
-        )
+        for frame in _FRAMES:
+            await asyncio.sleep(0.15)
+            try:
+                await msg.edit_text(frame)
+            except Exception:
+                # Ignore "message not modified" / transient edit hiccups.
+                pass
     except Exception:
-        # If staged_loading errors (animation step failed), just sleep
-        # briefly so the sticker still has a moment on screen.
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
 
     # ── 4. Cleanup intermediate messages (sequential so no race) ──────
-    await asyncio.sleep(ui_cfg.sticker_delete_delay)
     if sticker is not None:
         try:
             await sticker.delete()

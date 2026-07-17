@@ -105,11 +105,20 @@ class DedupService:
         ).scalar_one_or_none()
 
         if post and post.main_message_id:
+            # Build a public t.me link to the exact post when we can. Private
+            # channels use the ``t.me/c/<internal>/<msg>`` form, where the
+            # internal id is the channel id with the ``-100`` prefix stripped.
+            link = None
+            if post.main_channel_id:
+                cid = str(post.main_channel_id)
+                internal = cid[4:] if cid.startswith("-100") else cid.lstrip("-")
+                link = f"https://t.me/c/{internal}/{post.main_message_id}"
             return DedupResult(
                 exists=True,
                 source="main_channel",
                 title=title,
                 detail=f"「{title}」is already available in the main channel!",
+                main_channel_link=link,
             )
         return None
 

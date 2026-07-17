@@ -28,7 +28,7 @@ PARSE_MODE = ParseMode.HTML
 
 # Absolute path to the catalog, computed from this file's location so it resolves
 # correctly no matter what working directory the bot is launched from.
-# kage flattens the src/ layer — parents[2] reaches the project root
+# kurosoden flattens the src/ layer — parents[2] reaches the project root
 LANG_DIR = Path(__file__).resolve().parents[2] / "resources" / "language"
 _localizer = Localizer(LANG_DIR, default="en")
 

@@ -18,7 +18,7 @@ from pyrogram.types import BotCommand, Message
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
-from kage.shared.ui_helpers import reply_with_screen
+from kurosoden.shared.ui_helpers import reply_with_screen
 from nekofetch.ui.artwork import pick_artwork
 
 LELOUCH_COMMANDS = [
@@ -45,7 +45,7 @@ def build_lelouch(container: Container, token: str) -> Client:
     admin assignment layered on top.
     """
     client = Client(
-        name="kage-lelouch",
+        name="kurosoden-lelouch",
         api_id=container.env.telegram_api_id,
         api_hash=container.env.telegram_api_hash,
         bot_token=token,
@@ -54,7 +54,7 @@ def build_lelouch(container: Container, token: str) -> Client:
     client.container = container
 
     # ── Register all handlers (middleware + request flow) ─────────────────────
-    from kage.bots.lelouch.handlers import register_all
+    from kurosoden.bots.lelouch.handlers import register_all
 
     register_all(client, container)
 
@@ -63,8 +63,8 @@ def build_lelouch(container: Container, token: str) -> Client:
     # maps every action to a real screen — no more "Type /X in chat" toasts.
     from pyrogram.types import (CallbackQuery, InlineKeyboardButton,
                                 InlineKeyboardMarkup)
-    from kage.shared.menu_router import settings_hub, settings_onboarding, tool_screen
-    from kage.shared.settings_content import ALL_BY_BOT
+    from kurosoden.shared.menu_router import settings_hub, settings_onboarding, tool_screen
+    from kurosoden.shared.settings_content import ALL_BY_BOT
     from nekofetch.ui.components import cb
     from nekofetch.ui.screens import Screen, send_screen
     from nekofetch.domain.enums import Role
@@ -109,12 +109,20 @@ def build_lelouch(container: Container, token: str) -> Client:
             if role not in (Role.STAFF, Role.ADMIN):
                 await q.answer("🔒 Staff only.", show_alert=True)
                 return
+            from kurosoden.shared.request_gate import requests_open
+            is_open = await requests_open(container)
+            state_line = ("🟢 <b>Accepting requests</b>" if is_open
+                          else "🔴 <b>Requests paused</b>")
             caption = (
                 "<b>🎭 Lelouch — Admin Panel</b>\n\n"
+                f"{state_line}\n\n"
                 "<i>Manage requests, admins, and availability.</i>\n\n"
                 "<blockquote>Staff-only tools. Non-staff tap = access denied toast.</blockquote>"
             )
+            toggle_label = ("🔴 Pause Requests" if is_open
+                            else "🟢 Resume Requests")
             keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(toggle_label, callback_data=cb(bot, "reqtoggle"))],
                 [InlineKeyboardButton("📋 Pending Requests", callback_data=cb(bot, "pending")),
                  InlineKeyboardButton("👥 Manage Admins", callback_data=cb(bot, "manage"))],
                 [InlineKeyboardButton("📊 Availability", callback_data=cb(bot, "avail")),
@@ -125,6 +133,44 @@ def build_lelouch(container: Container, token: str) -> Client:
                               Screen(caption=caption, image=pick_artwork(bot),
                                      keyboard=keyboard), old_msg=q.message)
             await q.answer()
+            return
+
+        # ¬¬ Toggle the global "accepting requests" gate ¬¬
+        if action == "reqtoggle":
+            user = getattr(q, "nf_user", None)
+            role = Role(user.role) if user else Role.USER
+            if role not in (Role.STAFF, Role.ADMIN):
+                await q.answer("🔒 Staff only.", show_alert=True)
+                return
+            from kurosoden.shared.request_gate import requests_open, set_requests_open
+            new_state = not await requests_open(container)
+            await set_requests_open(container, new_state)
+            await q.answer(
+                "🟢 Requests resumed." if new_state else "🔴 Requests paused.",
+                show_alert=False,
+            )
+            # Re-render the admin panel so the button + banner reflect the change.
+            state_line = ("🟢 <b>Accepting requests</b>" if new_state
+                          else "🔴 <b>Requests paused</b>")
+            caption = (
+                "<b>🎭 Lelouch — Admin Panel</b>\n\n"
+                f"{state_line}\n\n"
+                "<i>Manage requests, admins, and availability.</i>\n\n"
+                "<blockquote>Staff-only tools. Non-staff tap = access denied toast.</blockquote>"
+            )
+            toggle_label = ("🔴 Pause Requests" if new_state
+                            else "🟢 Resume Requests")
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(toggle_label, callback_data=cb(bot, "reqtoggle"))],
+                [InlineKeyboardButton("📋 Pending Requests", callback_data=cb(bot, "pending")),
+                 InlineKeyboardButton("👥 Manage Admins", callback_data=cb(bot, "manage"))],
+                [InlineKeyboardButton("📊 Availability", callback_data=cb(bot, "avail")),
+                 InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
+                [InlineKeyboardButton("⇐ Back to Home", callback_data=cb(bot, "home"))],
+            ])
+            await send_screen(client, q.message.chat.id,
+                              Screen(caption=caption, image=pick_artwork(bot),
+                                     keyboard=keyboard), old_msg=q.message)
             return
 
         # ¬¬ Settings hub ¬¬
@@ -194,7 +240,7 @@ def build_lelouch(container: Container, token: str) -> Client:
     async def _start(_: Client, message: Message) -> None:
         from nekofetch.domain.enums import Role
         from nekofetch.ui.screens import welcome as welcome_screen
-        from kage.shared.ui_helpers import send_rich_welcome
+        from kurosoden.shared.ui_helpers import send_rich_welcome
 
         user = getattr(message, "nf_user", None)
         role = Role(user.role) if user else Role.USER

@@ -1,7 +1,7 @@
 """Shared fixture factories for Kage tests.
 
 These are used by both conftest.py (for pytest fixtures) and test files
-(for inline test data creation). Import from ``kage.tests.helpers``.
+(for inline test data creation). Import from ``kurosoden.tests.helpers``.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ async def _create_admin_availability(session, *, admin_telegram_id: int = 100,
                                       assigned_bots: list | None = None,
                                       scheduled_breaks: list | None = None,
                                       total_tasks_completed: int = 0):
-    from kage.shared.admin_assignment import AdminAvailability
+    from kurosoden.shared.admin_assignment import AdminAvailability
     if assigned_bots is None:
         assigned_bots = ["lelouch", "levi", "senku", "gojo"]
     a = AdminAvailability(admin_telegram_id=admin_telegram_id,
@@ -83,7 +83,7 @@ async def _create_admin_availability(session, *, admin_telegram_id: int = 100,
 async def _create_admin_assignment(session, *, admin_telegram_id: int = 100,
                                     request_code: str = "REQ-0001",
                                     stage: str = "levi", status: str = "assigned"):
-    from kage.shared.admin_assignment import AdminAssignment
+    from kurosoden.shared.admin_assignment import AdminAssignment
     a = AdminAssignment(admin_telegram_id=admin_telegram_id,
                         request_code=request_code, stage=stage, status=status)
     session.add(a)

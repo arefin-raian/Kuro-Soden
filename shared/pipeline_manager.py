@@ -82,16 +82,16 @@ class PipelineManager:
 
         try:
             if name == "lelouch":
-                from kage.bots.lelouch.app import build_lelouch, publish_commands
+                from kurosoden.bots.lelouch.app import build_lelouch, publish_commands
                 client = build_lelouch(self._c, token)
             elif name == "levi":
-                from kage.bots.levi.app import build_levi, publish_commands
+                from kurosoden.bots.levi.app import build_levi, publish_commands
                 client = build_levi(self._c, token)
             elif name == "senku":
-                from kage.bots.senku.app import build_senku, publish_commands
+                from kurosoden.bots.senku.app import build_senku, publish_commands
                 client = build_senku(self._c, token)
             elif name == "gojo":
-                from kage.bots.gojo.app import build_gojo, publish_commands
+                from kurosoden.bots.gojo.app import build_gojo, publish_commands
                 client = build_gojo(self._c, token)
             else:
                 log.error("kuro-soden.bot.unknown", name=name)

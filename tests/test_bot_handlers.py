@@ -22,31 +22,31 @@ class TestLelouchEscQ:
     """_esc_q should HTML-escape user input safely."""
 
     def test_escapes_angle_brackets(self):
-        from kage.bots.lelouch.handlers.requests import _esc_q
+        from kurosoden.bots.lelouch.handlers.requests import _esc_q
         assert _esc_q("<script>") == "&lt;script&gt;"
 
     def test_escapes_ampersand(self):
-        from kage.bots.lelouch.handlers.requests import _esc_q
+        from kurosoden.bots.lelouch.handlers.requests import _esc_q
         assert _esc_q("A & B") == "A &amp; B"
 
     def test_does_not_escape_quotes(self):
-        from kage.bots.lelouch.handlers.requests import _esc_q
+        from kurosoden.bots.lelouch.handlers.requests import _esc_q
         assert _esc_q('"hello"') == '"hello"'
 
     def test_none_input(self):
-        from kage.bots.lelouch.handlers.requests import _esc_q
+        from kurosoden.bots.lelouch.handlers.requests import _esc_q
         assert _esc_q(None) == ""
 
     def test_empty_string(self):
-        from kage.bots.lelouch.handlers.requests import _esc_q
+        from kurosoden.bots.lelouch.handlers.requests import _esc_q
         assert _esc_q("") == ""
 
     def test_unicode_preserved(self):
-        from kage.bots.lelouch.handlers.requests import _esc_q
+        from kurosoden.bots.lelouch.handlers.requests import _esc_q
         assert "進撃" in _esc_q("進撃の巨人")
 
     def test_html_entities_not_double_escaped(self):
-        from kage.bots.lelouch.handlers.requests import _esc_q
+        from kurosoden.bots.lelouch.handlers.requests import _esc_q
         assert "&amp;" in _esc_q("&")
 
 
@@ -90,25 +90,25 @@ class TestLelouchCommands:
     """LELOUCH_COMMANDS list should be complete."""
 
     def test_command_list_not_empty(self):
-        from kage.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
+        from kurosoden.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
         assert len(LELOUCH_COMMANDS) > 0
 
     def test_all_strings(self):
-        from kage.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
+        from kurosoden.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
         for cmd in LELOUCH_COMMANDS:
             assert isinstance(cmd, str)
 
     def test_start_in_commands(self):
-        from kage.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
+        from kurosoden.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
         assert "start" in LELOUCH_COMMANDS
 
     def test_batch_in_commands(self):
-        from kage.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
+        from kurosoden.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
         assert "batch" in LELOUCH_COMMANDS
 
     def test_no_command_conflicts_with_help(self):
         """Commands that start with 'help' shouldn't shadow 'help'."""
-        from kage.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
+        from kurosoden.bots.lelouch.handlers.requests import LELOUCH_COMMANDS
         # 'help' should be in the list for exclusion from text handler.
         assert "help" in LELOUCH_COMMANDS
 
@@ -117,11 +117,11 @@ class TestLelouchFSMStates:
     """FSM state constants are correct."""
 
     def test_state_name(self):
-        from kage.bots.lelouch.handlers.requests import STATE_NAME
+        from kurosoden.bots.lelouch.handlers.requests import STATE_NAME
         assert STATE_NAME == "req:await_name"
 
     def test_state_franchise(self):
-        from kage.bots.lelouch.handlers.requests import STATE_FRANCHISE
+        from kurosoden.bots.lelouch.handlers.requests import STATE_FRANCHISE
         assert STATE_FRANCHISE == "req:franchise"
 
 
@@ -129,27 +129,27 @@ class TestLelouchHandlerImports:
     """All reused NekoFetch functions should be importable."""
 
     def test_media_to_franchise_dict_importable(self):
-        from kage.bots.lelouch.handlers.requests import _media_to_franchise_dict
+        from kurosoden.bots.lelouch.handlers.requests import _media_to_franchise_dict
         assert callable(_media_to_franchise_dict)
 
     def test_apply_franchise_totals_importable(self):
-        from kage.bots.lelouch.handlers.requests import apply_franchise_totals
+        from kurosoden.bots.lelouch.handlers.requests import apply_franchise_totals
         assert callable(apply_franchise_totals)
 
     def test_enrich_with_tmdb_importable(self):
-        from kage.bots.lelouch.handlers.requests import enrich_with_tmdb
+        from kurosoden.bots.lelouch.handlers.requests import enrich_with_tmdb
         assert callable(enrich_with_tmdb)
 
     def test_dedup_importable(self):
-        from kage.bots.lelouch.handlers.requests import DedupService
+        from kurosoden.bots.lelouch.handlers.requests import DedupService
         assert DedupService is not None
 
     def test_admin_assignment_importable(self):
-        from kage.bots.lelouch.handlers.requests import AdminAssignmentEngine
+        from kurosoden.bots.lelouch.handlers.requests import AdminAssignmentEngine
         assert AdminAssignmentEngine is not None
 
     def test_register_function_callable(self):
-        from kage.bots.lelouch.handlers.requests import register
+        from kurosoden.bots.lelouch.handlers.requests import register
         assert callable(register)
 
 
@@ -209,15 +209,15 @@ class TestLeviFSMStates:
     """Levi's FSM states are correct."""
 
     def test_state_source(self):
-        from kage.bots.levi.handlers.tasks import STATE_SOURCE
+        from kurosoden.bots.levi.handlers.tasks import STATE_SOURCE
         assert STATE_SOURCE == "levi:await_source"
 
     def test_state_thumbnail(self):
-        from kage.bots.levi.handlers.tasks import STATE_THUMBNAIL
+        from kurosoden.bots.levi.handlers.tasks import STATE_THUMBNAIL
         assert STATE_THUMBNAIL == "levi:await_thumbnail"
 
     def test_state_header(self):
-        from kage.bots.levi.handlers.tasks import STATE_HEADER
+        from kurosoden.bots.levi.handlers.tasks import STATE_HEADER
         assert STATE_HEADER == "levi:await_header_edit"
 
 
@@ -293,15 +293,15 @@ class TestLeviHandlerImports:
     """All Levi handler imports should work."""
 
     def test_register_callable(self):
-        from kage.bots.levi.handlers.tasks import register
+        from kurosoden.bots.levi.handlers.tasks import register
         assert callable(register)
 
     def test_assign_source_and_queue_callable(self):
-        from kage.bots.levi.handlers.tasks import _assign_source_and_queue
+        from kurosoden.bots.levi.handlers.tasks import _assign_source_and_queue
         assert callable(_assign_source_and_queue)
 
     def test_generate_header_callable(self):
-        from kage.bots.levi.handlers.tasks import _generate_header
+        from kurosoden.bots.levi.handlers.tasks import _generate_header
         assert callable(_generate_header)
 
 
@@ -313,7 +313,7 @@ class TestSenkuFSMStates:
     """Senku's FSM states."""
 
     def test_state_channel_username(self):
-        from kage.bots.senku.handlers.tasks import STATE_CHANNEL_USERNAME
+        from kurosoden.bots.senku.handlers.tasks import STATE_CHANNEL_USERNAME
         assert STATE_CHANNEL_USERNAME == "senku:await_channel_username"
 
 
@@ -341,11 +341,11 @@ class TestSenkuHandlerImports:
     """All Senku handler imports should work."""
 
     def test_register_callable(self):
-        from kage.bots.senku.handlers.tasks import register
+        from kurosoden.bots.senku.handlers.tasks import register
         assert callable(register)
 
     def test_generate_content_callable(self):
-        from kage.bots.senku.handlers.tasks import _generate_content_for_request
+        from kurosoden.bots.senku.handlers.tasks import _generate_content_for_request
         assert callable(_generate_content_for_request)
 
 
@@ -357,7 +357,7 @@ class TestGojoFSMStates:
     """Gojo's FSM states."""
 
     def test_state_edit_caption(self):
-        from kage.bots.gojo.handlers.tasks import STATE_EDIT_CAPTION
+        from kurosoden.bots.gojo.handlers.tasks import STATE_EDIT_CAPTION
         assert STATE_EDIT_CAPTION == "gojo:await_caption_edit"
 
 
@@ -414,19 +414,19 @@ class TestGojoHandlerImports:
     """All Gojo handler imports should work."""
 
     def test_register_callable(self):
-        from kage.bots.gojo.handlers.tasks import register
+        from kurosoden.bots.gojo.handlers.tasks import register
         assert callable(register)
 
     def test_review_for_publish_callable(self):
-        from kage.bots.gojo.handlers.tasks import _review_for_publish
+        from kurosoden.bots.gojo.handlers.tasks import _review_for_publish
         assert callable(_review_for_publish)
 
     def test_execute_publish_callable(self):
-        from kage.bots.gojo.handlers.tasks import _execute_publish
+        from kurosoden.bots.gojo.handlers.tasks import _execute_publish
         assert callable(_execute_publish)
 
     def test_recover_channel_callable(self):
-        from kage.bots.gojo.handlers.tasks import _recover_channel
+        from kurosoden.bots.gojo.handlers.tasks import _recover_channel
         assert callable(_recover_channel)
 
 
@@ -438,19 +438,19 @@ class TestHandlerInitModules:
     """Every bot's handlers/__init__.py must have register_all."""
 
     def test_lelouch_register_all(self):
-        from kage.bots.lelouch.handlers import register_all
+        from kurosoden.bots.lelouch.handlers import register_all
         assert callable(register_all)
 
     def test_levi_register_all(self):
-        from kage.bots.levi.handlers import register_all
+        from kurosoden.bots.levi.handlers import register_all
         assert callable(register_all)
 
     def test_senku_register_all(self):
-        from kage.bots.senku.handlers import register_all
+        from kurosoden.bots.senku.handlers import register_all
         assert callable(register_all)
 
     def test_gojo_register_all(self):
-        from kage.bots.gojo.handlers import register_all
+        from kurosoden.bots.gojo.handlers import register_all
         assert callable(register_all)
 
 
@@ -462,19 +462,19 @@ class TestBotAppFunctions:
     """Each build_* returns a Pyrogram Client when given valid args."""
 
     def test_build_lelouch_has_publish_commands(self):
-        from kage.bots.lelouch.app import publish_commands
+        from kurosoden.bots.lelouch.app import publish_commands
         assert callable(publish_commands)
 
     def test_build_levi_has_publish_commands(self):
-        from kage.bots.levi.app import publish_commands
+        from kurosoden.bots.levi.app import publish_commands
         assert callable(publish_commands)
 
     def test_build_senku_has_publish_commands(self):
-        from kage.bots.senku.app import publish_commands
+        from kurosoden.bots.senku.app import publish_commands
         assert callable(publish_commands)
 
     def test_build_gojo_has_publish_commands(self):
-        from kage.bots.gojo.app import publish_commands
+        from kurosoden.bots.gojo.app import publish_commands
         assert callable(publish_commands)
 
 

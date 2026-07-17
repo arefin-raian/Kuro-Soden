@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TypeVar
 
-from sqlalchemy import BigInteger, DateTime, String, func
+from sqlalchemy import BigInteger, DateTime, Integer, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
@@ -58,4 +58,12 @@ class TimestampMixin:
 
 
 class PKMixin:
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # ``BigInteger`` on Postgres (production). SQLite only autoincrements a
+    # column declared exactly ``INTEGER PRIMARY KEY`` (the rowid alias); a
+    # ``BIGINT`` PK gets no alias, so ``id`` stays NULL on insert and every
+    # insert trips a NOT NULL violation. The ``sqlite`` variant emits plain
+    # ``INTEGER`` so the test suite (SQLite in-memory) autoincrements cleanly.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True, autoincrement=True,
+    )

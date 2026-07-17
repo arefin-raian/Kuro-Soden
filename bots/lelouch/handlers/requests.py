@@ -26,7 +26,7 @@ from nekofetch.core.container import Container
 from nekofetch.core.exceptions import NekoFetchError
 from nekofetch.domain.enums import DownloadScope, RequestStatus
 from nekofetch.localization.messages import M, t
-from nekofetch.ui.components import lock_buttons
+from nekofetch.ui.components import cb, lock_buttons
 from nekofetch.ui.progress import SPINNER, animate_until
 from nekofetch.ui.artwork import pick_artwork
 from nekofetch.ui.screens import (
@@ -49,8 +49,8 @@ from nekofetch.bots.admin.handlers.requests import (
 )
 
 # ── Lelouch-specific additions ───────────────────────────────────────────────
-from kage.shared.admin_assignment import AdminAssignmentEngine
-from kage.shared.dedup import DedupService
+from kurosoden.shared.admin_assignment import AdminAssignmentEngine
+from kurosoden.shared.dedup import DedupService
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -103,8 +103,17 @@ def register(client: Client, container: Container) -> None:
         """Check dedup before delegating to NekoFetch's AniList search."""
         user_id = message.from_user.id
 
-        # ── 0. Check one-at-a-time limit for non-admin users ──────────────
+        # ── 0. Global gate + one-at-a-time limit (staff bypass both) ──────
         if not await _is_staff(message, container):
+            from kurosoden.shared.request_gate import requests_open
+            if not await requests_open(container):
+                await message.reply(
+                    "🌙 <b>Requests are paused right now.</b>\n\n"
+                    "We're catching up on the queue — check back a little later. "
+                    "Thanks for your patience!",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
             if await _has_pending_request(user_id, container):
                 await message.reply(
                     t(M.REQUEST_LIMIT_REACHED),
@@ -115,7 +124,22 @@ def register(client: Client, container: Container) -> None:
         # ── 1. Dedup check ───────────────────────────────────────────────
         result = await dedup.check(query)
         if result.exists:
-            await message.reply(result.detail, parse_mode=ParseMode.HTML)
+            from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+            # Offer a jump button when the title is already reachable. Main
+            # channel post first (our primary surface now); distribution bot is
+            # the secondary fallback only when there's no main-channel post.
+            kb = None
+            if result.source == "main_channel" and result.main_channel_link:
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📺 Open in Main Channel",
+                                         url=result.main_channel_link)]])
+            elif result.source == "distribution" and result.bot_username:
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🤖 Open Distribution Bot",
+                                         url=f"https://t.me/{result.bot_username}")]])
+            await message.reply(result.detail, parse_mode=ParseMode.HTML,
+                                reply_markup=kb)
             # If it's in-progress, give extra context.
             if result.source == "in_progress" and result.request_code:
                 await message.reply(
@@ -400,11 +424,15 @@ def register(client: Client, container: Container) -> None:
 
         await fsm.clear(user_id)
 
-        # ── Lelouch-specific: Assign to a downloader admin ────────────────
-        assigned = None
+        # ── Show the requester their accepted screen immediately ──────────
+        # (Assignment + admin notification happen after; the user never waits
+        # on them.) The card image swaps to a fresh recurring artwork.
+        screen = request_received(user_name, title, queue_pos=receipt.position)
+        await send_screen(client, card_msg.chat.id, screen, old_msg=card_msg)
+
+        # ── Best-effort DB assignment (records who owns the download stage) ──
         try:
-            assigned = await assignment.assign(receipt.code, "levi")
-            # Update request status so Levi's downloader bot sees it.
+            await assignment.assign(receipt.code, "levi")
             async with session_scope(container.pg_sessionmaker) as session:
                 repo = RequestRepository(session)
                 req = await repo.get_by_code(receipt.code)
@@ -413,15 +441,74 @@ def register(client: Client, container: Container) -> None:
         except Exception:
             pass  # Assignment is best-effort; request still succeeded.
 
-        # Build the success screen.
-        extra = ""
-        if assigned:
-            extra = (
-                f"\n\n👤 <b>Assigned to:</b> {assigned.admin_name or 'a downloader'}"
-            )
-        screen = request_received(user_name, title, queue_pos=receipt.position)
-        screen.caption += extra
-        await send_screen(client, card_msg.chat.id, screen, old_msg=card_msg)
+        # ── Notify admins DIRECTLY by DM (no log channel in Kurosōden) ──────
+        # This is the piece that was missing: the old code only wrote a DB row,
+        # so nothing ever reached a human. We DM every configured admin via the
+        # downloader bot (Levi) — the stage that acts next — falling back to
+        # this (Lelouch) client if Levi isn't running.
+        await _notify_admins_new_request(receipt.code, title, user_name, user_id,
+                                         franchise_json)
+
+    async def _notify_admins_new_request(
+        code: str, title: str, requester: str, requester_id: int,
+        franchise_json: dict,
+    ) -> None:
+        """DM every configured admin about a freshly-submitted request.
+
+        Prefers Levi's client (the downloader stage that picks this up), then
+        falls back to Lelouch's own client. Each send is independent so one
+        blocked admin can't stop the others.
+        """
+        from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        admin_ids = list(getattr(container.env, "admin_ids", []) or [])
+        if not admin_ids:
+            log.warning("lelouch.notify.no_admins", code=code)
+            return
+
+        # Pick the notifying bot: Levi (downloader) first, else this bot.
+        notifier = client
+        mgr = getattr(container, "pipeline_manager", None)
+        if mgr is not None and getattr(mgr, "levi", None) is not None:
+            notifier = mgr.levi
+
+        fseasons = franchise_json.get("franchise_seasons") or 0
+        fmovies = franchise_json.get("franchise_movies") or 0
+        fovas = franchise_json.get("franchise_ovas") or 0
+        bits = []
+        if fseasons:
+            bits.append(f"{fseasons} season{'s' if fseasons != 1 else ''}")
+        if fmovies:
+            bits.append(f"{fmovies} movie{'s' if fmovies != 1 else ''}")
+        if fovas:
+            bits.append(f"{fovas} OVA{'s' if fovas != 1 else ''}")
+        breakdown = " · ".join(bits) if bits else "single entry"
+
+        caption = (
+            "<b>📥 New Request</b>\n\n"
+            f"<b>{html.escape(title)}</b>\n"
+            f"<code>{code}</code>  ·  {breakdown}\n\n"
+            f"👤 <b>By:</b> {html.escape(requester or 'user')} "
+            f"(<code>{requester_id}</code>)\n\n"
+            "<i>Assigned to the download stage. Open Levi to pick a source.</i>"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚔️ Open Downloader", callback_data=cb("levi", "tasks"))],
+        ])
+
+        sent = 0
+        for admin_id in admin_ids:
+            try:
+                await notifier.send_message(
+                    admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
+                )
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                # An admin who never /start-ed the notifier bot can't be DMed —
+                # log and keep going so the others still get pinged.
+                log.warning("lelouch.notify.dm_failed", admin=admin_id,
+                            code=code, error=str(exc))
+        log.info("lelouch.notify.sent", code=code, admins=len(admin_ids), delivered=sent)
 
     # ── My Requests ───────────────────────────────────────────────────────────
     @client.on_callback_query(filters.regex(r"^req\|mine"))

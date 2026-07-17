@@ -15,7 +15,7 @@ from nekofetch.core.container import Container
 
 def register_all(client: Client, container: Container) -> None:
     from nekofetch.bots.middleware import install_auth_middleware
-    from kage.bots.gojo.handlers.tasks import register as register_tasks
+    from kurosoden.bots.gojo.handlers.tasks import register as register_tasks
 
     install_auth_middleware(client, container)
     register_tasks(client, container)

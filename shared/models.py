@@ -5,7 +5,7 @@ tables ``admin_assignments`` and ``admin_availability`` are materialised by
 ``Base.metadata.create_all()`` and picked up by Alembic autogenerate.
 """
 
-# Re-export so `from kage.shared.models import AdminAssignment, AdminAvailability` works.
-from kage.shared.admin_assignment import AdminAssignment, AdminAvailability  # noqa: F401
+# Re-export so `from kurosoden.shared.models import AdminAssignment, AdminAvailability` works.
+from kurosoden.shared.admin_assignment import AdminAssignment, AdminAvailability  # noqa: F401
 
 __all__ = ["AdminAssignment", "AdminAvailability"]

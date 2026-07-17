@@ -9,7 +9,7 @@ pipeline bots on a single event loop:
     Gojo Satoru           —  Publisher Bot  (main channel, index, recovery)
 
 Kuro Sōden is a STANDALONE repository — NekoFetch's source is vendored under
-kage/nekofetch/ so no external imports are needed.
+kurosoden/nekofetch/ so no external imports are needed.
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ from pathlib import Path
 
 # Standalone: the project has a FLAT layout — ``docs/``, ``bots/``,
 # ``shared/``, ``nekofetch/``, ``tests/`` all live at the repo root. Python
-# imports use the prefix ``kage.<sub>`` (legacy of when this was a sub-folded
-# repo called ``kage/`` inside ``NekoFetch/``). The handoff below registers a
-# synthetic ``kage`` namespace whose subpackages map back to the real dirs
-# via ``__path__`` shims — so ``from kage.shared.X import Y`` resolves to
+# imports use the prefix ``kurosoden.<sub>`` (legacy of when this was a sub-folded
+# repo called ``kurosoden/`` inside ``NekoFetch/``). The handoff below registers a
+# synthetic ``kurosoden`` namespace whose subpackages map back to the real dirs
+# via ``__path__`` shims — so ``from kurosoden.shared.X import Y`` resolves to
 # ``./shared/X.py`` regardless of where the project is unpacked (parented
 # locally, or at ``/app/`` on Render / Railway).
 _HERE = Path(__file__).resolve().parent
@@ -33,27 +33,27 @@ sys.path.insert(0, str(_HERE))                  # /app/ — picks up top-level
                                                  # packages like ``nekofetch``
 os.chdir(str(_HERE))
 
-# ── ``kage`` namespace alias ─────────────────────────────────────────────────
-# Register ``kage`` and its top-level subpackages as lightweight ``ModuleType``
+# ── ``kurosoden`` namespace alias ─────────────────────────────────────────────────
+# Register ``kurosoden`` and its top-level subpackages as lightweight ``ModuleType``
 # shims whose ``__path__`` points at the real directories. Once these entries
 # are in ``sys.modules``, Python's normal importer resolves
-# ``kage.<sub>.<mod>`` by searching ``__path__`` exactly as it would for any
+# ``kurosoden.<sub>.<mod>`` by searching ``__path__`` exactly as it would for any
 # regular package — no more fragile parent-directory sys.path manipulation.
 #
 # Caveat (theoretical, not active here): if any code ever does BOTH
-# ``from shared.X import ...`` and ``from kage.shared.X import ...``, Python
-# will cache them as two distinct module objects. The kage codebase uniformly
-# uses the ``kage.`` prefix, so this is inert. If that ever changes, switch to
-# git-tracked symlinks or rename the project root to a ``kage/`` sub-folder.
+# ``from shared.X import ...`` and ``from kurosoden.shared.X import ...``, Python
+# will cache them as two distinct module objects. The kurosoden codebase uniformly
+# uses the ``kurosoden.`` prefix, so this is inert. If that ever changes, switch to
+# git-tracked symlinks or rename the project root to a ``kurosoden/`` sub-folder.
 import types as _types
-_kage = _types.ModuleType("kage")
+_kage = _types.ModuleType("kurosoden")
 _kage.__path__ = [str(_HERE)]
-sys.modules["kage"] = _kage
+sys.modules["kurosoden"] = _kage
 for _sub in ("shared", "bots", "nekofetch", "tests"):
     if (_HERE / _sub / "__init__.py").is_file():
-        _shim = _types.ModuleType(f"kage.{_sub}")
+        _shim = _types.ModuleType(f"kurosoden.{_sub}")
         _shim.__path__ = [str(_HERE / _sub)]
-        sys.modules[f"kage.{_sub}"] = _shim
+        sys.modules[f"kurosoden.{_sub}"] = _shim
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -64,14 +64,14 @@ async def _run() -> None:
 
     env = get_env()
     configure_logging(level=env.log_level, json=env.log_json)
-    log = get_logger("kage")
+    log = get_logger("kurosoden")
 
     container = Container.create()
     await container.startup()
 
     # Register Kage's ORM models so ``Base.metadata.create_all()`` and
     # Alembic pick up ``admin_assignments`` + ``admin_availability``.
-    import kage.shared.models  # noqa: F401
+    import kurosoden.shared.models  # noqa: F401
 
     # Build stamp for restart verification.
     import subprocess as _sp
@@ -94,7 +94,7 @@ async def _run() -> None:
     print(f"\n  Kuro Sōden {_ver}  ·  build {build}  ·  4-bot pipeline\n", flush=True)
 
     # ── Pipeline manager ──────────────────────────────────────────────────────
-    from kage.shared.pipeline_manager import PipelineManager
+    from kurosoden.shared.pipeline_manager import PipelineManager
 
     manager = PipelineManager(container)
     stop = asyncio.Event()

@@ -1,4 +1,4 @@
-"""Tests for kage/shared/admin_assignment.py — Admin assignment engine.
+"""Tests for kurosoden/shared/admin_assignment.py — Admin assignment engine.
 
 Covers:
   • AssignmentResult dataclass defaults
@@ -24,7 +24,7 @@ class TestAssignmentResult:
     """Pure data class — no DB needed."""
 
     def test_constructor_all_fields(self):
-        from kage.shared.admin_assignment import AssignmentResult
+        from kurosoden.shared.admin_assignment import AssignmentResult
         r = AssignmentResult(
             admin_telegram_id=123,
             admin_name="Alice",
@@ -37,18 +37,18 @@ class TestAssignmentResult:
         assert r.tasks_completed == 42
 
     def test_none_admin_name(self):
-        from kage.shared.admin_assignment import AssignmentResult
+        from kurosoden.shared.admin_assignment import AssignmentResult
         r = AssignmentResult(admin_telegram_id=1, admin_name=None, tasks_active=0, tasks_completed=0)
         assert r.admin_name is None
 
     def test_zero_tasks(self):
-        from kage.shared.admin_assignment import AssignmentResult
+        from kurosoden.shared.admin_assignment import AssignmentResult
         r = AssignmentResult(admin_telegram_id=1, admin_name="New Admin", tasks_active=0, tasks_completed=0)
         assert r.tasks_active == 0
         assert r.tasks_completed == 0
 
     def test_high_tasks(self):
-        from kage.shared.admin_assignment import AssignmentResult
+        from kurosoden.shared.admin_assignment import AssignmentResult
         r = AssignmentResult(admin_telegram_id=1, admin_name="Veteran", tasks_active=50, tasks_completed=9999)
         assert r.tasks_completed == 9999
 
@@ -61,30 +61,30 @@ class TestAdminAssignmentModel:
     """ORM model field defaults and constraints."""
 
     def test_tablename(self):
-        from kage.shared.admin_assignment import AdminAssignment
+        from kurosoden.shared.admin_assignment import AdminAssignment
         assert AdminAssignment.__tablename__ == "admin_assignments"
 
     async def test_default_status(self, session):
-        from kage.shared.admin_assignment import AdminAssignment
+        from kurosoden.shared.admin_assignment import AdminAssignment
         a = AdminAssignment(admin_telegram_id=1, request_code="REQ-1", stage="levi")
         session.add(a)
         await session.flush()
         assert a.status == "assigned"
 
     async def test_default_task_count(self, session):
-        from kage.shared.admin_assignment import AdminAssignment
+        from kurosoden.shared.admin_assignment import AdminAssignment
         a = AdminAssignment(admin_telegram_id=1, request_code="REQ-1", stage="levi")
         session.add(a)
         await session.flush()
         assert a.task_count_at_assignment == 0
 
     def test_completed_at_none_by_default(self):
-        from kage.shared.admin_assignment import AdminAssignment
+        from kurosoden.shared.admin_assignment import AdminAssignment
         a = AdminAssignment(admin_telegram_id=1, request_code="REQ-1", stage="levi")
         assert a.completed_at is None
 
     async def test_stage_persistence(self, session):
-        from kage.shared.admin_assignment import AdminAssignment
+        from kurosoden.shared.admin_assignment import AdminAssignment
         a = AdminAssignment(admin_telegram_id=999, request_code="REQ-STAGE", stage="senku", status="assigned")
         session.add(a)
         await session.flush()
@@ -96,25 +96,25 @@ class TestAdminAvailabilityModel:
     """ORM model for admin availability."""
 
     def test_tablename(self):
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
         assert AdminAvailability.__tablename__ == "admin_availability"
 
     async def test_default_is_available(self, session):
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
         a = AdminAvailability(admin_telegram_id=1)
         session.add(a)
         await session.flush()
         assert a.is_available is True
 
     async def test_default_total_tasks(self, session):
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
         a = AdminAvailability(admin_telegram_id=1)
         session.add(a)
         await session.flush()
         assert a.total_tasks_completed == 0
 
     async def test_assigned_bots_default(self, session):
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
         a = AdminAvailability(
             admin_telegram_id=200,
             admin_name="Bob",
@@ -125,7 +125,7 @@ class TestAdminAvailabilityModel:
         assert a.assigned_bots == ["lelouch", "levi"]
 
     async def test_scheduled_breaks_json(self, session):
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
         breaks = [
             {"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00", "reason": "vacation"},
         ]
@@ -136,7 +136,7 @@ class TestAdminAvailabilityModel:
         assert a.scheduled_breaks[0]["reason"] == "vacation"
 
     async def test_unique_telegram_id_constraint(self, session):
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
         a1 = AdminAvailability(admin_telegram_id=400, admin_name="Dave")
         session.add(a1)
         await session.flush()
@@ -147,7 +147,7 @@ class TestAdminAvailabilityModel:
             await session.flush()
 
     async def test_null_admin_name_is_ok(self, session):
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
         a = AdminAvailability(admin_telegram_id=500, admin_name=None)
         session.add(a)
         await session.flush()
@@ -163,12 +163,12 @@ class TestIsOnBreak:
 
     @pytest.fixture
     def engine(self, sessionmaker):
-        from kage.shared.admin_assignment import AdminAssignmentEngine
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
         return AdminAssignmentEngine(sessionmaker)
 
     @pytest.fixture
     def _avail(self, session):
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
         return lambda breaks=None: AdminAvailability(
             admin_telegram_id=1, admin_name="Test", scheduled_breaks=breaks
         )
@@ -267,7 +267,7 @@ class TestAdminAssignmentEngineDB:
 
     @pytest.fixture
     def engine(self, sessionmaker):
-        from kage.shared.admin_assignment import AdminAssignmentEngine
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
         return AdminAssignmentEngine(sessionmaker)
 
     # ── assign() ──────────────────────────────────────────────────────────────
@@ -287,7 +287,7 @@ class TestAdminAssignmentEngineDB:
 
     @pytest.mark.asyncio
     async def test_assign_with_preferred_admin(self, engine, session, admin_availability):
-        from kage.tests.helpers import _create_admin_availability
+        from kurosoden.tests.helpers import _create_admin_availability
         # Add a second admin.
         await _create_admin_availability(session, admin_telegram_id=200, admin_name="Admin2")
         result = await engine.assign("REQ-PREF", "levi", preferred_admin=200)
@@ -303,7 +303,7 @@ class TestAdminAssignmentEngineDB:
 
     @pytest.mark.asyncio
     async def test_assign_prefers_fewer_active_tasks(self, engine, session, admin_availability):
-        from kage.tests.helpers import _create_admin_availability
+        from kurosoden.tests.helpers import _create_admin_availability
         # Admin 200: 0 active tasks, 50 completed.
         await _create_admin_availability(session, admin_telegram_id=200, admin_name="LessBusy", total_tasks_completed=50)
         # Admin 100 (default): 0 active, 0 completed.
@@ -313,7 +313,7 @@ class TestAdminAssignmentEngineDB:
 
     @pytest.mark.asyncio
     async def test_assign_skips_unavailable_admin(self, engine, session, admin_availability):
-        from kage.tests.helpers import _create_admin_availability
+        from kurosoden.tests.helpers import _create_admin_availability
         await _create_admin_availability(session, admin_telegram_id=200, admin_name="Unavailable", is_available=False)
         result = await engine.assign("REQ-SKIP", "levi")
         # Admin 100 is the only available one.
@@ -321,7 +321,7 @@ class TestAdminAssignmentEngineDB:
 
     @pytest.mark.asyncio
     async def test_assign_skips_admin_on_break(self, engine, session, admin_availability):
-        from kage.tests.helpers import _create_admin_availability
+        from kurosoden.tests.helpers import _create_admin_availability
         now = datetime.now(timezone.utc)
         breaks = [
             {"start": (now - timedelta(hours=1)).isoformat(),
@@ -336,7 +336,7 @@ class TestAdminAssignmentEngineDB:
 
     @pytest.mark.asyncio
     async def test_assign_filter_by_stage(self, engine, session, admin_availability):
-        from kage.tests.helpers import _create_admin_availability
+        from kurosoden.tests.helpers import _create_admin_availability
         # Admin 200: only on senku + gojo.
         await _create_admin_availability(session, admin_telegram_id=200, admin_name="SenkuAdmin", assigned_bots=["senku", "gojo"])
         result = await engine.assign("REQ-STAGE", "levi")
@@ -346,7 +346,7 @@ class TestAdminAssignmentEngineDB:
     @pytest.mark.asyncio
     async def test_assign_creates_db_row(self, engine, session, admin_availability):
         from sqlalchemy import select
-        from kage.shared.admin_assignment import AdminAssignment
+        from kurosoden.shared.admin_assignment import AdminAssignment
 
         await engine.assign("REQ-DB", "levi")
         result = await session.execute(
@@ -371,7 +371,7 @@ class TestAdminAssignmentEngineDB:
     @pytest.mark.asyncio
     async def test_complete_task_increments_counter(self, engine, session, admin_assignment, admin_availability):
         from sqlalchemy import select
-        from kage.shared.admin_assignment import AdminAvailability
+        from kurosoden.shared.admin_assignment import AdminAvailability
 
         prev = admin_availability.total_tasks_completed
         await engine.complete_task("REQ-0001", "levi")
@@ -390,7 +390,7 @@ class TestAdminAssignmentEngineDB:
         await engine.complete_task("REQ-0001", "levi")
         # Should have been skipped (WHERE status='assigned').
         from sqlalchemy import select
-        from kage.shared.admin_assignment import AdminAssignment
+        from kurosoden.shared.admin_assignment import AdminAssignment
         result = await session.execute(
             select(AdminAssignment).where(AdminAssignment.request_code == "REQ-0001")
         )
@@ -426,7 +426,7 @@ class TestAdminAssignmentEngineDB:
 
     @pytest.mark.asyncio
     async def test_get_active_tasks_ordered_by_created_at(self, engine, session):
-        from kage.tests.helpers import _create_admin_assignment, _create_admin_availability
+        from kurosoden.tests.helpers import _create_admin_assignment, _create_admin_availability
         await _create_admin_availability(session, admin_telegram_id=700)
         await _create_admin_assignment(session, admin_telegram_id=700, request_code="REQ-A", status="assigned")
         await _create_admin_assignment(session, admin_telegram_id=700, request_code="REQ-B", status="assigned")

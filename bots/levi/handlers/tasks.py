@@ -38,7 +38,7 @@ def register(client: Client, container: Container) -> None:
     async def _tasks(_: Client, message: Message) -> None:
         if not message.from_user:
             return
-        from kage.shared.admin_assignment import AdminAssignmentEngine
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
 
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         active = await engine.get_active_tasks(message.from_user.id)

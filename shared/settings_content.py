@@ -1,7 +1,7 @@
 """Per-bot settings content for the four Kuro Soden pipeline bots.
 
 Each entry is the data the menu dispatcher feeds into
-:func:`kage.shared.menu_router.settings_onboarding` once the user taps a
+:func:`kurosoden.shared.menu_router.settings_onboarding` once the user taps a
 key on the bot's settings hub. Modeled after NekoFetch's own settings
 edit-prompt UX (see ``nekofetch.bots.admin.handlers.settings._edit_prompt``)
 so admins coming from either bot feel at home.

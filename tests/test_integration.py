@@ -1,8 +1,8 @@
 """Integration tests — full pipeline flows with SQLite DB.
 
 Covers:
-  • Config YAML loading from kage/config.yaml
-  • Env settings from kage/.env
+  • Config YAML loading from kurosoden/config.yaml
+  • Env settings from kurosoden/.env
   • Full DB schema verification (all 16 tables)
   • DedupService with actual DB fixtures
   • AdminAssignmentEngine with actual DB
@@ -24,12 +24,12 @@ import pytest
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestConfigYAML:
-    """kage/config.yaml should load correctly."""
+    """kurosoden/config.yaml should load correctly."""
 
     def test_config_file_exists(self):
         from pathlib import Path
         config_path = Path(__file__).resolve().parent.parent / "config.yaml"
-        assert config_path.exists(), "kage/config.yaml missing"
+        assert config_path.exists(), "kurosoden/config.yaml missing"
 
     def test_config_loads_without_error(self):
         from nekofetch.core.config import AppConfig
@@ -102,12 +102,12 @@ class TestConfigYAML:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestEnvSettings:
-    """EnvSettings from kage/.env."""
+    """EnvSettings from kurosoden/.env."""
 
     def test_env_file_exists(self):
         from pathlib import Path
         env_path = Path(__file__).resolve().parent.parent / ".env"
-        assert env_path.exists(), "kage/.env missing"
+        assert env_path.exists(), "kurosoden/.env missing"
 
     def test_has_all_required_tokens(self):
         """.env must have all four bot tokens and the shared admin token."""
@@ -179,7 +179,7 @@ class TestFullSchemaIntegration:
     @pytest.mark.asyncio
     async def test_all_tables_created(self, engine):
         """After engine fixture init, all 16 tables exist."""
-        import kage.shared.models  # noqa: F401
+        import kurosoden.shared.models  # noqa: F401
         from nekofetch.infrastructure.database.postgres.base import Base
 
         tables = list(Base.metadata.tables.keys())
@@ -227,11 +227,11 @@ class TestPipelineHandoff:
     @pytest.mark.asyncio
     async def test_full_handoff_flow(self, sessionmaker, session):
         """Lelouch assigns → Levi picks up → Levi completes → Senku gets assigned."""
-        from kage.tests.helpers import _create_user, _create_request, _create_admin_availability
-        from kage.shared.admin_assignment import AdminAssignmentEngine
-        from kage.shared.dedup import DedupService
+        from kurosoden.tests.helpers import _create_user, _create_request, _create_admin_availability
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
+        from kurosoden.shared.dedup import DedupService
         from sqlalchemy import select
-        from kage.shared.admin_assignment import AdminAssignment
+        from kurosoden.shared.admin_assignment import AdminAssignment
 
         # 1. Create a user and request.
         user = await _create_user(session, telegram_id=55555, role="user")
@@ -277,8 +277,8 @@ class TestPipelineHandoff:
     @pytest.mark.asyncio
     async def test_multiple_admins_balanced_distribution(self, sessionmaker, session):
         """Multiple admins should get balanced assignments."""
-        from kage.tests.helpers import _create_admin_availability, _create_request, _create_user
-        from kage.shared.admin_assignment import AdminAssignmentEngine
+        from kurosoden.tests.helpers import _create_admin_availability, _create_request, _create_user
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
 
         user = await _create_user(session, telegram_id=66666)
 
@@ -307,8 +307,8 @@ class TestPipelineHandoff:
     @pytest.mark.asyncio
     async def test_concurrent_assignments_no_duplicate(self, sessionmaker, session):
         """Even concurrent assigns should not assign the same admin to the same request twice."""
-        from kage.tests.helpers import _create_admin_availability
-        from kage.shared.admin_assignment import AdminAssignmentEngine
+        from kurosoden.tests.helpers import _create_admin_availability
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
 
         await _create_admin_availability(session, admin_telegram_id=10, admin_name="Solo",
                                           assigned_bots=["levi"])
@@ -414,7 +414,7 @@ class TestRequestCodes:
     @pytest.mark.asyncio
     async def test_code_unique_per_request(self, session):
         """Each request must have a unique code — duplicates raise integrity error."""
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         await _create_request(session, code="REQ-UNIQUE", anime_doc_id="anilist:uq1")
         # Creating a second with same code should fail.
         with pytest.raises(Exception):
@@ -440,12 +440,12 @@ class TestDedupFullIntegration:
 
     @pytest.fixture
     def dedup(self, sessionmaker):
-        from kage.shared.dedup import DedupService
+        from kurosoden.shared.dedup import DedupService
         return DedupService(sessionmaker)
 
     @pytest.mark.asyncio
     async def test_main_channel_wins_over_distribution(self, dedup, session):
-        from kage.tests.helpers import _create_channel_post, _create_distribution_bot
+        from kurosoden.tests.helpers import _create_channel_post, _create_distribution_bot
         await _create_channel_post(session, anime_doc_id="anilist:multi1", main_message_id=100)
         await _create_distribution_bot(session, anime_doc_id="anilist:multi1")
 
@@ -454,7 +454,7 @@ class TestDedupFullIntegration:
 
     @pytest.mark.asyncio
     async def test_distribution_wins_over_in_progress(self, dedup, session):
-        from kage.tests.helpers import _create_distribution_bot, _create_request
+        from kurosoden.tests.helpers import _create_distribution_bot, _create_request
         await _create_distribution_bot(session, anime_doc_id="anilist:multi2")
         await _create_request(session, code="REQ-M2", anime_doc_id="anilist:multi2",
                                anime_title="Multi2", status="pending")
@@ -464,7 +464,7 @@ class TestDedupFullIntegration:
 
     @pytest.mark.asyncio
     async def test_in_progress_is_last_resort(self, dedup, session):
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         await _create_request(session, code="REQ-LAST", anime_doc_id="anilist:last1",
                                anime_title="Last Resort", status="processing")
 
@@ -473,7 +473,7 @@ class TestDedupFullIntegration:
 
     @pytest.mark.asyncio
     async def test_published_not_flagged(self, dedup, session):
-        from kage.tests.helpers import _create_request
+        from kurosoden.tests.helpers import _create_request
         await _create_request(session, code="REQ-PUB", anime_doc_id="anilist:pub1",
                                anime_title="Already Published", status="published")
 
