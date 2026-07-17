@@ -259,6 +259,54 @@ class TmdbClient:
             return neutral[0].get("file_path")
         return sorted(backdrops, key=quality, reverse=True)[0].get("file_path")
 
+    async def _ranked_backdrops(self, tmdb_id: int, media_type: str) -> list[str]:
+        """English-tagged then textless backdrop paths, best-first (no dupes).
+
+        Same ordering rationale as ``_confirm_backdrop`` — English title-art
+        first, language-neutral next — but returns the whole ranked gallery so
+        a caller can rotate through an anime's different pieces of art.
+        """
+        try:
+            imgs = await self._get(f"/{media_type}/{tmdb_id}/images",
+                                   include_image_language="en,null")
+        except (httpx.HTTPError, ValueError):
+            return []
+        backdrops = imgs.get("backdrops", [])
+
+        def quality(b: dict) -> tuple:
+            return (b.get("vote_average") or 0, b.get("vote_count") or 0, b.get("width") or 0)
+
+        english = sorted((b for b in backdrops if b.get("iso_639_1") == "en"),
+                         key=quality, reverse=True)
+        neutral = sorted((b for b in backdrops if not b.get("iso_639_1")),
+                         key=quality, reverse=True)
+        other = sorted((b for b in backdrops
+                        if b.get("iso_639_1") not in ("en", None)),
+                       key=quality, reverse=True)
+        seen: set = set()
+        out: list[str] = []
+        for b in (*english, *neutral, *other):
+            path = b.get("file_path")
+            if path and path not in seen:
+                seen.add(path)
+                out.append(path)
+        return out
+
+    async def backdrops(self, title: str, *, size: str = "w1280",
+                        limit: int = 8) -> list[str]:
+        """Up to ``limit`` full backdrop URLs for ``title`` — the anime's own art
+        gallery, English-first then textless. Used to seed the per-anime artwork
+        rotation so every card for that title shows a different piece of its art.
+        """
+        res = await self.search(title)
+        if res is None:
+            return []
+        ranked = await self._ranked_backdrops(res.id, res.media_type)
+        urls = [f"{IMG_BASE}/{size}{p}" for p in ranked[:limit]]
+        if not urls and res.backdrop_url:
+            urls = [res.backdrop_url]
+        return urls
+
     async def _ranked_posters(self, tmdb_id: int, media_type: str) -> list[str]:
         """English/region-neutral poster paths, best-first — the same set TMDB's
         ``/images/posters?image_language=en&image_region=US`` page shows. English

@@ -286,7 +286,8 @@ def request_received(user_name: str, title: str, queue_pos: int | None = None,
                      *, bot_name: str | None = None,
                      code: str | None = None, requester_id: int | None = None,
                      requested_at: str | None = None,
-                     franchise: dict | None = None) -> Screen:
+                     franchise: dict | None = None,
+                     image: "str | Path | None" = None) -> Screen:
     """The requester's receipt card — richer when the extra fields are supplied.
 
     ``code`` / ``requester_id`` / ``requested_at`` / ``franchise`` are optional so
@@ -317,7 +318,8 @@ def request_received(user_name: str, title: str, queue_pos: int | None = None,
     if queue_pos is not None:
         rows.append(_field(M.F_QUEUE, f"#{queue_pos}"))
     rows += ["", t(M.REQ_RECEIVED_BODY)]
-    return Screen(caption="\n".join(rows), image=pick_artwork(bot_name),
+    return Screen(caption="\n".join(rows),
+                  image=image if image is not None else pick_artwork(bot_name),
                   keyboard=_kb([[(t(M.BTN_MY_REQUESTS), cb("req", "mine", 0))]]))
 
 

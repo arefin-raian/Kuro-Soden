@@ -69,13 +69,49 @@ async def handoff_download_to_distribution(
         [InlineKeyboardButton("🧪 Open Distribution", callback_data=cb("senku", "tasks"))],
     ])
 
+    # Rotating artwork from this anime's own gallery — the handoff card carries
+    # the series' art, continuing the "every card for this anime shows its art"
+    # thread from the request receipt through the pipeline.
+    image = await _handoff_art(container, code, title)
+
     sent = 0
     for admin_id in admin_ids:
         try:
-            await notifier.send_message(
-                admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
-            )
+            if image is not None:
+                await notifier.send_photo(
+                    admin_id, image, caption=caption,
+                    parse_mode=ParseMode.HTML, reply_markup=kb,
+                )
+            else:
+                await notifier.send_message(
+                    admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
+                )
             sent += 1
         except Exception as exc:  # noqa: BLE001 - one blocked admin can't stop the rest
             log.warning("handoff.dm_failed", admin=admin_id, code=code, error=str(exc))
     log.info("handoff.sent", code=code, admins=len(admin_ids), delivered=sent)
+
+
+async def _handoff_art(container: Container, code: str, title: str) -> str | None:
+    """Resolve this anime's rotating artwork for the handoff card, or ``None``.
+
+    Pulls the request's persisted franchise (seeded backdrops) and asks the
+    per-anime pool for the next piece; best-effort, never raises.
+    """
+    try:
+        from nekofetch.services.request_service import RequestService
+        from nekofetch.ui.artwork import (
+            ensure_anime_art, key_for_franchise, next_anime_art,
+        )
+
+        req = await RequestService(container).get(code)
+        franchise = req.franchise_data or {}
+        art_title = franchise.get("title") or req.anime_title or title
+        key = key_for_franchise(franchise, title=art_title)
+        await ensure_anime_art(key, tmdb=container.tmdb, title=art_title,
+                               franchise=franchise)
+        art = next_anime_art(key)
+        return art if isinstance(art, str) else None
+    except Exception as exc:  # noqa: BLE001 — artwork is decorative
+        log.warning("handoff.art.failed", code=code, error=str(exc))
+        return None

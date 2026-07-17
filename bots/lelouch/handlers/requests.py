@@ -28,7 +28,14 @@ from nekofetch.domain.enums import DownloadScope, RequestStatus
 from nekofetch.localization.messages import M, t
 from nekofetch.ui.components import cb, lock_buttons
 from nekofetch.ui.progress import SPINNER, animate_until
-from nekofetch.ui.artwork import pick_artwork
+from nekofetch.ui.artwork import (
+    anime_art_key,
+    ensure_anime_art,
+    key_for_franchise,
+    next_anime_art,
+    pick_artwork,
+    seed_anime_art,
+)
 from nekofetch.ui.screens import (
     Screen,
     ask_title,
@@ -58,6 +65,27 @@ from kurosoden.shared.dedup import DedupService
 def _esc_q(text: str) -> str:
     """Escape a user-supplied query for safe inclusion in HTML captions."""
     return html.escape(text or "", quote=False)
+
+
+async def _seed_anime_art(container: Container, franchise: dict,
+                          search_title: str) -> None:
+    """Seed the per-anime artwork pool from this franchise's TMDB gallery.
+
+    Called once at franchise confirmation. Also persists the fetched URLs onto
+    ``franchise["backdrops"]`` so the SAME art can be re-seeded downstream (Levi,
+    Senku, Gojo) straight from the stored request — no extra TMDB calls needed.
+    """
+    key = key_for_franchise(franchise, title=search_title)
+    try:
+        urls = await container.tmdb.backdrops(search_title, limit=8)
+    except Exception:  # noqa: BLE001 — artwork is decorative
+        urls = []
+    # Fold in whatever single backdrop we already resolved for the confirm card.
+    single = franchise.get("_backdrop_url") or franchise.get("banner_url")
+    ordered = ([single] if single else []) + [u for u in urls if u != single]
+    if ordered:
+        franchise["backdrops"] = ordered
+        seed_anime_art(key, ordered)
 
 
 STATE_NAME = "req:await_name"
@@ -138,16 +166,18 @@ def register(client: Client, container: Container) -> None:
                 kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton("🤖 Open Distribution Bot",
                                          url=f"https://t.me/{result.bot_username}")]])
-            await message.reply(result.detail, parse_mode=ParseMode.HTML,
-                                reply_markup=kb)
-            # If it's in-progress, give extra context.
-            if result.source == "in_progress" and result.request_code:
-                await message.reply(
-                    f"📋 Request <code>{result.request_code}</code> is currently "
-                    f"<b>{result.current_stage}</b>.\n\n"
-                    f"You'll receive the link automatically when it's published!",
-                    parse_mode=ParseMode.HTML,
-                )
+
+            # ONE card, on that anime's own artwork. The dedup detail already
+            # carries the code + status for in-progress hits, so there is no
+            # second follow-up message anymore.
+            art_key = anime_art_key(title=result.title or query)
+            await ensure_anime_art(art_key, tmdb=container.tmdb,
+                                   title=result.title or query)
+            image = next_anime_art(art_key, fallback_bot="lelouch")
+            await send_screen(
+                client, message.chat.id,
+                Screen(caption=result.detail, image=image, keyboard=kb),
+            )
             return
 
         # ── 2. Delegate to NekoFetch's existing AniList search ───────────
@@ -283,6 +313,9 @@ def register(client: Client, container: Container) -> None:
             container, franchise_data, media.english or query
         )
         franchise_data["_backdrop_url"] = backdrop_path
+        # Seed this anime's artwork rotation — every downstream card (receipt,
+        # downloader wizard, admin pings) will pull different art from here.
+        await _seed_anime_art(container, franchise_data, media.english or query)
 
         await fsm.set(
             message.from_user.id,
@@ -330,6 +363,7 @@ def register(client: Client, container: Container) -> None:
         search_title = franchise_data.get("english") or franchise_data["title"]
         backdrop_path = await enrich_with_tmdb(container, franchise_data, search_title)
         franchise_data["_backdrop_url"] = backdrop_path
+        await _seed_anime_art(container, franchise_data, search_title)
 
         await fsm.set(
             q.from_user.id,
@@ -399,6 +433,12 @@ def register(client: Client, container: Container) -> None:
             "relations": franchise_data.get("relations", []),
             "genres": franchise_data.get("genres", []),
             "synonyms": franchise_data.get("synonyms", []),
+            # Artwork rotation — persisted so Levi/Senku/Gojo re-seed the same
+            # anime-specific gallery from the stored request, no re-fetch needed.
+            "backdrops": franchise_data.get("backdrops", []),
+            "_backdrop_url": franchise_data.get("_backdrop_url"),
+            "cover_url": franchise_data.get("cover_url"),
+            "banner_url": franchise_data.get("banner_url"),
         }
 
         try:
@@ -431,10 +471,14 @@ def register(client: Client, container: Container) -> None:
         # summarized franchise breakdown.
         from datetime import datetime, timezone
         requested_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        art_key = key_for_franchise(franchise_json, title=title)
+        await ensure_anime_art(art_key, tmdb=container.tmdb, title=title,
+                               franchise=franchise_json)
         screen = request_received(
             user_name, title, queue_pos=receipt.position,
             code=receipt.code, requester_id=user_id,
             requested_at=requested_at, franchise=franchise_json,
+            image=next_anime_art(art_key, fallback_bot="lelouch"),
         )
         await send_screen(client, card_msg.chat.id, screen, old_msg=card_msg)
 

@@ -72,6 +72,28 @@ def _esc(text: str) -> str:
     return _html.escape(text or "", quote=False)
 
 
+async def _anime_backdrop(container, req) -> str | None:
+    """Rotating artwork for the anime behind a request.
+
+    Reuses the per-anime pool seeded at request time (persisted on
+    ``franchise_data["backdrops"]``), so every downloader wizard card shows a
+    DIFFERENT piece of that anime's own art. Falls back to a one-off TMDB fetch
+    (and seeds the pool) when the request predates artwork persistence.
+    """
+    from nekofetch.ui.artwork import (
+        ensure_anime_art, key_for_franchise, next_anime_art,
+    )
+    franchise = req.franchise_data or {}
+    title = franchise.get("title") or req.anime_title
+    key = key_for_franchise(franchise, title=title)
+    await ensure_anime_art(key, tmdb=container.tmdb, title=title,
+                           franchise=franchise)
+    art = next_anime_art(key)
+    # next_anime_art returns a local Path when the pool is empty; screens want a
+    # URL here (they already fall back to local art themselves), so coerce.
+    return art if isinstance(art, str) else None
+
+
 # ── Manual-upload DM handoff helpers ──────────────────────────────────────────
 # The manual upload wizard is configured in the control-center channel, but the
 # actual file collection happens in a private chat with the bot (so large uploads
@@ -580,14 +602,8 @@ def register(client: Client, container: Container) -> None:
                            "AniZone uses different titles and may need manual slug mapping.",
                            kb)
                 return
-            # Try to get a backdrop for the screens.
-            backdrop_url: str | None = None
-            try:
-                tmdb_result = await container.tmdb.search(title)
-                if tmdb_result:
-                    backdrop_url = tmdb_result.backdrop_url
-            except Exception:
-                pass
+            # Rotating artwork from this anime's own gallery.
+            backdrop_url = await _anime_backdrop(container, req)
             # Store mapping data in FSM
             await fsm.set(q.from_user.id, STATE_FRANCHISE_MAP,
                           code=code, source="website",
@@ -793,13 +809,7 @@ def register(client: Client, container: Container) -> None:
             )
             mapping = ff.build_mapping(fr, req.anime_doc_id or "",
                                        franchise_entries=franchise_entries)
-            backdrop_url: str | None = None
-            try:
-                tmdb_result = await container.tmdb.search(title)
-                if tmdb_result:
-                    backdrop_url = tmdb_result.backdrop_url
-            except Exception:
-                pass
+            backdrop_url = await _anime_backdrop(container, req)
             await fsm.set(q.from_user.id, STATE_FRANCHISE_MAP,
                           code=code, source="telegram",
                           mapping={
@@ -827,15 +837,9 @@ def register(client: Client, container: Container) -> None:
                 await q.answer(L(M.ERR_GENERIC), show_alert=True)
                 return
             fr = req.franchise_data or {}
-            # Fetch TMDB backdrop so every wizard screen shows the series artwork.
-            backdrop_url: str | None = None
-            try:
-                search_title = fr.get("english") or fr.get("title") or req.anime_title
-                tmdb_result = await container.tmdb.search(search_title)
-                if tmdb_result:
-                    backdrop_url = tmdb_result.backdrop("w1280")
-            except Exception:
-                pass
+            # Rotating artwork from this anime's own gallery — every wizard
+            # screen shows a different piece of the series' art.
+            backdrop_url = await _anime_backdrop(container, req)
             components = _extract_components(fr, req.anime_title)
             if len(components) == 1 and components[0]["type"] == "season":
                 # Single season, no extras — skip component picker but still seed
@@ -1662,15 +1666,7 @@ def register(client: Client, container: Container) -> None:
                 fr = req.franchise_data or {}
                 ff = FranchiseFlowService(container)
                 mapping = ff.build_mapping(fr, req.anime_doc_id or "")
-                backdrop_url = None
-                try:
-                    tmdb_result = await container.tmdb.search(
-                        fr.get("title") or req.anime_title
-                    )
-                    if tmdb_result:
-                        backdrop_url = tmdb_result.backdrop_url
-                except Exception:
-                    pass
+                backdrop_url = await _anime_backdrop(container, req)
                 screen = franchise_map_selection(mapping, backdrop_url=backdrop_url)
                 from nekofetch.ui.screens import send_screen
                 await send_screen(client, q.message.chat.id, screen, old_msg=q.message)
