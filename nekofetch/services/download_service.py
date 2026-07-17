@@ -1086,6 +1086,19 @@ class DownloadWorker:
                 user_id, title, code, needs_approval=needs_approval,
             )
 
+        # ── Pipeline handoff hook (optional) ────────────────────────────────
+        # In multi-bot deployments (Kuro Sōden) the container carries an async
+        # ``on_download_complete(code, title)`` hook. The download stage owns
+        # nothing past this point, so firing the hook here hands the request to
+        # the next stage (distribution). Standalone NekoFetch leaves it unset.
+        hook = getattr(self._c, "on_download_complete", None)
+        if hook is not None and code:
+            try:
+                await hook(code, title)
+            except Exception as exc:  # noqa: BLE001 - handoff must never fail the job
+                log.warning("download.handoff_hook.failed", job_id=job_id,
+                            code=code, error=str(exc))
+
     async def _finalize_complete(self, job_id: int) -> None:
         """Mark the job COMPLETED only after download + processing + DB upload — and
         clear its live progress so it leaves ACTIVE TASKS."""

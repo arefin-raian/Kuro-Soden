@@ -48,6 +48,15 @@ class PipelineManager:
 
         self._c.pipeline_manager = self  # type: ignore[attr-defined]
 
+        # Wire the download → distribution handoff. NekoFetch's download worker
+        # fires this hook when a job finishes; we hand the request to Senku.
+        from kurosoden.shared.handoff import handoff_download_to_distribution
+
+        async def _on_download_complete(code: str, title: str) -> None:
+            await handoff_download_to_distribution(self._c, code, title)
+
+        self._c.on_download_complete = _on_download_complete  # type: ignore[attr-defined]
+
         # ── 1. Lelouch — Request Bot ──────────────────────────────────────────
         await self._start_bot("lelouch", "REQUEST_BOT_TOKEN")
 

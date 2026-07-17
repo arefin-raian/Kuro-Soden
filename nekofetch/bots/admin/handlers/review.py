@@ -512,10 +512,12 @@ def register(client: Client, container: Container) -> None:
         title = franchise.get("title") or req.anime_title
 
         if chosen_source == "telegram":
+            # Telegram is MANUAL-ONLY for the Kuro Sōden bots — there is no
+            # automatic Telegram source. Skip the auto/manual chooser and go
+            # straight to the manual intake flow (admin drops + names files).
             await q.answer()
             kb = keyboard(
-                [(L(M.ADMIN_BTN_AUTOMATIC), cb("staff", "rtgmode", code, "auto")),
-                 (L(M.ADMIN_BTN_MANUAL), cb("staff", "rtgmode", code, "manual"))],
+                [(L(M.ADMIN_BTN_MANUAL), cb("staff", "rtgmode", code, "manual"))],
                 [(L(M.BTN_BACK), cb("staff", "rdetail", code))],
             )
             await show(client, q.message, L(M.ADMIN_TG_CHOOSE), kb)
