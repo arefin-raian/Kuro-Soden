@@ -18,6 +18,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import BotCommand, Message
 
+from nekofetch.core.constants import BULLET
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
 from kurosoden.shared.ui_helpers import reply_with_screen
@@ -111,44 +112,37 @@ def build_gojo(container: Container, token: str) -> Client:
                       "schedule": "📅 Schedule Publication"}
             body_map = {
                 "tasks": [
-                    "<b>/tasks</b> — what is waiting on you to publish.",
-                    "<b>What you see here:</b>",
-                    "  🔹 <b>Code</b>  ·  <b>Anime</b>  ·  <b>Stage</b>",
-                    "<blockquote>Distribution finishes before this stage, so everything here has a content pack ready.</blockquote>",
-                    "💡 <b>Example:</b> Tap <b>📋 Tasks</b> — no command needed.",
+                    "Everything waiting on you to publish, newest first.",
+                    "",
+                    f"  {BULLET} Each card shows the anime, its code, and where it is in the pipeline.",
+                    f"  {BULLET} Tap a task to review and publish it.",
+                    "<blockquote>Everything here already has a finished content pack.</blockquote>",
                 ],
                 "publish": [
-                    "<b>/publish REQ-XXXX</b> — reviews and publishes.",
-                    "<b>Steps:</b>",
-                    "  1. Tap <b>🔮 Publish</b> here",
-                    "  2. Send <code>/publish REQ-XXXX</code>",
-                    "  3. Review the caption (Markdown/HTML)",
-                    "  4. Tap <b>🚀 Publish Now</b> or <b>✏️ Edit</b>",
-                    "<blockquote>The publisher commits to the main channel and updates the index. You can edit until you publish.</blockquote>",
-                    "💡 <b>Example:</b> <code>/publish REQ-12AB</code>",
+                    "Review a finished title and send it to the main channel.",
+                    "",
+                    f"  {BULLET} Preview the caption before anything goes live.",
+                    f"  {BULLET} Publish now or tweak the text first — your call.",
+                    "<blockquote>Publishing commits to the main channel and updates the index.</blockquote>",
                 ],
                 "recover": [
-                    "<b>/recover REQ-XXXX</b> — recovers a banned channel.",
-                    "<b>What it does:</b>",
-                    "  🔹 Detects the banned distribution channel",
-                    "  🔹 Recreates a replacement under the bot factory",
-                    "  🔹 Updates <b>every</b> button in main + index channels",
-                    "<blockquote>Recovery is automatic — you don't need to rebuild the channel yourself.</blockquote>",
-                    "💡 <b>Example:</b> <code>/recover REQ-12AB</code>",
+                    "Rebuild a distribution channel that got banned.",
+                    "",
+                    f"  {BULLET} The banned channel is detected and replaced automatically.",
+                    f"  {BULLET} Every button in the main and index channels is repointed.",
+                    "<blockquote>You don't rebuild anything by hand — open the affected task.</blockquote>",
                 ],
                 "schedule": [
-                    "<b>/schedule REQ-XXXX YYYY-MM-DD HH:MM</b>",
-                    "<b>Steps:</b>",
-                    "  1. Pick a task and a time (UTC)",
-                    "  2. Send the schedule command",
-                    "  3. The publisher takes over at the target time",
-                    "<blockquote>Scheduling is opt-in — leave it off for publishing immediately.</blockquote>",
-                    "💡 <b>Example:</b> <code>/schedule REQ-12AB 2026-08-01 18:00</code>",
+                    "Line a title up to publish at a set time.",
+                    "",
+                    f"  {BULLET} Pick a task and a time, and the publisher takes over then.",
+                    f"  {BULLET} Leave it off to publish immediately instead.",
+                    "<blockquote>Scheduling is opt-in — open a task to set a time.</blockquote>",
                 ],
             }
             caption, keyboard = tool_screen(
                 bot, title=titles[action],
-                kicker="Tap a button from /start — no typing needed.",
+                kicker="Everything here runs on taps — no commands to memorize.",
                 lines=body_map[action],
                 back="home",
             )

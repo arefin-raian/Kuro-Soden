@@ -15,6 +15,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import BotCommand, Message
 
+from nekofetch.core.constants import BULLET
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
 from kurosoden.shared.ui_helpers import reply_with_screen
@@ -108,42 +109,39 @@ def build_levi(container: Container, token: str) -> Client:
                       "header": "📝 Generate Header"}
             body_map = {
                 "tasks": [
-                    "<b>/tasks</b> — exact command-line form of this panel.",
-                    "<b>What you see here:</b>",
-                    "  🔹 <b>Code</b>  ·  <b>Anime</b>  ·  <b>Stage</b>",
-                    "  🔹 <i>Stage icons: ⏳ queued, ⬇️ downloading, ⚙️ processing</i>",
-                    "<blockquote>Tasks are assigned by the request bot. The queue auto-picks the lightest worker.</blockquote>",
-                    "💡 <b>Example:</b> Just tap <b>📋 Tasks</b> — no command needed.",
+                    "Everything assigned to you, newest first.",
+                    "",
+                    f"  {BULLET} Each card shows the anime, its code, and where it is in the pipeline.",
+                    f"  {BULLET} Tap a task to open it and pick a source.",
+                    "<blockquote>Requests are routed here automatically — the queue hands each one to whoever's free.</blockquote>",
                 ],
                 "sources": [
-                    "<b>/sources</b> — exact command-line form.",
-                    "<b>What you see here:</b>",
-                    "  🔹 Browse available download providers",
-                    "  🔹 Tap one to assign it to the current task",
-                    "<blockquote>Source selection is manual — you decide which provider to use for each anime.</blockquote>",
-                    "💡 <b>Example:</b> <code>/sources</code>",
+                    "Where the episodes come from. You choose — nothing is picked for you.",
+                    "",
+                    f"  {BULLET} <b>Website</b> — full episode reports, sub &amp; dub coverage compared side by side.",
+                    f"  {BULLET} <b>Torrent</b> — seeder-ranked, dual-audio first; may need re-encoding.",
+                    f"  {BULLET} <b>Telegram (manual)</b> — you drop in the files and name them yourself.",
+                    "<blockquote>Open a task to see a live report before you commit to one.</blockquote>",
                 ],
                 "assign": [
-                    "<b>/assign REQ-XXXX source</b> — assigns a source to a task.",
-                    "<b>Steps:</b>",
-                    "  1. Pick a task from <b>📋 Tasks</b>",
-                    "  2. Pick a source from <b>🌐 Sources</b>",
-                    "  3. Use <code>/assign REQ-XXXX source_name</code>",
-                    "<blockquote>Once assigned, the downloader worker picks it up automatically.</blockquote>",
-                    "💡 <b>Example:</b> <code>/assign REQ-12AB anikoto</code>",
+                    "Point a task at a source and start the download.",
+                    "",
+                    f"  {BULLET} Open a task from <b>Tasks</b>.",
+                    f"  {BULLET} Read the source report, then tap the source you want.",
+                    f"  {BULLET} Pick which franchise entries to pull, and it queues on its own.",
+                    "<blockquote>No codes to type — the whole flow is buttons.</blockquote>",
                 ],
                 "header": [
-                    "<b>/header REQ-XXXX</b> — generates a header card.",
-                    "<b>What it does:</b>",
-                    "  🔹 Renders the main-channel header image",
-                    "  🔹 Reads the franchise metadata you uploaded",
-                    "<blockquote>You review the header, then approve or edit the Markdown/HTML before publishing.</blockquote>",
-                    "💡 <b>Example:</b> <code>/header REQ-12AB</code>",
+                    "The main-channel header card for a finished title.",
+                    "",
+                    f"  {BULLET} Built from the franchise art and metadata already on file.",
+                    f"  {BULLET} Preview it, then approve or tweak before it publishes.",
+                    "<blockquote>Open a completed task to generate its header.</blockquote>",
                 ],
             }
             caption, keyboard = tool_screen(
                 bot, title=titles[action],
-                kicker="Tap a button from /start — no typing needed.",
+                kicker="Everything here runs on taps — no commands to memorize.",
                 lines=body_map[action],
                 back="home",
             )

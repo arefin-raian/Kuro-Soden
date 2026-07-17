@@ -16,6 +16,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import BotCommand, Message
 
+from nekofetch.core.constants import BULLET
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
 from kurosoden.shared.ui_helpers import reply_with_screen
@@ -104,33 +105,30 @@ def build_senku(container: Container, token: str) -> Client:
                       "generate": "🧪 Generate Channel Content"}
             body_map = {
                 "tasks": [
-                    "<b>/tasks</b> — line up everything waiting on you.",
-                    "<b>What you see here:</b>",
-                    "  🔹 <b>Code</b>  ·  <b>Anime</b>  ·  <b>Stage</b>",
-                    "<blockquote>Each card links to the per-title content you need to generate.</blockquote>",
-                    "💡 <b>Example:</b> Tap <b>📋 Tasks</b> — no command needed.",
+                    "Everything waiting on you, newest first.",
+                    "",
+                    f"  {BULLET} Each card shows the anime, its code, and where it is in the pipeline.",
+                    f"  {BULLET} Tap a task to open it and build its content.",
+                    "<blockquote>Requests reach you automatically once downloading is done.</blockquote>",
                 ],
                 "create": [
-                    "<b>/create REQ-XXXX</b> — creates the distribution channel.",
-                    "<b>Steps:</b>",
-                    "  1. Confirm the franchise with <code>/confirm</code>",
-                    "  2. Bot creates the channel + profile picture",
-                    "  3. You generate the content pack",
-                    "<blockquote>The channel name follows your branding template — override per-title if needed.</blockquote>",
-                    "💡 <b>Example:</b> <code>/create REQ-12AB</code>",
+                    "Spin up the distribution channel for a title.",
+                    "",
+                    f"  {BULLET} The channel and its profile picture are built for you.",
+                    f"  {BULLET} Naming follows your branding template — override per-title if you want.",
+                    "<blockquote>Open a task to create its channel — no codes to type.</blockquote>",
                 ],
                 "generate": [
-                    "<b>/generate REQ-XXXX</b> — runs the content pack.",
-                    "<b>What it generates:</b>",
-                    "  🔹 Info card  🔹 Season separators  🔹 Watch guide",
-                    "  🔹 Footer  🔹 Stickers",
-                    "<blockquote>Each artifact is editable — review and approve before the publisher locks it.</blockquote>",
-                    "💡 <b>Example:</b> <code>/generate REQ-12AB</code>",
+                    "The full content pack for a channel.",
+                    "",
+                    f"  {BULLET} Info card, season separators, watch guide, footer, stickers.",
+                    f"  {BULLET} Every piece is editable — review and approve before it locks.",
+                    "<blockquote>Open a task to generate its pack.</blockquote>",
                 ],
             }
             caption, keyboard = tool_screen(
                 bot, title=titles[action],
-                kicker="Tap a button from /start — no typing needed.",
+                kicker="Everything here runs on taps — no commands to memorize.",
                 lines=body_map[action],
                 back="home",
             )
