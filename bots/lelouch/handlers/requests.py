@@ -426,8 +426,16 @@ def register(client: Client, container: Container) -> None:
 
         # ── Show the requester their accepted screen immediately ──────────
         # (Assignment + admin notification happen after; the user never waits
-        # on them.) The card image swaps to a fresh recurring artwork.
-        screen = request_received(user_name, title, queue_pos=receipt.position)
+        # on them.) The card image swaps to a fresh recurring artwork. The
+        # receipt now carries the full detail: code, who + id, when, and a
+        # summarized franchise breakdown.
+        from datetime import datetime, timezone
+        requested_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        screen = request_received(
+            user_name, title, queue_pos=receipt.position,
+            code=receipt.code, requester_id=user_id,
+            requested_at=requested_at, franchise=franchise_json,
+        )
         await send_screen(client, card_msg.chat.id, screen, old_msg=card_msg)
 
         # ── Best-effort DB assignment (records who owns the download stage) ──

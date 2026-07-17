@@ -382,7 +382,13 @@ def register(client: Client, container: Container) -> None:
         # Every request now flows through staff source-assignment (the control-center
         # request card). We never auto-queue here — a franchise request carries the
         # "anilist" discovery tag, which is not a downloadable source on its own.
-        screen = request_received(user_name, title, queue_pos=receipt.position)
+        from datetime import datetime, timezone
+        requested_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        screen = request_received(
+            user_name, title, queue_pos=receipt.position,
+            code=receipt.code, requester_id=user_id,
+            requested_at=requested_at, franchise=franchise_json,
+        )
         await send_screen(client, card_msg.chat.id, screen, old_msg=card_msg)
 
     # ──────────────────────────────────────────────────────────────────────────

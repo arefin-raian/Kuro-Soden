@@ -124,6 +124,9 @@ class M:
     # ── request received ──
     REQ_RECEIVED = "req_received"
     REQ_RECEIVED_BODY = "req_received_body"
+    F_REQUESTED_BY = "field_requested_by"
+    F_REQUESTED_AT = "field_requested_at"
+    F_BREAKDOWN = "field_breakdown"
 
     # ── lifecycle steps (log card) ──
     LC_REQUESTED = "lc_requested"

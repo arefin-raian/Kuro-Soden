@@ -263,11 +263,57 @@ def retry_title(*, bot_name: str | None = None) -> Screen:
                   keyboard=_kb([[(t(M.BTN_BACK), cb("home"))]]))
 
 
+def _franchise_breakdown(franchise: dict | None) -> str | None:
+    """A compact ``2 seasons · 1 movie · 3 OVAs``-style line, or ``None``.
+
+    Only the parts that actually exist are shown — a single-cour TV request
+    reads ``single entry`` rather than a wall of zeroes.
+    """
+    if not franchise:
+        return None
+    parts: list[tuple[int, str]] = [
+        (int(franchise.get("franchise_seasons") or 0), "season"),
+        (int(franchise.get("franchise_movies") or 0), "movie"),
+        (int(franchise.get("franchise_ovas") or 0), "OVA"),
+        (int(franchise.get("franchise_onas") or 0), "ONA"),
+        (int(franchise.get("franchise_specials") or 0), "special"),
+    ]
+    bits = [f"{n} {word}{'s' if n != 1 else ''}" for n, word in parts if n]
+    return "  ·  ".join(bits) if bits else None
+
+
 def request_received(user_name: str, title: str, queue_pos: int | None = None,
-                     *, bot_name: str | None = None) -> Screen:
+                     *, bot_name: str | None = None,
+                     code: str | None = None, requester_id: int | None = None,
+                     requested_at: str | None = None,
+                     franchise: dict | None = None) -> Screen:
+    """The requester's receipt card — richer when the extra fields are supplied.
+
+    ``code`` / ``requester_id`` / ``requested_at`` / ``franchise`` are optional so
+    the two existing callers keep working; when present the card shows the request
+    code, who asked (name + id), when, a summarized franchise breakdown, episode
+    count, and queue position.
+    """
     rows = [t(M.REQ_RECEIVED, name=_esc(user_name) or "there"), "",
-            _field(M.F_ANIME, title),
-            _field(M.F_STATUS, t(M.VALUE_QUEUED))]
+            _field(M.F_ANIME, title)]
+    if code:
+        rows.append(_field(M.F_REQUEST, code))
+
+    # Who + when — the "by which user, their name and ID, when they did it" detail.
+    if requester_id is not None:
+        rows.append(f"<b>{t(M.F_REQUESTED_BY)}</b> : {_esc(user_name) or 'user'} "
+                    f"(<code>{requester_id}</code>)")
+    if requested_at:
+        rows.append(_field(M.F_REQUESTED_AT, requested_at))
+
+    # Summarized franchise report — episodes + the season/movie/OVA breakdown.
+    breakdown = _franchise_breakdown(franchise)
+    if breakdown:
+        rows.append(_field(M.F_BREAKDOWN, breakdown))
+    if franchise and franchise.get("franchise_episodes"):
+        rows.append(_field(M.F_EPISODES, str(franchise["franchise_episodes"])))
+
+    rows.append(_field(M.F_STATUS, t(M.VALUE_QUEUED)))
     if queue_pos is not None:
         rows.append(_field(M.F_QUEUE, f"#{queue_pos}"))
     rows += ["", t(M.REQ_RECEIVED_BODY)]
