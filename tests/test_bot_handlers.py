@@ -205,104 +205,44 @@ class TestHasPendingRequest:
 # Levi — Downloader Bot
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestLeviFSMStates:
-    """Levi's FSM states are correct."""
+class TestLeviTaskList:
+    """Levi's task list is a thin entry point into the shared download flow.
 
-    def test_state_source(self):
-        from kurosoden.bots.levi.handlers.tasks import STATE_SOURCE
-        assert STATE_SOURCE == "levi:await_source"
-
-    def test_state_thumbnail(self):
-        from kurosoden.bots.levi.handlers.tasks import STATE_THUMBNAIL
-        assert STATE_THUMBNAIL == "levi:await_thumbnail"
-
-    def test_state_header(self):
-        from kurosoden.bots.levi.handlers.tasks import STATE_HEADER
-        assert STATE_HEADER == "levi:await_header_edit"
-
-
-class TestLeviAssignParsing:
-    """/assign command parsing edge cases."""
-
-    def test_valid_assign_parsing(self):
-        text = "/assign REQ-1234 anikoto"
-        parts = text.split(maxsplit=2)
-        assert len(parts) == 3
-        assert parts[1] == "REQ-1234"
-        assert parts[2] == "anikoto"
-
-    def test_assign_with_extra_spaces(self):
-        text = "/assign   REQ-5678    anizone  "
-        parts = text.strip().split(maxsplit=2)
-        assert parts[1].strip() == "REQ-5678"
-        assert parts[2].strip() == "anizone"
-
-    def test_assign_missing_source(self):
-        text = "/assign REQ-9999"
-        parts = text.split(maxsplit=2)
-        assert len(parts) < 3
-
-    def test_assign_missing_request_code(self):
-        text = "/assign"
-        parts = text.split(maxsplit=2)
-        assert len(parts) < 3
-
-    def test_assign_extra_args_ignored(self):
-        text = "/assign REQ-0001 source_name extra stuff here"
-        parts = text.split(maxsplit=2)
-        source = parts[2]
-        assert "extra" in source  # extra args are included in source_name
-
-
-class TestLeviSourceCallback:
-    """Source selection callback parsing."""
-
-    def test_callback_pattern(self):
-        pattern = re.compile(r"^levi\|source\|")
-        assert pattern.match("levi|source|REQ-0001|anikoto")
-        assert not pattern.match("levi|source")
-
-    def test_callback_split(self):
-        data = "levi|source|REQ-0001|anikoto"
-        _, _, request_code, source_name = data.split("|", 3)
-        assert request_code == "REQ-0001"
-        assert source_name == "anikoto"
-
-
-class TestLeviHeaderTemplate:
-    """Header template formatting logic."""
-
-    def test_template_variables(self):
-        template = "<b>{title} — {content_type} {season} [{resolution}] [{language}]</b>"
-        result = template.format(
-            title="Attack on Titan", season="1", resolution="1080p",
-            language="Sub & Dub", content_type="TV", episode_from="1",
-            episode_to="25", group="AniKoto",
-        )
-        assert "Attack on Titan" in result
-        assert "1080p" in result
-        assert "Sub &amp; Dub" not in result  # Not HTML-escaped by template
-
-    def test_template_missing_key_raises(self):
-        template = "<b>{title}</b>"
-        with pytest.raises(KeyError):
-            template.format(wrong_key="value")
-
-
-class TestLeviHandlerImports:
-    """All Levi handler imports should work."""
+    The old CLI (``/assign``, ``/sources``, ``/header`` + per-bot FSM states and
+    the ``_assign_source_and_queue`` / ``_generate_header`` clones) was removed:
+    Levi now mounts NekoFetch's admin ``review`` flow and its task cards route
+    into it via ``staff|rdetail|<code>``. These tests pin the new contract."""
 
     def test_register_callable(self):
         from kurosoden.bots.levi.handlers.tasks import register
         assert callable(register)
 
-    def test_assign_source_and_queue_callable(self):
-        from kurosoden.bots.levi.handlers.tasks import _assign_source_and_queue
-        assert callable(_assign_source_and_queue)
+    def test_register_all_mounts_review_flow(self):
+        # register_all wires the shared review flow onto Levi's client so the
+        # source-pick → report → franchise → queue machinery is live.
+        import inspect
+        from kurosoden.bots.levi.handlers import register_all
+        src = inspect.getsource(register_all)
+        assert "review" in src
 
-    def test_generate_header_callable(self):
-        from kurosoden.bots.levi.handlers.tasks import _generate_header
-        assert callable(_generate_header)
+    def test_cli_clone_symbols_are_gone(self):
+        # The command-line reimplementation must NOT come back — its removal is
+        # the whole point of routing through the shared flow.
+        from kurosoden.bots.levi.handlers import tasks as levi_tasks
+        for dead in ("_assign_source_and_queue", "_generate_header",
+                     "STATE_HEADER", "STATE_SOURCE"):
+            assert not hasattr(levi_tasks, dead), f"{dead} should be gone"
+
+
+class TestLeviRdetailRouting:
+    """Task cards open the shared flow with a staff|rdetail callback."""
+
+    def test_rdetail_callback_shape(self):
+        data = "staff|rdetail|REQ-0001"
+        parts = data.split("|", 2)
+        assert parts[0] == "staff"
+        assert parts[1] == "rdetail"
+        assert parts[2] == "REQ-0001"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

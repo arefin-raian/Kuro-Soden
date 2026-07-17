@@ -18,14 +18,29 @@ from nekofetch.core.container import Container
 
 
 def register_all(client: Client, container: Container) -> None:
-    """Wire all Levi handlers — reuses NekoFetch's download infrastructure."""
+    """Wire all Levi handlers — reuses NekoFetch's download infrastructure.
+
+    The real source-pick → website-report → torrent-picker → franchise-map →
+    queue flow lives in NekoFetch's admin ``review`` handler. That admin bot is
+    never started in the Kuro Sōden pipeline, so the flow would otherwise be dead
+    code — we mount it directly onto Levi (the downloader stage that owns source
+    selection) and route Levi's task cards into it via ``staff|rdetail|<code>``.
+    Its callbacks use ``staff|`` / ``franchise|`` / ``anizone|`` prefixes and its
+    message handlers use explicit ``group=`` slots, so nothing collides with
+    Levi's own ``levi|`` menu or default-group photo handler.
+    """
 
     # ── Auth middleware ────────────────────────────────────────────────────
     from nekofetch.bots.middleware import install_auth_middleware
 
     install_auth_middleware(client, container)
 
-    # ── Levi task handlers (source selection, download queuing) ────────────
+    # ── The full download/source machinery (mounted from admin.review) ─────
+    from nekofetch.bots.admin.handlers import review
+
+    review.register(client, container)
+
+    # ── Levi task handlers (task list → routes into the review flow) ───────
     from kurosoden.bots.levi.handlers.tasks import register as register_tasks
 
     register_tasks(client, container)

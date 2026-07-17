@@ -23,10 +23,7 @@ from nekofetch.ui.artwork import pick_artwork
 
 LEVI_COMMANDS = [
     BotCommand("start", "View your assigned download tasks"),
-    BotCommand("tasks", "List active and pending tasks"),
-    BotCommand("assign", "Assign source: /assign REQ-XXXX source_name"),
-    BotCommand("sources", "Browse available download sources"),
-    BotCommand("header", "Generate header: /header REQ-XXXX"),
+    BotCommand("tasks", "Open your download tasks and pick a source"),
     BotCommand("settings", "Configure the downloader bot"),
     BotCommand("help", "How the downloader works"),
 ]
@@ -89,11 +86,9 @@ def build_levi(container: Container, token: str) -> Client:
                 "• Upload thumbnails and generate headers"
             )
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📋 Tasks", callback_data=cb(bot, "tasks")),
-                 InlineKeyboardButton("🌐 Sources", callback_data=cb(bot, "sources"))],
-                [InlineKeyboardButton("🎯 Assign", callback_data=cb(bot, "assign")),
-                 InlineKeyboardButton("📝 Header", callback_data=cb(bot, "header"))],
-                [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
+                [InlineKeyboardButton("📋 Tasks", callback_data=cb(bot, "tasks"))],
+                [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings")),
+                 InlineKeyboardButton("❓ Help", callback_data=cb(bot, "help"))],
             ])
             await send_screen(client, q.message.chat.id,
                               Screen(caption=caption, image=pick_artwork(bot),
@@ -102,47 +97,21 @@ def build_levi(container: Container, token: str) -> Client:
             return
 
         # ¬¬ Tool panels ¬¬
-        if action in ("tasks", "sources", "assign", "header"):
-            titles = {"tasks": "📋 Your Tasks",
-                      "sources": "🌐 Source Browser",
-                      "assign": "🎯 Assign a Source",
-                      "header": "📝 Generate Header"}
-            body_map = {
-                "tasks": [
-                    "Everything assigned to you, newest first.",
-                    "",
-                    f"  {BULLET} Each card shows the anime, its code, and where it is in the pipeline.",
-                    f"  {BULLET} Tap a task to open it and pick a source.",
-                    "<blockquote>Requests are routed here automatically — the queue hands each one to whoever's free.</blockquote>",
-                ],
-                "sources": [
-                    "Where the episodes come from. You choose — nothing is picked for you.",
+        # NOTE: "tasks" is handled by handlers/tasks.py (levi|tasks) — it renders
+        # the live assigned-task list that routes into the shared download flow.
+        # Only the static "how sourcing works" panel lives here now.
+        if action == "sources":
+            caption, keyboard = tool_screen(
+                bot, title="🌐 How Sourcing Works",
+                kicker="Open a task and you'll choose one of these per title.",
+                lines=[
+                    "You pick where every title comes from — nothing is auto-chosen.",
                     "",
                     f"  {BULLET} <b>Website</b> — full episode reports, sub &amp; dub coverage compared side by side.",
                     f"  {BULLET} <b>Torrent</b> — seeder-ranked, dual-audio first; may need re-encoding.",
                     f"  {BULLET} <b>Telegram (manual)</b> — you drop in the files and name them yourself.",
-                    "<blockquote>Open a task to see a live report before you commit to one.</blockquote>",
+                    "<blockquote>Open a task from <b>📋 Tasks</b> to see a live report before you commit.</blockquote>",
                 ],
-                "assign": [
-                    "Point a task at a source and start the download.",
-                    "",
-                    f"  {BULLET} Open a task from <b>Tasks</b>.",
-                    f"  {BULLET} Read the source report, then tap the source you want.",
-                    f"  {BULLET} Pick which franchise entries to pull, and it queues on its own.",
-                    "<blockquote>No codes to type — the whole flow is buttons.</blockquote>",
-                ],
-                "header": [
-                    "The main-channel header card for a finished title.",
-                    "",
-                    f"  {BULLET} Built from the franchise art and metadata already on file.",
-                    f"  {BULLET} Preview it, then approve or tweak before it publishes.",
-                    "<blockquote>Open a completed task to generate its header.</blockquote>",
-                ],
-            }
-            caption, keyboard = tool_screen(
-                bot, title=titles[action],
-                kicker="Everything here runs on taps — no commands to memorize.",
-                lines=body_map[action],
                 back="home",
             )
             await send_screen(client, q.message.chat.id,
@@ -196,12 +165,15 @@ def build_levi(container: Container, token: str) -> Client:
                 lines=[
                     "I run the <b>download</b> stage of the pipeline.",
                     "",
-                    "<b>📋 Tasks</b> — jobs assigned to you, with live stage icons.",
-                    "<b>🌐 Sources</b> — browse providers and pick one per title.",
-                    "<b>🎯 Assign</b> — bind a source to a task, then the worker runs it.",
-                    "<b>📝 Header</b> — render the main-channel header from metadata.",
+                    "<b>📋 Tasks</b> — jobs assigned to you. Tap one to open it.",
                     "",
-                    "Everything here is a button — no command memorising needed.",
+                    "Opening a task walks you through everything:",
+                    f"  {BULLET} pick a source (Website / Torrent / Telegram-manual),",
+                    f"  {BULLET} read the coverage report or seeders list,",
+                    f"  {BULLET} choose which franchise entries to pull.",
+                    "",
+                    "It queues on its own and the worker downloads + processes it.",
+                    "Everything is a button — no commands to memorise.",
                 ],
                 back="home",
             )
@@ -224,10 +196,8 @@ def build_levi(container: Container, token: str) -> Client:
         from kurosoden.shared.ui_helpers import send_rich_welcome
 
         rows = [
-            [("📋 Tasks", cb("levi", "tasks")),
-             ("🌐 Sources", cb("levi", "sources"))],
-            [("🎯 Assign", cb("levi", "assign")),
-             ("📝 Header", cb("levi", "header"))],
+            [("📋 Tasks", cb("levi", "tasks"))],
+            [("🌐 How Sourcing Works", cb("levi", "sources"))],
             [("⚙️ Settings", cb("levi", "settings")),
              ("❓ Help", cb("levi", "help"))],
         ]
@@ -269,14 +239,12 @@ def build_levi(container: Container, token: str) -> Client:
         caption = (
             "<b>⚔️ Levi — Downloader Bot</b>\n\n"
             "<b>How it works:</b>\n"
-            "1. View your tasks with /tasks\n"
-            "2. Pick a source from /sources\n"
-            "3. Assign with /assign REQ-XXXX source_name\n"
-            "4. I queue it — NekoFetch's DownloadWorker handles the rest\n"
-            "5. Upload a 1:1 square thumbnail\n"
-            "6. Generate the header with /header REQ-XXXX\n\n"
-            "<b>The download is automatic after you assign a source — "
-            "you don't need to do anything else!</b>"
+            "1. Open your tasks with /tasks\n"
+            "2. Tap a task to open it\n"
+            "3. Pick a source — Website, Torrent, or Telegram-manual\n"
+            "4. Read the coverage report, then choose franchise entries\n"
+            "5. It queues automatically — the worker downloads + processes it\n\n"
+            "<b>The whole flow is buttons — nothing to type after /tasks.</b>"
         )
         from nekofetch.ui.components import cb, keyboard
         await reply_with_screen(

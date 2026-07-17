@@ -166,13 +166,15 @@ class TestBotBuilderImports:
         assert "settings" in cmds
 
     def test_levi_commands_have_expected(self):
+        # The CLI commands (assign/sources/header) were removed when Levi moved to
+        # the button-driven shared download flow — /tasks is the single entry point.
         from kurosoden.bots.levi.app import LEVI_COMMANDS
         cmds = {c.command for c in LEVI_COMMANDS}
         assert "start" in cmds
         assert "tasks" in cmds
-        assert "assign" in cmds
-        assert "sources" in cmds
-        assert "header" in cmds
+        assert "settings" in cmds
+        assert "help" in cmds
+        assert "assign" not in cmds
 
     def test_senku_commands_have_expected(self):
         from kurosoden.bots.senku.app import SENKU_COMMANDS
