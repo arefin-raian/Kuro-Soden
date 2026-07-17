@@ -129,7 +129,7 @@ class TmdbClient:
         try:
             d = await self._get(f"/{media_type}/{tmdb_id}", language="en-US",
                                  append_to_response=extra)
-            backdrop_path = await self._textless_backdrop(tmdb_id, media_type) \
+            backdrop_path = await self._confirm_backdrop(tmdb_id, media_type) \
                 or d.get("backdrop_path")
             logo_path = await self._logo(tmdb_id, media_type)
         except (httpx.HTTPError, ValueError) as exc:
@@ -224,11 +224,14 @@ class TmdbClient:
             return neutral[0].get("file_path")
         return sorted(logos, key=quality, reverse=True)[0].get("file_path")
 
-    async def _textless_backdrop(self, tmdb_id: int, media_type: str) -> str | None:
-        """Pick the best **textless** backdrop — one with NO title/language art
-        baked in (``iso_639_1 == null``), since the card already shows the logo.
+    async def _confirm_backdrop(self, tmdb_id: int, media_type: str) -> str | None:
+        """Pick the best backdrop for the **confirmation card** — English-tagged
+        FIRST (the ``?image_language=en`` gallery: art with the English title
+        baked in), falling back to textless (``iso_639_1 == null``) only when no
+        English backdrop exists, then anything, ranked by rating/votes/res.
 
-        Falls back to English-tagged, then anything, ranked by rating/votes/res.
+        This is the opposite ordering from the thumbnail-generator picker, which
+        offers only textless art because the user overlays their own logo there.
         """
         try:
             imgs = await self._get(f"/{media_type}/{tmdb_id}/images",
@@ -244,15 +247,16 @@ class TmdbClient:
                     b.get("vote_count") or 0,
                     b.get("width") or 0)
 
-        # Textless first (no language tag = no title text baked in).
-        neutral = sorted((b for b in backdrops if not b.get("iso_639_1")),
-                         key=quality, reverse=True)
-        if neutral:
-            return neutral[0].get("file_path")
+        # English first (has the English title text — what we want on the card).
         english = sorted((b for b in backdrops if b.get("iso_639_1") == "en"),
                          key=quality, reverse=True)
         if english:
             return english[0].get("file_path")
+        # Fallback: textless (no language tag = no title art baked in).
+        neutral = sorted((b for b in backdrops if not b.get("iso_639_1")),
+                         key=quality, reverse=True)
+        if neutral:
+            return neutral[0].get("file_path")
         return sorted(backdrops, key=quality, reverse=True)[0].get("file_path")
 
     async def _ranked_posters(self, tmdb_id: int, media_type: str) -> list[str]:

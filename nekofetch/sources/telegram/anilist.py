@@ -311,8 +311,27 @@ def _detect_part_from_title(title: str) -> tuple[int | None, bool]:
 
 
 class AnilistClient:
+    # AniList's documented limit is ~90 req/min (degraded to 30/min at times).
+    # We serialize every request through one lock and hold a minimum gap so a
+    # single confirm flow (best_id + full + BFS walk) can never self-burst into
+    # a 429. ~1.4 req/s ≈ 40/min — comfortably under even the degraded ceiling.
+    _MIN_GAP = 0.7
+
     def __init__(self) -> None:
         self._http: httpx.AsyncClient | None = None
+        # Serialize requests: AniList rate-limits per-IP, and concurrent POSTs
+        # from one franchise walk are what tripped the 429 storm.
+        self._lock = asyncio.Lock()
+        self._last_request = 0.0
+        # Adaptive throttle: AniList advertises the live budget via
+        # ``X-RateLimit-Remaining``. When it runs low we stretch the gap so we
+        # glide under whichever ceiling is active (90/min normal, 30/min when
+        # degraded) instead of blindly hammering into a 429.
+        self._remaining: int | None = None
+        # Cache resolved franchise totals per root id for this process — the
+        # confirm flow otherwise walks the SAME graph twice (_parse_media then
+        # apply_franchise_totals), doubling every BFS burst for no new data.
+        self._totals_cache: dict[int, "FranchiseTotals"] = {}
 
     @property
     def http(self) -> httpx.AsyncClient:
@@ -327,30 +346,72 @@ class AnilistClient:
             await self._http.aclose()
             self._http = None
 
-    async def _post(self, query: str, variables: dict) -> dict | None:
-        """POST a GraphQL query with one retry on rate-limit / transient error.
+    async def _throttle(self) -> None:
+        """Hold a minimum gap between consecutive requests (called under lock).
 
-        AniList enforces ~90 req/min and answers with 429 (+ ``Retry-After``) or
-        an occasional 5xx. We honour the header once rather than failing outright.
-        Returns the parsed ``data`` object, or ``None`` on a hard failure.
+        The gap widens when AniList reports a low remaining budget: at/under 5
+        requests left we back off to ~2s between calls (≈30/min, the degraded
+        ceiling) so the window refills instead of tipping into a 429.
         """
-        for attempt in (1, 2):
+        gap = self._MIN_GAP
+        if self._remaining is not None and self._remaining <= 5:
+            gap = max(gap, 2.0)
+        now = asyncio.get_event_loop().time()
+        elapsed = now - self._last_request
+        if elapsed < gap:
+            await asyncio.sleep(gap - elapsed)
+        self._last_request = asyncio.get_event_loop().time()
+
+    async def _post(self, query: str, variables: dict) -> dict | None:
+        """POST a GraphQL query, serialized + throttled, with backoff on 429/5xx.
+
+        AniList enforces ~90 req/min (sometimes throttled to 30) and answers with
+        429 + a ``Retry-After`` header (seconds) or an occasional 5xx. Every call
+        goes through a single lock with a minimum inter-request gap so one confirm
+        flow can't self-burst; on 429 we honour the FULL ``Retry-After`` (AniList
+        routinely asks for 30-60s — capping it at 10s guaranteed the retry failed
+        too). Returns the parsed ``data`` object, or ``None`` on hard failure.
+        """
+        # Up to 3 attempts: initial + two retries. AniList's Retry-After is
+        # authoritative, so honouring it is what actually clears the limit.
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
             try:
-                resp = await self.http.post(
-                    ANILIST_URL, json={"query": query, "variables": variables}
-                )
-                if resp.status_code in (429, 500, 502, 503, 504) and attempt == 1:
-                    retry_after = float(resp.headers.get("Retry-After") or 2)
+                async with self._lock:
+                    await self._throttle()
+                    resp = await self.http.post(
+                        ANILIST_URL, json={"query": query, "variables": variables}
+                    )
+                # Track the remaining budget AniList reports so the next call's
+                # _throttle can pre-emptively widen the gap before we hit 0.
+                remaining = resp.headers.get("X-RateLimit-Remaining")
+                if remaining is not None:
+                    try:
+                        self._remaining = int(remaining)
+                    except ValueError:
+                        self._remaining = None
+                if resp.status_code == 429 and attempt < max_attempts:
+                    # A 429 means the window is spent; force the slow gap next call.
+                    self._remaining = 0
+                    # Honour the full window (+1s slack). Header is in seconds;
+                    # X-RateLimit-Reset (epoch) is the fallback when it's absent.
+                    retry_after = resp.headers.get("Retry-After")
+                    wait = float(retry_after) + 1.0 if retry_after is not None else 5.0
+                    log.warning("anilist.retry", status=429, retry_after=wait)
+                    await asyncio.sleep(min(wait, 65.0))
+                    continue
+                if resp.status_code in (500, 502, 503, 504) and attempt < max_attempts:
+                    backoff = 2.0 * attempt
                     log.warning("anilist.retry", status=resp.status_code,
-                                retry_after=retry_after)
-                    await asyncio.sleep(min(retry_after, 10.0))
+                                retry_after=backoff)
+                    await asyncio.sleep(backoff)
                     continue
                 resp.raise_for_status()
                 payload = resp.json()
             except (httpx.HTTPError, ValueError) as exc:
                 log.warning("anilist.request.failed", error=str(exc))
-                if attempt == 1:
-                    await asyncio.sleep(1.0)
+                if attempt < max_attempts:
+                    await asyncio.sleep(1.5 * attempt)
                     continue
                 return None
             if payload.get("errors"):
@@ -434,7 +495,15 @@ class AnilistClient:
         SUMMARY (recap/compilation movies), SPIN_OFF, and ALTERNATIVE (a different
         adaptation) are deliberately excluded so the counts match the "perfect"
         franchise map, expanding a level per request via ``id_in`` batching.
+
+        Result is memoized per root id for the process lifetime: the confirm flow
+        walks the same graph twice (``_parse_media`` then ``apply_franchise_totals``),
+        and re-walking just doubles the API burst for identical output.
         """
+        cached = self._totals_cache.get(root_id)
+        if cached is not None:
+            return cached
+
         visited: set[int] = {root_id}
         frontier: list[int] = [root_id]
         # id -> (format, episodes) for every node we actually resolve
@@ -522,6 +591,7 @@ class AnilistClient:
             root_fmt, root_eps = nodes.get(root_id, (None, None))
             if root_fmt and root_fmt != "MOVIE":
                 totals.episodes += root_eps or 0
+        self._totals_cache[root_id] = totals
         return totals
 
     async def walk_franchise_full(self, root_id: int, *, max_nodes: int = 120) -> dict[int, FranchiseEntry]:

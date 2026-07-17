@@ -188,41 +188,56 @@ class MyAnimeListClient:
     # ── HTTP helpers ──────────────────────────────────────────────────────────
 
     async def _get(self, endpoint: str, params: dict | None = None) -> dict | None:
-        """GET a Jikan endpoint with one retry on 429 / transient error.
+        """GET a Jikan endpoint with backoff on 429 / 5xx / transient errors.
 
-        Returns the parsed JSON ``data`` dict (without the wrapper key), or
-        ``None`` on hard failure.
+        Jikan sits behind Cloudflare and routinely answers with 502/503/**504
+        Gateway Time-out** under load — those are transient and clear on a short
+        retry, so we treat them like a rate-limit rather than a hard failure.
+        Up to 3 attempts with exponential backoff. Returns the parsed JSON
+        ``data`` dict (without the wrapper key), or ``None`` on hard failure.
         """
         url = f"{JIKAN_URL}/{endpoint.lstrip('/')}"
-        for attempt in (1, 2):
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
             await self._throttle()
+            last = attempt == max_attempts
             try:
                 resp = await self.http.get(url, params=params)
-                if resp.status_code == 429 and attempt == 1:
+                # Handle retryable status codes BEFORE raise_for_status so a 504
+                # gateway timeout backs off instead of bailing after one try.
+                if resp.status_code == 429 and not last:
                     retry_after = float(resp.headers.get("Retry-After") or 2)
                     log.warning("jikan.ratelimit", retry_after=retry_after)
                     await asyncio.sleep(min(retry_after, 10.0))
                     continue
+                if resp.status_code in (500, 502, 503, 504) and not last:
+                    backoff = 1.5 * attempt
+                    log.warning("jikan.http_error", url=url,
+                                status=resp.status_code, retry_in=backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                if resp.status_code == 404:
+                    return None  # entry not found — not an error
                 resp.raise_for_status()
                 payload = resp.json()
             except httpx.TimeoutException:
                 log.warning("jikan.timeout", url=url)
-                if attempt == 1:
-                    await asyncio.sleep(1.0)
+                if not last:
+                    await asyncio.sleep(1.5 * attempt)
                     continue
                 return None
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 404:
                     return None  # entry not found — not an error
                 log.warning("jikan.http_error", url=url, status=exc.response.status_code)
-                if attempt == 1:
-                    await asyncio.sleep(1.0)
+                if not last:
+                    await asyncio.sleep(1.5 * attempt)
                     continue
                 return None
             except (httpx.HTTPError, ValueError) as exc:
                 log.warning("jikan.request.failed", url=url, error=str(exc))
-                if attempt == 1:
-                    await asyncio.sleep(1.0)
+                if not last:
+                    await asyncio.sleep(1.5 * attempt)
                     continue
                 return None
             return payload.get("data") or payload

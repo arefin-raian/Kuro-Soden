@@ -119,27 +119,33 @@ async def fetch_posters_ranked(
 async def fetch_backdrops_ranked(
     client: "TmdbClient", tmdb_id: int, media_type: str,
 ) -> list[dict]:
-    """Fetch ranked backdrop images from TMDB (English first, then neutral).
+    """Fetch **textless** backdrop images for the thumbnail-generator picker.
+
+    The thumbnail bot overlays the user's chosen logo on top, so the backdrop
+    options offered MUST be textless — the ``?image_language=xx`` (no-language)
+    gallery, art with no title baked in. We request only ``null`` from TMDB and
+    additionally guard in-code against any language-tagged art slipping through.
+    This is the opposite of the confirmation card, which wants English-tagged
+    art (see ``TmdbClient._confirm_backdrop``).
 
     Returns same format as ``fetch_logos`` but with ``w1280`` sized URLs.
     """
     try:
         imgs = await client._get(
             f"/{media_type}/{tmdb_id}/images",
-            include_image_language="en,null",
+            include_image_language="null",
         )
     except Exception as exc:
         log.warning("tmdb.backdrops.failed", id=tmdb_id, error=str(exc))
         return []
 
-    backdrops = imgs.get("backdrops", [])
+    # Textless only: drop anything carrying a language tag (baked-in title text).
+    backdrops = [b for b in imgs.get("backdrops", []) if not b.get("iso_639_1")]
     if not backdrops:
         return []
 
     def sort_key(b: dict) -> tuple:
-        lang = b.get("iso_639_1") or ""
-        tier = 0 if lang == "en" else (1 if lang == "" else 2)
-        return (tier, -b.get("vote_count", 0), -_quality_key(b)[2])
+        return (-b.get("vote_count", 0), -_quality_key(b)[2])
 
     backdrops.sort(key=sort_key)
 
