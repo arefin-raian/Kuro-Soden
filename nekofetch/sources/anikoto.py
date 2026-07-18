@@ -419,7 +419,6 @@ class AnikotoSource(AnimeSource):
         # Ordered fallback servers per audio type. Each entry is a candidate the
         # downloader tries in turn until one yields a clean file.
         #   sub  -> soft subtitles (separate VTT track)
-        #   hsub -> hardcoded subtitles burned into the video
         #   dub  -> dubbed audio, no subtitles
         candidates: dict[AudioType, list[dict]] = {
             AudioType.SUBBED: [],
@@ -428,10 +427,12 @@ class AnikotoSource(AnimeSource):
         seen: set[str] = set()
 
         def add(kind: str, url: str, referer: str, subtitles: list | None = None) -> None:
+            kind = _normalize_stream_kind(kind)
+            if kind == "hsub":
+                return
             if not url or url in seen:
                 return
             seen.add(url)
-            kind = _normalize_stream_kind(kind)
             audio = AudioType.DUBBED if kind == "dub" else AudioType.SUBBED
             candidates[audio].append({
                 "video_url": url,
@@ -459,8 +460,6 @@ class AnikotoSource(AnimeSource):
         for audio, cands in candidates.items():
             if not cands:
                 continue
-            # Soft-sub before hard-sub so selectable subtitles win when available.
-            cands.sort(key=lambda c: {"sub": 0, "hsub": 1, "dub": 0}.get(c["kind"], 2))
             # Emit ONE variant per resolution the stream actually offers (1080/720/480…)
             # so the worker can honour the all-qualities policy — not a single fixed
             # 1080p. Falls back to the preferred quality if the master can't be read.
@@ -492,7 +491,7 @@ class AnikotoSource(AnimeSource):
                 return qs
         return [self.preferred_quality]
 
-    async def dual_audio_plan(self, episode_ref: str) -> dict:
+    async def dual_audio_plan(self, episode_ref: str, resolution: str | None = None) -> dict:
         """Assess whether one dual-audio file can be built for this episode.
 
         AniKoto has no native dual track, so we check — *without downloading the
@@ -503,6 +502,8 @@ class AnikotoSource(AnimeSource):
         from nekofetch.sources._dualaudio import are_mergeable, playlist_duration
 
         variants = await self.get_variants(episode_ref)
+        if resolution:
+            variants = [v for v in variants if v.resolution == resolution]
         sub = next((v for v in variants if v.audio == AudioType.SUBBED), None)
         dub = next((v for v in variants if v.audio == AudioType.DUBBED), None)
         if not (sub and dub):

@@ -106,12 +106,24 @@ FIELD_DOCS: dict[str, FieldDoc] = {
     # ── sources ───────────────────────────────────────────────────────────────
     "sources.enabled": FieldDoc(
         desc="Active download sources, comma-separated. Order sets priority (first = tried first).",
-        options=("local", "telegram", "anizone", "anikoto", "kickassanime", "nyaa"),
-        example="local, telegram, anizone, anikoto, kickassanime, nyaa"),
+        options=("local", "telegram", "anizone", "anikoto", "kickassanime", "miruro", "nyaa"),
+        example="local, telegram, anizone, anikoto, kickassanime, miruro, nyaa"),
     "sources.default": FieldDoc(
         desc="Fallback source used when a request can't be resolved to a specific one.",
-        options=("local", "telegram", "anizone", "anikoto", "kickassanime", "nyaa"),
+        options=("local", "telegram", "anizone", "anikoto", "kickassanime", "miruro", "nyaa"),
         example="telegram"),
+    "sources.miruro.api_base_url": FieldDoc(
+        desc="Base URL for the self-hosted Miruro-API service used by the Miruro source.",
+        example="http://localhost:8000"),
+    "sources.miruro.stream_referer": FieldDoc(
+        desc="Referer used for HLS playlist and segment requests returned by Miruro-API.",
+        example="http://localhost:8000"),
+    "sources.miruro.preferred_quality": FieldDoc(
+        desc="Default Miruro quality preference when a request does not pin a resolution.",
+        example="1080p"),
+    "sources.miruro.provider_order": FieldDoc(
+        desc="Miruro server priority, comma-separated; the first available provider wins.",
+        example="kiwi, arc, zoro, hop, pahe"),
 
     # ── downloads ─────────────────────────────────────────────────────────────
     "downloads.concurrent_downloads": FieldDoc(
@@ -147,7 +159,10 @@ FIELD_DOCS: dict[str, FieldDoc] = {
         desc="Qualities grabbed for every request, best-first; each taken when the source has it.",
         example="1080p, 720p, 480p"),
     "acquisition.resolution_fallbacks": FieldDoc(
-        desc="When a target quality is missing, alternates to try in order (advanced; edit in config.yaml).",
+        desc=(
+            "When a target quality is missing, alternates to try in order "
+            "(advanced; edit in config.yaml)."
+        ),
         example="480p: 540p, 360p"),
 
     # ── processing stages ─────────────────────────────────────────────────────
@@ -188,7 +203,8 @@ FIELD_DOCS: dict[str, FieldDoc] = {
     "metadata.update_author": FieldDoc(desc="Rewrite the embedded author/artist field."),
     "metadata.update_comment": FieldDoc(desc="Rewrite the embedded comment field."),
     "metadata.update_tags": FieldDoc(desc="Rewrite embedded tags/genre metadata."),
-    "metadata.update_description": FieldDoc(desc="Rewrite the embedded description/synopsis field."),
+    "metadata.update_description": FieldDoc(
+        desc="Rewrite the embedded description/synopsis field."),
     "metadata.supported_containers": FieldDoc(
         desc="File extensions metadata editing applies to, comma-separated.",
         example="mkv, mp4, avi, mov"),
@@ -281,12 +297,18 @@ FIELD_DOCS: dict[str, FieldDoc] = {
         desc="Channel IDs users must join for the admin bot, comma-separated (-100… ids).",
         example="-1001234567890, -1009876543210"),
     "security.dist_force_subscribe": FieldDoc(
-        desc="Require users to join channels before using distribution bots (separate from admin)."),
+        desc=(
+            "Require users to join channels before using distribution bots "
+            "(separate from admin)."
+        )),
     "security.dist_force_subscribe_channels": FieldDoc(
         desc="Channel IDs users must join for distribution bots, comma-separated (-100… ids).",
         example="-1001234567890, -1009876543210"),
     "security.owner_id": FieldDoc(
-        desc="Telegram user id of the bot owner (full access). Normally set in .env — change with care.",
+        desc=(
+            "Telegram user id of the bot owner (full access). Normally set in .env "
+            "- change with care."
+        ),
         example="123456789"),
 
     # ── access (trial + token) ────────────────────────────────────────────────

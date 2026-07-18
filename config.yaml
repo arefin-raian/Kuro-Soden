@@ -208,6 +208,14 @@ sources:
   # Only authorized sources are enabled. Pirate-site plugins are not shipped.
   enabled: [local, telegram, anikoto, kickassanime, anizone, miruro, nyaa]
   default: telegram
+  miruro:
+    # Self-hosted Miruro-API endpoint. The bot talks to this API, not the UI site.
+    api_base_url: http://localhost:8000
+    # Referer sent while probing/downloading HLS streams returned by the API.
+    stream_referer: http://localhost:8000
+    preferred_quality: 1080p
+    # Provider priority when Miruro exposes multiple stream servers.
+    provider_order: [kiwi, arc, zoro, hop, pahe]
 
 localization:
   default_language: en

@@ -206,7 +206,9 @@ class RenameConfig(BaseModel):
     # OVAs/ONAs/specials (keeps an entry index via {episode}, drops the season).
     # Same variables as ``template`` plus {content_type} (Movie / OVA / Special).
     movie_template: str = "{short_title} - Movie [{resolution}] [{audio}] - {group}"
-    special_template: str = "{short_title} - {content_type} E{episode} [{resolution}] [{audio}] - {group}"
+    special_template: str = (
+        "{short_title} - {content_type} E{episode} [{resolution}] [{audio}] - {group}"
+    )
 
 
 class MetadataConfig(BaseModel):
@@ -434,6 +436,15 @@ class IndexChannelConfig(BaseModel):
     entry_template: str = "⦿ {title}"
 
 
+class MiruroConfig(BaseModel):
+    api_base_url: str = "http://localhost:8000"
+    stream_referer: str = "http://localhost:8000"
+    preferred_quality: str = "1080p"
+    provider_order: list[str] = Field(
+        default_factory=lambda: ["kiwi", "arc", "zoro", "hop", "pahe"]
+    )
+
+
 class SourcesConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [
@@ -441,10 +452,13 @@ class SourcesConfig(BaseModel):
         ]
     )
     default: str = "telegram"
+    miruro: MiruroConfig = Field(default_factory=MiruroConfig)
 
 
 class UIConfig(BaseModel):
-    start_sticker_id: str = "CAACAgUAAyEFAASAgUwqAAJh_mckw2STkeY1WMOHJGY4Hs9_1-2fAAIPFAACYLShVon-N6AFLnIiHgQ"
+    start_sticker_id: str = (
+        "CAACAgUAAyEFAASAgUwqAAJh_mckw2STkeY1WMOHJGY4Hs9_1-2fAAIPFAACYLShVon-N6AFLnIiHgQ"
+    )
     start_image_url: str = "https://envs.sh/odE.png"
     start_image_has_spoiler: bool = True
     sticker_delete_delay: float = 1.5
@@ -469,7 +483,10 @@ class BotConfig(BaseModel):
     # Bot tokens/API credentials are configured on the Fstore deployment side.
     filestore_bots: list[str] = Field(
         default_factory=list,
-        description="Comma-separated usernames of Fstore file-delivery bots (e.g. KiloxBot, MarkySayBot)",
+        description=(
+            "Comma-separated usernames of Fstore file-delivery bots "
+            "(e.g. KiloxBot, MarkySayBot)"
+        ),
     )
     # Footer shown on the last post of every distribution bot.
     footer_image_url: str = ""   # URL or Telegram file_id; empty = no image
@@ -525,7 +542,7 @@ class AppConfig(BaseModel):
     bot: BotConfig = Field(default_factory=BotConfig)
 
     @classmethod
-    def load(cls, path: str | Path = "config.yaml") -> "AppConfig":
+    def load(cls, path: str | Path = "config.yaml") -> AppConfig:
         p = Path(path)
         if not p.exists():
             return cls()

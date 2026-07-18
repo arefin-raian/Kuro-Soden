@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
+from nekofetch.core.parsing import clean_anilist_id
 from nekofetch.core.redis_safe import safe_redis_delete, safe_redis_get, safe_redis_set
 from nekofetch.domain.enums import AudioType, JobStatus, RequestStatus
 from nekofetch.infrastructure.database.postgres.models import DownloadJob, MediaFile
@@ -211,7 +212,10 @@ class DownloadWorker:
                     for spec in failed:
                         if await self._cancel_requested(job_id):
                             raise _CancelJob()
-                        if not await self._retry_unit(job_id, req, source, chain, spec, folder, cfg):
+                        retried = await self._retry_unit(
+                            job_id, req, source, chain, spec, folder, cfg,
+                        )
+                        if not retried:
                             remaining.append(spec)
                     if remaining:
                         all_failed.extend(remaining)
@@ -440,7 +444,7 @@ class DownloadWorker:
                 raise _CancelJob() if cancel else _SkipEpisode()
             try:
                 return await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     def _make_progress(self, job_id, ep, variant, cfg):
@@ -463,7 +467,10 @@ class DownloadWorker:
                         speed_bps=speed, downloaded_bytes=done, total_bytes=total,
                         current_episode=ep.number, eta_seconds=eta,
                         resolution=variant.resolution, audio=variant.audio.value,
-                        label=f"S{ep.season:02d}E{ep.number:03d} {variant.resolution} {variant.audio.value}",
+                        label=(
+                            f"S{ep.season:02d}E{ep.number:03d} "
+                            f"{variant.resolution} {variant.audio.value}"
+                        ),
                     ))
                 except Exception:  # noqa: BLE001
                     # Progress is cosmetic telemetry — a Redis hiccup (e.g. an
@@ -489,7 +496,10 @@ class DownloadWorker:
                     stage="Retrying",
                     retry_attempt=attempt, retry_max=cfg.retry_attempts,
                     retry_reason=reason,
-                    label=f"S{ep.season:02d}E{ep.number:03d} {variant.resolution} {variant.audio.value}",
+                    label=(
+                        f"S{ep.season:02d}E{ep.number:03d} "
+                        f"{variant.resolution} {variant.audio.value}"
+                    ),
                 ))
             except Exception:  # noqa: BLE001 - telemetry, never fail the download
                 log.debug("download.retry_redis_blip", job_id=job_id)
@@ -737,7 +747,9 @@ class DownloadWorker:
                         MediaFile.audio == audio,
                     )
                 )).scalars().first()
-            return bool(row and row.local_path and Path(row.local_path).exists())
+            if not (row and row.local_path):
+                return False
+            return await asyncio.to_thread(Path(row.local_path).exists)
         except Exception:  # noqa: BLE001 - on error, just re-download (safe) not fail
             return False
 
@@ -803,7 +815,10 @@ class DownloadWorker:
                 names = [self._c.sources.resolve(raw).name]
             except Exception:
                 names = []
-        names = [n for n in names if n and n != "anilist" and not (anizone_failed and n == "anizone")]
+        names = [
+            n for n in names
+            if n and n != "anilist" and not (anizone_failed and n == "anizone")
+        ]
 
         chain: list[tuple] = []
         last_err: str | None = last_err if anizone_failed else None
@@ -833,7 +848,7 @@ class DownloadWorker:
             raise NotFound(f"no source could provide episodes for {title!r} ({last_err})")
         return chain
 
-    async def _best_variant(self, chain, ep_number: int, audio):
+    async def _best_variant(self, chain, ep_number: int, audio, resolution: str | None = None):
         """First ``(source, variant, ep_ref)`` across the chain that offers ``audio``
         for ``ep_number`` — this is what enables cross-source acquisition."""
         for src, eps in chain:
@@ -844,7 +859,15 @@ class DownloadWorker:
                 variants = await src.get_variants(match.source_ref)
             except Exception:
                 continue
-            v = next((x for x in variants if x.audio == audio), None)
+            if resolution:
+                v = next(
+                    (x for x in variants if x.audio == audio and x.resolution == resolution),
+                    None,
+                )
+                if v is None:
+                    continue
+            else:
+                v = next((x for x in variants if x.audio == audio), None)
             if v is not None:
                 return src, v, match.source_ref
         return None
@@ -868,13 +891,13 @@ class DownloadWorker:
         dub_dest = base / f"{stem}_Dub.mkv"
         a, b, c = cfg.retry_attempts, cfg.retry_backoff_seconds, None  # retry args
 
-        sub = await self._best_variant(chain, ep.number, AudioType.SUBBED)
-        dub = await self._best_variant(chain, ep.number, AudioType.DUBBED)
+        sub = await self._best_variant(chain, ep.number, AudioType.SUBBED, resolution)
+        dub = await self._best_variant(chain, ep.number, AudioType.DUBBED, resolution)
 
         # 1) same source + same cut → one merged dual file.
         if sub and dub and sub[0] is dub[0] and hasattr(sub[0], "dual_audio_plan"):
             try:
-                plan = await sub[0].dual_audio_plan(sub[2])
+                plan = await sub[0].dual_audio_plan(sub[2], resolution=resolution)
             except Exception:
                 plan = {}
             if plan.get("mergeable"):
@@ -927,7 +950,8 @@ class DownloadWorker:
     def _target_audios(self, req) -> list[AudioType]:
         """Resolve the audio types (subbed/dubbed) to acquire for a request.
 
-        When unspecified, fans out into the configured languages (english → DUBBED, japanese → SUBBED).
+        When unspecified, fans out into the configured languages
+        (english -> DUBBED, japanese -> SUBBED).
         """
         acq = self._c.config.acquisition
         if req.audio:
@@ -970,7 +994,11 @@ class DownloadWorker:
             except Exception as exc:  # noqa: BLE001
                 _kind, reason = _classify(exc)
                 log.warning("download.retry", attempt=attempt, error=str(exc))
-                resume_state = {"partial": True} if self._c.config.downloads.resume_interrupted else None
+                resume_state = (
+                    {"partial": True}
+                    if self._c.config.downloads.resume_interrupted
+                    else None
+                )
                 if attempt >= attempts:
                     raise
                 # Announce the NEXT attempt (attempt+1) before backing off, so the
@@ -1030,7 +1058,12 @@ class DownloadWorker:
                 _paths = (await _csess.execute(
                     select(MediaFile.local_path).where(MediaFile.job_id == job_id)
                 )).scalars().all()
-            if not any(p and Path(p).exists() for p in _paths):
+            has_files = False
+            for path in _paths:
+                if path and await asyncio.to_thread(Path(path).exists):
+                    has_files = True
+                    break
+            if not has_files:
                 log.warning(
                     "download.chunk_skip.no_files",
                     job_id=job_id, anime=title,
@@ -1041,7 +1074,10 @@ class DownloadWorker:
 
         from nekofetch.services.log_channel_service import LogChannelService
         from nekofetch.services.processing.pipeline import (
-            ProcessingPipeline, _CancelJob as PipelineCancelJob,
+            ProcessingPipeline,
+        )
+        from nekofetch.services.processing.pipeline import (
+            _CancelJob as PipelineCancelJob,
         )
         from nekofetch.services.publishing_service import PublishingService
 
@@ -1061,8 +1097,8 @@ class DownloadWorker:
                 "processing", "quality_stored", job=job_id,
                 anime=title, notes=len(ctx.notes),
             )
-        except PipelineCancelJob:
-            raise _CancelJob()
+        except PipelineCancelJob as exc:
+            raise _CancelJob() from exc
         except Exception as exc:  # noqa: BLE001
             log.error("download.quality.processing_failed",
                       job_id=job_id, error=str(exc))
@@ -1237,9 +1273,6 @@ class DownloadWorker:
 _WEBSITE_SOURCES = ("anikoto", "anizone", "kickassanime", "miruro")
 
 
-from nekofetch.core.parsing import clean_anilist_id
-
-
 def _alternate_source(source: str) -> str | None:
     """The other website source to offer as a switch target, or None when the
     request isn't on a website source (torrent/telegram have no peer)."""
@@ -1293,6 +1326,6 @@ def _select_variant(variants, resolution, audio, require_english_subs: bool):
 
 
 def _now():
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)

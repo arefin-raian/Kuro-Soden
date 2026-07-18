@@ -26,7 +26,7 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-async-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![MongoDB](https://img.shields.io/badge/MongoDB-runtime%20state-47A248?style=for-the-badge&logo=mongodb&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FSM%20%2B%20locks-DC382D?style=for-the-badge&logo=redis&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-335%20collected-22C55E?style=for-the-badge&logo=pytest&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-372%20passing-22C55E?style=for-the-badge&logo=pytest&logoColor=white)
 
 </div>
 
@@ -51,6 +51,7 @@ The result is a relay: users submit requests, staff members pick up stage-specif
 - [The Four Bots](#the-four-bots)
 - [Visual Identity](#visual-identity)
 - [Core Capabilities](#core-capabilities)
+- [Download Sources](#download-sources)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Deployment](#deployment)
@@ -358,6 +359,68 @@ Anime-specific cards use TMDB/AniList artwork where available, then fall back to
 | Storage packs | Telegram database channel range delivery | `nekofetch/services/storage_channel_service.py` |
 | Log channel | event stream and pinned dashboards | `nekofetch/services/log_channel_service.py` |
 
+## Download Sources
+
+Levi works through the shared `AnimeSource` contract, so every source returns the
+same normalized shape: search results, episodes, variants, and a concrete media
+download plan. The worker can choose quality/audio, probe HLS duration, mux
+compatible tracks, and hand processed files forward without caring which site
+produced the stream.
+
+| Source | Role | Notes |
+|---|---|---|
+| `anikoto` | website HLS source | resolves mapper/iframe streams, skips hard-sub variants, and builds dual-audio plans only from soft-sub + dub matches |
+| `miruro` | Miruro-API backed source | reads multiple providers, prefers soft-sub streams, keeps hard-sub streams as fallback, and can plan dual audio when soft-sub and dub durations line up |
+| `kickassanime` | website fallback | keeps legacy website acquisition available behind the same review flow |
+| `anizone` | website fallback | alternate site adapter for operator-approved deployments |
+| `nyaa` | torrent acquisition | selected through torrent/manual review paths |
+| `telegram` / `local` | manual media | lets staff feed already-owned files into the same processing pipeline |
+
+### Source Decision Flow
+
+```mermaid
+flowchart TD
+    request["Levi download task"] --> chain["source chain<br/>example: miruro > anikoto > kickassanime"]
+    chain --> resolve["SourceRegistry.resolve"]
+    resolve --> search["search title / anilist ref"]
+    search --> episodes["list normalized episodes"]
+    episodes --> variants["collect variants<br/>quality + audio + subtitles + provider"]
+
+    variants --> soft{"soft-sub stream available?"}
+    soft -->|yes| sub["prefer soft-sub"]
+    soft -->|no| hsub["use hard-sub as separate fallback"]
+
+    variants --> dub{"dub stream available?"}
+    sub --> duration["probe HLS duration"]
+    dub --> duration
+    duration --> match{"soft-sub duration matches dub?"}
+    match -->|yes| dual["download both streams<br/>mux dual audio"]
+    match -->|no| separate["download selected stream separately"]
+    hsub --> separate
+    dual --> processing["verify -> rename -> metadata -> thumbnail -> store"]
+    separate --> processing
+```
+
+Hard-sub streams are never merged into dual audio. That path is only valid when
+the subtitle-side video carries soft subtitle tracks and the dub stream duration
+matches closely enough for muxing.
+
+### Miruro Configuration
+
+`miruro` is enabled in `config.yaml` by default, but it expects a running
+self-hosted Miruro-API service. Point these settings at that service:
+
+```yaml
+sources:
+  enabled: [local, telegram, anikoto, kickassanime, anizone, miruro, nyaa]
+  default: telegram
+  miruro:
+    api_base_url: http://localhost:8000
+    stream_referer: http://localhost:8000
+    preferred_quality: 1080p
+    provider_order: [kiwi, arc, zoro, hop, pahe]
+```
+
 ## Architecture
 
 ```mermaid
@@ -386,7 +449,7 @@ flowchart TB
         core["core<br/>config · logging · container"]
         services["services<br/>requests · downloads · publishing · content"]
         providers["providers<br/>metadata · shortlinks · Acute bot"]
-        sources["sources<br/>local · telegram · nyaa · anizone · anikoto · kickassanime"]
+        sources["sources<br/>local · telegram · nyaa · anizone · anikoto · kickassanime · miruro"]
         infra["infrastructure<br/>postgres · mongo · redis · scheduler"]
         ui["ui<br/>screens · cards · artwork · progress"]
     end
@@ -522,7 +585,7 @@ AUTO_CREATE_SCHEMA=true
 | `index_channel` | per-letter catalog posts |
 | `acquisition` | resolution × language matrix |
 | `access` + `shortlink` | trial/token delivery gate |
-| `sources` | enabled acquisition adapters |
+| `sources` | enabled acquisition adapters, Miruro-API endpoint, source priority, provider order |
 | `bot` | distribution entity naming, branding, avatar/footer behavior |
 
 ## Deployment
@@ -601,11 +664,12 @@ Use the same rules everywhere:
    - optional thumbnail workflow channel
 4. Add the needed bot/client as admin in each channel.
 5. Fill channel ids in `config.yaml`.
-6. Start the process.
-7. Open Lelouch and send `/start`.
-8. Use the admin panel to muster admins into the pool and assign stages.
-9. Submit a small test request.
-10. Follow it through Levi → Senku → Gojo.
+6. If using Miruro, start Miruro-API and point `sources.miruro.api_base_url` at it.
+7. Start the process.
+8. Open Lelouch and send `/start`.
+9. Use the admin panel to muster admins into the pool and assign stages.
+10. Submit a small test request.
+11. Follow it through Levi → Senku → Gojo.
 
 ## Commands
 
@@ -672,7 +736,7 @@ pytest tests/test_management_service.py
 pytest --collect-only -q
 ```
 
-The suite currently collects **335 tests** covering:
+The suite currently passes **372 tests** covering:
 
 | Area | Coverage |
 |---|---|
@@ -734,7 +798,14 @@ Back up:
 
 Kuro Sōden is built around pluggable source adapters. Enable only sources you are allowed to use in your environment.
 
-Current source layer includes adapters under `nekofetch/sources/`, including local, Telegram, torrent helpers, and site-specific integrations configured by the operator. Metadata enrichment is isolated under `nekofetch/providers/metadata/`; implement the provider fetchers against your approved metadata source and flip the provider flag when ready.
+Current source layer includes adapters under `nekofetch/sources/`, including local, Telegram, torrent helpers, AniKoto, KickAssAnime, AniZone, and Miruro-API. Metadata enrichment is isolated under `nekofetch/providers/metadata/`; implement the provider fetchers against your approved metadata source and flip the provider flag when ready.
+
+Miruro and AniKoto both feed the same worker contract:
+
+- soft-sub + dub with matching duration can become one dual-audio release
+- hard-sub streams stay separate, even when a matching dub exists
+- requested resolution is honored before any dual-audio merge is attempted
+- provider/server order is operator-controlled through config
 
 ## Troubleshooting
 

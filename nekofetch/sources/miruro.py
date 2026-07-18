@@ -151,6 +151,27 @@ def _subtitle_pairs(items: list) -> list[tuple[str, str]]:
     return out
 
 
+def _variant_info(variant: VideoVariant) -> dict:
+    try:
+        data = json.loads(variant.source_ref)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _is_hard_sub_variant(variant: VideoVariant) -> bool:
+    return bool(_variant_info(variant).get("hard_sub"))
+
+
+def _is_soft_sub_variant(variant: VideoVariant) -> bool:
+    info = _variant_info(variant)
+    return (
+        variant.audio == AudioType.SUBBED
+        and not info.get("hard_sub")
+        and bool(info.get("subtitles"))
+    )
+
+
 def _count_audio_coverage(data: dict) -> tuple[int, int, int, int]:
     providers = data.get("providers", {}) if isinstance(data, dict) else {}
     total: set[int] = set()
@@ -185,6 +206,7 @@ class MiruroSource(AnimeSource):
     def __init__(
         self,
         base_url: str | dict | None = None,
+        api_base_url: str | None = None,
         preferred_quality: str = "1080p",
         provider_order: list[str] | None = None,
         stream_referer: str | None = None,
@@ -195,6 +217,8 @@ class MiruroSource(AnimeSource):
             preferred_quality = str(config.get("preferred_quality") or preferred_quality)
             provider_order = config.get("provider_order") or provider_order
             stream_referer = config.get("stream_referer") or stream_referer
+        elif api_base_url:
+            base_url = api_base_url
         if isinstance(provider_order, str):
             provider_order = [p.strip() for p in provider_order.split(",") if p.strip()]
 
@@ -236,7 +260,10 @@ class MiruroSource(AnimeSource):
             return [self._stub(info)] if info else []
 
         try:
-            data = await self._get_json("/search", params={"query": query, "page": 1, "per_page": 20})
+            data = await self._get_json(
+                "/search",
+                params={"query": query, "page": 1, "per_page": 20},
+            )
         except httpx.HTTPError:
             return []
         rows = data.get("results") if isinstance(data, dict) else data
@@ -257,15 +284,23 @@ class MiruroSource(AnimeSource):
                 str(start.get(k, "")).zfill(2)
                 for k in ("year", "month", "day") if start.get(k)
             )
-        studios = info.get("studios", {}).get("nodes", []) if isinstance(info.get("studios"), dict) else []
-        studio = next((s.get("name") for s in studios if isinstance(s, dict) and s.get("name")), None)
+        studios = (
+            info.get("studios", {}).get("nodes", [])
+            if isinstance(info.get("studios"), dict)
+            else []
+        )
+        studio = next(
+            (s.get("name") for s in studios if isinstance(s, dict) and s.get("name")),
+            None,
+        )
+        title_data = info.get("title") or {}
         return AnimeDetails(
             source_ref=str(aid),
             title=title,
             alt_titles=[
                 t for t in [
-                    (info.get("title") or {}).get("romaji") if isinstance(info.get("title"), dict) else None,
-                    (info.get("title") or {}).get("native") if isinstance(info.get("title"), dict) else None,
+                    title_data.get("romaji") if isinstance(title_data, dict) else None,
+                    title_data.get("native") if isinstance(title_data, dict) else None,
                     *list(info.get("synonyms") or []),
                 ] if t and t != title
             ],
@@ -324,6 +359,11 @@ class MiruroSource(AnimeSource):
                     continue
                 seen.add(key)
                 variants.append(variant)
+        variants.sort(key=lambda v: (
+            0 if _is_soft_sub_variant(v)
+            else 1 if v.audio == AudioType.DUBBED
+            else 2
+        ))
         return variants
 
     async def _watch_refs_for_episode(self, episode_ref: str) -> list[str]:
@@ -377,7 +417,11 @@ class MiruroSource(AnimeSource):
         subtitles = _subtitle_pairs(data.get("subtitles") or data.get("tracks") or [])
         variants: list[VideoVariant] = []
         audio = AudioType.DUBBED if category == "dub" else AudioType.SUBBED
-        hard_sub = category == "hsub" or provider.lower() in _HARDSUB_PROVIDERS
+        hard_sub = (
+            category == "hsub"
+            or provider.lower() in _HARDSUB_PROVIDERS
+            or (category != "dub" and not subtitles)
+        )
 
         for stream in streams:
             if not isinstance(stream, dict):
@@ -420,10 +464,60 @@ class MiruroSource(AnimeSource):
                 ))
         return variants
 
+    async def dual_audio_plan(self, episode_ref: str, resolution: str | None = None) -> dict:
+        """Check whether Miruro can build a true dual-audio file for one episode.
+
+        Only soft-subbed streams are eligible for the Japanese/sub side. Hard-sub
+        video may still be downloaded as a fallback, but it is not merge material.
+        """
+        from nekofetch.sources._dualaudio import are_mergeable, playlist_duration
+
+        variants = await self.get_variants(episode_ref)
+        if resolution:
+            variants = [v for v in variants if v.resolution == resolution]
+
+        sub = next(
+            (
+                v for v in variants
+                if _is_soft_sub_variant(v)
+            ),
+            None,
+        )
+        dub = next((v for v in variants if v.audio == AudioType.DUBBED), None)
+        if not sub or not dub:
+            return {
+                "feasible": False,
+                "mergeable": False,
+                "reason": "missing soft sub or dub",
+                "sub_variant": sub,
+                "dub_variant": dub,
+            }
+
+        async def _dur(v: VideoVariant) -> float | None:
+            info = _variant_info(v)
+            url = str(info.get("stream") or "")
+            if ".m3u8" not in url:
+                return None
+            headers = info.get("headers") or _stream_headers({}, self.stream_referer)
+            return await playlist_duration(self.http, url, headers)
+
+        d_sub = await _dur(sub)
+        d_dub = await _dur(dub)
+        return {
+            "feasible": True,
+            "mergeable": are_mergeable(d_sub, d_dub),
+            "sub_variant": sub,
+            "dub_variant": dub,
+            "sub_dur": d_sub,
+            "dub_dur": d_dub,
+        }
+
     async def coverage(self, *titles: str) -> SourceCoverage | None:
         query = next((t for t in titles if t), "")
         if not query:
-            return SourceCoverage(source=self.name, matched_title="", source_ref="", available=False)
+            return SourceCoverage(
+                source=self.name, matched_title="", source_ref="", available=False,
+            )
         hits = await self.search(query)
         if not hits:
             return SourceCoverage(
@@ -499,7 +593,11 @@ class MiruroSource(AnimeSource):
                 if sub.get("saved"):
                     label = str(sub.get("label") or "Subtitle")
                     lang_m = re.search(r"\b([a-z]{2,3}(?:-[A-Z]{2})?)\b", label)
-                    sub_tracks.append((label, lang_m.group(1) if lang_m else "und", Path(sub["saved"])))
+                    sub_tracks.append((
+                        label,
+                        lang_m.group(1) if lang_m else "und",
+                        Path(sub["saved"]),
+                    ))
 
         audio_lang = "en" if variant.audio == AudioType.DUBBED else "ja"
         audio_name = "English" if audio_lang == "en" else "Japanese"

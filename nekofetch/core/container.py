@@ -84,7 +84,7 @@ class Container:
         self.series_resolver = SeriesResolver(self.anilist)
 
     @classmethod
-    def create(cls) -> "Container":
+    def create(cls) -> Container:
         return cls(env=get_env(), config=get_app_config())
 
     async def startup(self) -> None:
@@ -159,13 +159,15 @@ class Container:
 
         # Activate only authorized sources listed in config.
         self.sources.activate(
-            self.config.sources.enabled, default=self.config.sources.default
+            self.config.sources.enabled,
+            default=self.config.sources.default,
+            miruro=self.config.sources.miruro.model_dump(),
         )
 
         self.env.storage_path.mkdir(parents=True, exist_ok=True)
         self.env.session_path.mkdir(parents=True, exist_ok=True)
 
-    def session(self) -> "AsyncSession":
+    def session(self) -> AsyncSession:
         """Open a new Postgres session (caller manages the transaction scope)."""
         assert self.pg_sessionmaker is not None, "Container not started"
         return self.pg_sessionmaker()
