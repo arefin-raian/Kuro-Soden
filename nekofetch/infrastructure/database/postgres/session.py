@@ -37,6 +37,13 @@ async def create_all(engine) -> None:
 
     # Import models so they register on Base.metadata.
     from nekofetch.infrastructure.database.postgres import models  # noqa: F401
+    # Kuro Sōden's admin-pool tables (admin_availability / admin_assignments)
+    # live in shared/, outside the nekofetch models package, so import them here
+    # too — otherwise create_all never emits them and every assignment crashes.
+    try:  # optional: only present in the Kuro Sōden layout, not vanilla NekoFetch
+        from kurosoden.shared import admin_assignment  # noqa: F401
+    except Exception:  # noqa: BLE001
+        pass
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

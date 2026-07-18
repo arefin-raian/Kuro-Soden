@@ -92,6 +92,45 @@ def lifecycle_labels() -> list[str]:
     return [t(k) for k in _LIFECYCLE_KEYS]
 
 
+# ── Generic card builder ─────────────────────────────────────────────────────
+#
+# One grammar for every character-bot surface: a caption (already-authored HTML,
+# so callers keep their own voice), an image that is *never* omitted, and a
+# keyboard. Kuro Sōden routes all of Lelouch's screens through this so forward →
+# Back always lands on a full card — image + info + keyboard — not a bare image
+# or a stripped text bubble.
+
+def card(
+    caption: str,
+    *,
+    image: "str | Path | None" = None,
+    bot_name: str | None = None,
+    buttons: list[list[tuple[str, str]]] | None = None,
+    url_buttons: list[list[tuple[str, str]]] | None = None,
+) -> Screen:
+    """Build a :class:`Screen` in the house grammar.
+
+    ``caption`` is finished HTML (the caller owns its voice/copy). ``image`` may
+    be a URL string (e.g. a per-anime TMDB backdrop) or a local ``Path``; when
+    ``None`` we fall back to the bot's recurring character art so the card is
+    never imageless. ``buttons`` are ``(label, callback_data)`` rows; the rarer
+    ``url_buttons`` carry ``(label, url)`` rows for external links (join,
+    open-in-channel). Rows are rendered in order: url rows first, then callbacks.
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    for row in (url_buttons or []):
+        rows.append([InlineKeyboardButton(lbl, url=target) for lbl, target in row])
+    for row in (buttons or []):
+        rows.append([InlineKeyboardButton(lbl, callback_data=data)
+                     for lbl, data in row])
+    keyboard = InlineKeyboardMarkup(rows) if rows else None
+    return Screen(
+        caption=_truncate_html(caption, CAPTION_LIMIT),
+        image=image if image is not None else pick_artwork(bot_name),
+        keyboard=keyboard,
+    )
+
+
 # ── User screens ───────────────────────────────────────────────────────────
 
 def welcome(user_name: str, *, is_staff: bool = False, is_admin: bool = False,

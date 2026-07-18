@@ -79,6 +79,7 @@ class TestSchemaTables:
     def test_all_neko_fetch_tables_exist(self):
         """The vendored NekoFetch models must all have their tables."""
         import kurosoden.shared.models  # noqa: F401
+        import nekofetch.infrastructure.database.postgres.models  # noqa: F401
         from nekofetch.infrastructure.database.postgres.base import Base
 
         table_names = list(Base.metadata.tables.keys())
@@ -101,12 +102,14 @@ class TestSchemaTables:
         assert "admin_availability" in table_names
 
     def test_total_table_count(self):
-        """Sanity check: should have 16 tables (14 NekoFetch + 2 Kage)."""
+        """Sanity check: should have 17 tables (14 NekoFetch + 3 Kage:
+        admin_assignments, admin_availability, work_items)."""
         import kurosoden.shared.models  # noqa: F401
+        import nekofetch.infrastructure.database.postgres.models  # noqa: F401
         from nekofetch.infrastructure.database.postgres.base import Base
 
         table_names = list(Base.metadata.tables.keys())
-        assert len(table_names) == 16
+        assert len(table_names) == 17
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -142,7 +145,8 @@ class TestAdminAvailabilityColumns:
         cols = {c.name for c in AdminAvailability.__table__.columns}
         expected = {"id", "created_at", "updated_at", "admin_telegram_id",
                      "admin_name", "is_available", "assigned_bots",
-                     "scheduled_breaks", "total_tasks_completed"}
+                     "scheduled_breaks", "total_tasks_completed",
+                     "weight", "working_hours"}
         assert cols == expected
 
     def test_is_available_is_boolean(self):

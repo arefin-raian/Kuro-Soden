@@ -7,5 +7,6 @@ tables ``admin_assignments`` and ``admin_availability`` are materialised by
 
 # Re-export so `from kurosoden.shared.models import AdminAssignment, AdminAvailability` works.
 from kurosoden.shared.admin_assignment import AdminAssignment, AdminAvailability  # noqa: F401
+from kurosoden.shared.work_service import WorkItem  # noqa: F401
 
-__all__ = ["AdminAssignment", "AdminAvailability"]
+__all__ = ["AdminAssignment", "AdminAvailability", "WorkItem"]

@@ -109,6 +109,16 @@ def register(client: Client, container: Container) -> None:
     # ── /start handler (already in app.py, but register the FSM trigger too) ──
     @client.on_callback_query(filters.regex(r"^req\|new"))
     async def _new(_: Client, q: CallbackQuery) -> None:
+        from kurosoden.shared.join_gate import ensure_can_request
+
+        # Force-join gate: requesting requires channel membership (staff bypass).
+        is_staff = await _is_staff(q, container)
+        if not await ensure_can_request(
+            client, container, q.from_user.id, q.message.chat.id,
+            is_staff=is_staff, old_msg=q.message,
+        ):
+            await q.answer()
+            return
         await fsm.set(q.from_user.id, STATE_NAME)
         screen = ask_title()
         await send_screen(client, q.message.chat.id, screen, old_msg=q.message)
@@ -131,21 +141,29 @@ def register(client: Client, container: Container) -> None:
         """Check dedup before delegating to NekoFetch's AniList search."""
         user_id = message.from_user.id
 
-        # ── 0. Global gate + one-at-a-time limit (staff bypass both) ──────
+        # ── 0. Force-join + global gate + one-at-a-time limit (staff bypass) ──
         if not await _is_staff(message, container):
+            from kurosoden.shared.join_gate import ensure_can_request
             from kurosoden.shared.request_gate import requests_open
+            from kurosoden.shared import lelouch_voice as V
+
+            # Force-join: typing a title also requires channel membership.
+            if not await ensure_can_request(
+                client, container, user_id, message.chat.id, is_staff=False,
+            ):
+                return
             if not await requests_open(container):
-                await message.reply(
-                    "🌙 <b>Requests are paused right now.</b>\n\n"
-                    "We're catching up on the queue — check back a little later. "
-                    "Thanks for your patience!",
-                    parse_mode=ParseMode.HTML,
+                await send_screen(
+                    client, message.chat.id,
+                    Screen(caption=V.REQUESTS_PAUSED, image=pick_artwork("lelouch")),
                 )
                 return
             if await _has_pending_request(user_id, container):
-                await message.reply(
-                    t(M.REQUEST_LIMIT_REACHED),
-                    parse_mode=ParseMode.HTML,
+                active = await _active_request_title(user_id, container)
+                await send_screen(
+                    client, message.chat.id,
+                    Screen(caption=V.limit_reached(active),
+                           image=pick_artwork("lelouch")),
                 )
                 return
 
@@ -153,30 +171,37 @@ def register(client: Client, container: Container) -> None:
         result = await dedup.check(query)
         if result.exists:
             from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+            from kurosoden.shared import lelouch_voice as V
 
+            title = result.title or query
             # Offer a jump button when the title is already reachable. Main
             # channel post first (our primary surface now); distribution bot is
             # the secondary fallback only when there's no main-channel post.
             kb = None
             if result.source == "main_channel" and result.main_channel_link:
+                caption = V.already_available(title)
                 kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton("📺 Open in Main Channel",
                                          url=result.main_channel_link)]])
             elif result.source == "distribution" and result.bot_username:
+                caption = V.already_available(title)
                 kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton("🤖 Open Distribution Bot",
                                          url=f"https://t.me/{result.bot_username}")]])
+            else:
+                # Already in progress for someone else — reference + stage.
+                caption = V.already_requested(
+                    title, result.request_code or "—",
+                    result.current_stage or "in progress",
+                )
 
-            # ONE card, on that anime's own artwork. The dedup detail already
-            # carries the code + status for in-progress hits, so there is no
-            # second follow-up message anymore.
-            art_key = anime_art_key(title=result.title or query)
-            await ensure_anime_art(art_key, tmdb=container.tmdb,
-                                   title=result.title or query)
+            # ONE card, on that anime's own artwork.
+            art_key = anime_art_key(title=title)
+            await ensure_anime_art(art_key, tmdb=container.tmdb, title=title)
             image = next_anime_art(art_key, fallback_bot="lelouch")
             await send_screen(
                 client, message.chat.id,
-                Screen(caption=result.detail, image=image, keyboard=kb),
+                Screen(caption=caption, image=image, keyboard=kb),
             )
             return
 
@@ -217,6 +242,22 @@ def register(client: Client, container: Container) -> None:
                 return True
         return False
 
+    async def _active_request_title(user_id: int, container: Container) -> str | None:
+        """Title of the user's most recent still-active request, for the
+        limit-reached card. Best-effort — returns None on any hiccup."""
+        try:
+            from nekofetch.services.request_service import RequestService
+            rows = await RequestService(container).list_for_user(user_id, limit=5)
+        except Exception:  # noqa: BLE001
+            return None
+        for r in rows:
+            status = r.status
+            if hasattr(status, "value"):
+                status = status.value
+            if str(status) not in ("published", "rejected", "failed"):
+                return r.anime_title
+        return None
+
     # ──────────────────────────────────────────────────────────────────────────
     # AniList search — IDENTICAL to NekoFetch's admin handler logic
     # (reuses the same module-level helpers for franchise totals + TMDB)
@@ -230,46 +271,22 @@ def register(client: Client, container: Container) -> None:
         # --- 1. Resolve the title (AniList first) ---
         media = await animate_until(msg, container.anilist.search(query), _frame)
         if media is None:
-            # TMDB fallback
-            tmdb_result = await animate_until(
-                msg, container.tmdb.search(query), _frame
+            # AniList missed. Walk the rest of the unified provider chain
+            # (Jikan/MAL is already fused into container.anilist, so this covers
+            # @acutebot → TMDB) and normalize to the franchise-dict shape. Both
+            # this single-request flow and the batch flow share this resolver.
+            from kurosoden.shared.franchise_resolver import resolve_franchise
+
+            franchise_data = await animate_until(
+                msg, resolve_franchise(container, query), _frame
             )
-            if tmdb_result is None:
+            if franchise_data is None:
                 await msg.edit_text(
                     t(M.SEARCH_NOT_FOUND, query=_esc_q(query)),
                     parse_mode=ParseMode.HTML,
                 )
                 return
-
-            tmdb_url = (
-                f"https://www.themoviedb.org/{tmdb_result.media_type}/{tmdb_result.id}"
-            )
-            franchise_data = {
-                "title": tmdb_result.title,
-                "english": tmdb_result.title,
-                "romaji": None,
-                "year": tmdb_result.year,
-                "format": tmdb_result.media_type.upper(),
-                "status": None,
-                "score": tmdb_result.rating,
-                "studio": None,
-                "genres": tmdb_result.genres,
-                "synopsis": tmdb_result.overview,
-                "synopsis_url": tmdb_url,
-                "franchise_episodes": tmdb_result.episodes,
-                "franchise_seasons": tmdb_result.seasons or 1,
-                "franchise_movies": 0,
-                "franchise_ovas": 0,
-                "franchise_onas": 0,
-                "franchise_specials": 0,
-                "relations": [],
-                "anilist_id": str(tmdb_result.id),
-                "anilist_url": tmdb_url,
-                "cover_url": tmdb_result.poster_url,
-                "banner_url": tmdb_result.backdrop_url,
-                "_source": "tmdb",
-                "_query": query,
-            }
+            franchise_data["_query"] = query
             await fsm.set(
                 message.from_user.id,
                 STATE_FRANCHISE,

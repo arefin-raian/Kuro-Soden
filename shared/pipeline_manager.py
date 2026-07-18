@@ -72,6 +72,14 @@ class PipelineManager:
         # ── Scheduler for background tasks ────────────────────────────────────
         self._scheduler = Scheduler()
         self._c.scheduler = self._scheduler  # type: ignore[attr-defined]
+
+        # Idle-reminder: every 10 min, nudge on-shift idle admins when work is
+        # waiting. The job itself honours mode/availability/hours/breaks and a
+        # per-admin cooldown, so it's safe to tick often.
+        from kurosoden.shared.idle_reminder import make_idle_nudge_job
+
+        self._scheduler.every(600, make_idle_nudge_job(self._c), id="idle-nudge")
+
         self._scheduler.start()
 
         # ── Connection watchdog ───────────────────────────────────────────────

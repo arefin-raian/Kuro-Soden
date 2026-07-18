@@ -44,3 +44,39 @@ async def set_requests_open(container: Any, is_open: bool) -> bool:
     except Exception:
         pass
     return is_open
+
+
+# ── Campaign mode ────────────────────────────────────────────────────────────
+# A coarse tempo switch surfaced on the admin panel and honoured by the idle
+# reminder job. "paused" additionally implies the request gate is closed.
+
+_MODE_KEY = "kurosoden:mode"
+VALID_MODES = ("normal", "catch-up", "paused")
+
+
+async def get_mode(container: Any) -> str:
+    """Current campaign mode. Defaults to ``normal`` when unset/Redis absent."""
+    redis = getattr(container, "redis", None)
+    if redis is None:
+        return "normal"
+    try:
+        val = await redis.get(_MODE_KEY)
+    except Exception:
+        return "normal"
+    if val is None:
+        return "normal"
+    if isinstance(val, bytes):
+        val = val.decode("utf-8", "ignore")
+    return str(val) if str(val) in VALID_MODES else "normal"
+
+
+async def set_mode(container: Any, mode: str) -> str:
+    """Persist the campaign mode; unknown values coerce to ``normal``."""
+    mode = mode if mode in VALID_MODES else "normal"
+    redis = getattr(container, "redis", None)
+    if redis is not None:
+        try:
+            await redis.set(_MODE_KEY, mode)
+        except Exception:
+            pass
+    return mode

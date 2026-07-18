@@ -1,31 +1,36 @@
-"""Lelouch Vi Britannia — Request Bot (影の司令官 · The Shadow Commander).
+"""Lelouch vi Britannia — Request Bot (影の司令官 · The Shadow Commander).
 
 Handles:
   • User request intake — reuses NekoFetch's AniList search + franchise flow.
   • Duplicate detection before accepting (main channel → distribution → in-progress).
   • One-request-at-a-time limit for regular users.
-  • Admin batch request support.
+  • Admin batch work support (marshalled into the work-item queue).
   • Admin assignment to the downloader stage.
-  • Management features (availability, breaks, scheduling, reassignment).
+  • Management (availability, breaks, working hours, reassignment).
   • Per-bot settings panel.
+
+Routing contract (the fix for "buttons do nothing"): every Lelouch screen is
+built by :mod:`kurosoden.bots.lelouch.screens` and emits callbacks in exactly
+three namespaces — ``lelouch|…`` (this dispatcher), ``req|…`` (the request
+handler), and ``batch|…`` (the reused NekoFetch batch handler). We also install
+bridges for the generic ``welcome()`` screen's ``home`` / ``admin|home`` /
+``queue|view`` callbacks so no button is ever a dead tap.
 """
 
 from __future__ import annotations
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
-from pyrogram.types import BotCommand, Message
+from pyrogram.types import BotCommand, CallbackQuery, Message
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
-from kurosoden.shared.ui_helpers import reply_with_screen
-from nekofetch.ui.artwork import pick_artwork
 
 LELOUCH_COMMANDS = [
     BotCommand("start", "Submit a new anime request"),
     BotCommand("myrequests", "View your request status"),
     BotCommand("help", "How requests work"),
-    BotCommand("admin", "Admin management panel (staff only)"),
+    BotCommand("admin", "Command panel (staff only)"),
     BotCommand("settings", "Configure the request bot"),
 ]
 
@@ -37,13 +42,7 @@ async def publish_commands(client: Client) -> None:
 
 
 def build_lelouch(container: Container, token: str) -> Client:
-    """Build and wire the Lelouch (Request) bot client.
-
-    Reuses NekoFetch's existing handlers via ``register_all`` — the same
-    AniList search, franchise confirmation, and TMDB enrichment logic
-    that the admin bot already uses, with Lelouch-specific dedup and
-    admin assignment layered on top.
-    """
+    """Build and wire the Lelouch (Request) bot client."""
     client = Client(
         name="kurosoden-lelouch",
         api_id=container.env.telegram_api_id,
@@ -53,147 +52,99 @@ def build_lelouch(container: Container, token: str) -> Client:
     )
     client.container = container
 
-    # ── Register all handlers (middleware + request flow) ─────────────────────
+    # ── Register request-flow handlers (middleware + intake + batch) ──────────
     from kurosoden.bots.lelouch.handlers import register_all
 
     register_all(client, container)
 
-    # ── Catch-all menu callback ─────────────────────────────────────────────
-    # Inline buttons on /start route to `lelouch|<action>`. The dispatcher below
-    # maps every action to a real screen — no more "Type /X in chat" toasts.
-    from pyrogram.types import (CallbackQuery, InlineKeyboardButton,
-                                InlineKeyboardMarkup)
-    from kurosoden.shared.menu_router import settings_hub, settings_onboarding, tool_screen
-    from kurosoden.shared.settings_content import ALL_BY_BOT
-    from nekofetch.ui.components import cb
-    from nekofetch.ui.screens import Screen, send_screen
+    # ── Shared imports for the dispatcher ─────────────────────────────────────
     from nekofetch.domain.enums import Role
+    from nekofetch.ui.screens import send_screen
+    from kurosoden.bots.lelouch import screens as S
+    from kurosoden.shared import lelouch_voice as V
+    from kurosoden.shared.menu_router import settings_onboarding
+    from kurosoden.shared.request_gate import (
+        get_mode,
+        requests_open,
+        set_requests_open,
+    )
+    from kurosoden.shared.settings_content import ALL_BY_BOT
+    from kurosoden.shared.work_service import WorkService
 
+    # ── Small role/state helpers ──────────────────────────────────────────────
+    def _role(obj) -> Role:
+        user = getattr(obj, "nf_user", None)
+        return Role(user.role) if user else Role.USER
+
+    def _first_name(obj) -> str:
+        u = getattr(obj, "from_user", None)
+        return (u.first_name if u else "") or ""
+
+    async def _counts() -> tuple[int, int]:
+        """(pending requests, open work items) — best effort, never raises."""
+        pending = 0
+        try:
+            pending = len(await _request_service().list_pending())
+        except Exception:  # noqa: BLE001 — a count is decorative, never fatal
+            pass
+        work_open = 0
+        try:
+            work_open = await WorkService(container.pg_sessionmaker).count_open()
+        except Exception:  # noqa: BLE001
+            pass
+        return pending, work_open
+
+    def _request_service():
+        from nekofetch.services.request_service import RequestService
+        return RequestService(container)
+
+    async def _render_home(chat_id: int, obj, old_msg: Message | None = None) -> None:
+        role = _role(obj)
+        screen = S.home(
+            _first_name(obj),
+            is_staff=role in (Role.STAFF, Role.ADMIN),
+            is_admin=role is Role.ADMIN,
+        )
+        await send_screen(client, chat_id, screen, old_msg=old_msg)
+
+    async def _render_admin(chat_id: int, old_msg: Message | None = None) -> None:
+        is_open = await requests_open(container)
+        mode = await get_mode(container)
+        pending, work_open = await _counts()
+        screen = S.admin_panel(mode=mode, requests_open=is_open,
+                               pending=pending, work_open=work_open)
+        await send_screen(client, chat_id, screen, old_msg=old_msg)
+
+    # ── Main menu dispatcher — every lelouch|<action> resolves here ───────────
     @client.on_callback_query(filters.regex(r"^lelouch\|"))
-    async def _lelouch_menu_fallback(client: Client, q: CallbackQuery) -> None:
+    async def _menu(_: Client, q: CallbackQuery) -> None:
         if q.message is None:
             await q.answer()
             return
         parts = q.data.split("|", 2)
         action = parts[1] if len(parts) > 1 else "home"
         arg = parts[2] if len(parts) > 2 else ""
-        bot = "lelouch"
+        chat_id = q.message.chat.id
+        staff = _role(q) in (Role.STAFF, Role.ADMIN)
 
         # ¬¬ Home ¬¬
         if action == "home":
-            caption = (
-                "<b>🎭 Lelouch — Request Bot</b>\n\n"
-                "<i>\"The only ones who should kill are those prepared to die.\"</i>\n\n"
-                "I handle the intake pipeline:\n"
-                "• Search AniList / TMDB\n"
-                "• Franchise confirmation\n"
-                "• Dedup across main / dist / in-progress\n"
-                "• Auto-assign to downloader admins"
-            )
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🎬 Request Anime", callback_data=cb("req", "new")),
-                 InlineKeyboardButton("📥 My Requests", callback_data=cb("req", "mine", 0))],
-                [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings")),
-                 InlineKeyboardButton("🛡 Admin Panel", callback_data=cb(bot, "admin"))],
-            ])
-            await send_screen(client, q.message.chat.id,
-                              Screen(caption=caption, image=pick_artwork(bot),
-                                     keyboard=keyboard), old_msg=q.message)
+            await _render_home(chat_id, q, old_msg=q.message)
             await q.answer()
             return
 
-        # ¬¬ Admin ¬¬
-        if action == "admin":
-            user = getattr(q, "nf_user", None)
-            role = Role(user.role) if user else Role.USER
-            if role not in (Role.STAFF, Role.ADMIN):
-                await q.answer("🔒 Staff only.", show_alert=True)
-                return
-            from kurosoden.shared.request_gate import requests_open
-            is_open = await requests_open(container)
-            state_line = ("🟢 <b>Accepting requests</b>" if is_open
-                          else "🔴 <b>Requests paused</b>")
-            caption = (
-                "<b>🎭 Lelouch — Admin Panel</b>\n\n"
-                f"{state_line}\n\n"
-                "<i>Manage requests, admins, and availability.</i>\n\n"
-                "<blockquote>Staff-only tools. Non-staff tap = access denied toast.</blockquote>"
-            )
-            toggle_label = ("🔴 Pause Requests" if is_open
-                            else "🟢 Resume Requests")
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(toggle_label, callback_data=cb(bot, "reqtoggle"))],
-                [InlineKeyboardButton("📋 Pending Requests", callback_data=cb(bot, "pending")),
-                 InlineKeyboardButton("👥 Manage Admins", callback_data=cb(bot, "manage"))],
-                [InlineKeyboardButton("📊 Availability", callback_data=cb(bot, "avail")),
-                 InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
-                [InlineKeyboardButton("⇐ Back to Home", callback_data=cb(bot, "home"))],
-            ])
-            await send_screen(client, q.message.chat.id,
-                              Screen(caption=caption, image=pick_artwork(bot),
-                                     keyboard=keyboard), old_msg=q.message)
-            await q.answer()
-            return
-
-        # ¬¬ Toggle the global "accepting requests" gate ¬¬
-        if action == "reqtoggle":
-            user = getattr(q, "nf_user", None)
-            role = Role(user.role) if user else Role.USER
-            if role not in (Role.STAFF, Role.ADMIN):
-                await q.answer("🔒 Staff only.", show_alert=True)
-                return
-            from kurosoden.shared.request_gate import requests_open, set_requests_open
-            new_state = not await requests_open(container)
-            await set_requests_open(container, new_state)
-            await q.answer(
-                "🟢 Requests resumed." if new_state else "🔴 Requests paused.",
-                show_alert=False,
-            )
-            # Re-render the admin panel so the button + banner reflect the change.
-            state_line = ("🟢 <b>Accepting requests</b>" if new_state
-                          else "🔴 <b>Requests paused</b>")
-            caption = (
-                "<b>🎭 Lelouch — Admin Panel</b>\n\n"
-                f"{state_line}\n\n"
-                "<i>Manage requests, admins, and availability.</i>\n\n"
-                "<blockquote>Staff-only tools. Non-staff tap = access denied toast.</blockquote>"
-            )
-            toggle_label = ("🔴 Pause Requests" if new_state
-                            else "🟢 Resume Requests")
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(toggle_label, callback_data=cb(bot, "reqtoggle"))],
-                [InlineKeyboardButton("📋 Pending Requests", callback_data=cb(bot, "pending")),
-                 InlineKeyboardButton("👥 Manage Admins", callback_data=cb(bot, "manage"))],
-                [InlineKeyboardButton("📊 Availability", callback_data=cb(bot, "avail")),
-                 InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
-                [InlineKeyboardButton("⇐ Back to Home", callback_data=cb(bot, "home"))],
-            ])
-            await send_screen(client, q.message.chat.id,
-                              Screen(caption=caption, image=pick_artwork(bot),
-                                     keyboard=keyboard), old_msg=q.message)
-            return
-
-        # ¬¬ Settings hub ¬¬
+        # ¬¬ Settings hub + per-key onboarding (open to all; edits are staff-gated
+        #    by the request handler that consumes the value) ¬¬
         if action == "settings":
-            caption, keyboard = settings_hub(
-                bot, title="Lelouch Settings",
-                body=("Configure request limits, admin pools, and availability.\n\n"
-                      "<i>Tap a row to open the help panel for that key, then "
-                      "send the new value as a chat message.</i>"),
-                items=[("Request Limits", "limits"), ("Admin Pool", "admins")],
-            )
-            await send_screen(client, q.message.chat.id,
-                              Screen(caption=caption, image=pick_artwork(bot),
-                                     keyboard=keyboard), old_msg=q.message)
+            await send_screen(client, chat_id, S.settings_hub(), old_msg=q.message)
             await q.answer()
             return
 
-        # ¬¬ set|<key> onboarding ¬¬
         if action == "set" and arg:
-            info = ALL_BY_BOT.get(bot, {}).get(arg)
+            info = ALL_BY_BOT.get("lelouch", {}).get(arg)
             if info:
-                caption, keyboard = settings_onboarding(
-                    bot, arg, title=info["title"], about=info["about"],
+                caption, _kb = settings_onboarding(
+                    "lelouch", arg, title=info["title"], about=info["about"],
                     when_to_use=info.get("when_to_use", ""),
                     options=info.get("options"),
                     placeholders=info.get("placeholders"),
@@ -202,83 +153,150 @@ def build_lelouch(container: Container, token: str) -> Client:
                     danger=info.get("danger", ""),
                     hint=info.get("hint", "Send the new value as a chat message."),
                 )
-                await send_screen(client, q.message.chat.id,
-                                  Screen(caption=caption, image=pick_artwork(bot),
-                                         keyboard=keyboard), old_msg=q.message)
-                await q.answer()
-                return
-
-        # ¬¬ Admin placeholder actions (staff actions land next round) ¬¬
-        if action in ("pending", "manage", "avail"):
-            tmap = {"pending": "Pending Requests",
-                    "manage": "Manage Admins",
-                    "avail": "Availability"}
-            caption, _ = tool_screen(
-                bot, title=tmap[action],
-                kicker="Tap from the panel — full controls land next round.",
-                lines=[f"<b>Coming up:</b> {action} controls."],
-                back="admin",
-                back_label="⇐ Back to Admin",
-            )
-            await send_screen(client, q.message.chat.id,
-                              Screen(caption=caption, image=pick_artwork(bot),
-                                     keyboard=InlineKeyboardMarkup([[
-                                         InlineKeyboardButton(
-                                             "⇐ Back to Admin",
-                                             callback_data=cb(bot, "admin"),
-                                         ),
-                                     ]])), old_msg=q.message)
+                await send_screen(client, chat_id, S.settings_key(caption),
+                                  old_msg=q.message)
             await q.answer()
             return
 
-        await q.answer(f"Action “{action}” not wired yet.", show_alert=True)
+        # ── Everything below is staff-only ──
+        if not staff:
+            await q.answer("🔒 Command is staff only.", show_alert=True)
+            return
 
-    # ── /start ────────────────────────────────────────────────────────────────
-    # Rich UI: sticker → loading animation → welcome screen with inline keyboard
-    # and Lelouch-themed artwork (images/lelouch/).
+        if action == "admin":
+            await _render_admin(chat_id, old_msg=q.message)
+            await q.answer()
+            return
+
+        if action == "reqtoggle":
+            new_state = not await requests_open(container)
+            await set_requests_open(container, new_state)
+            await q.answer("🟢 Requests resumed." if new_state
+                           else "🔴 Requests paused.")
+            await _render_admin(chat_id, old_msg=q.message)
+            return
+
+        if action == "queue":
+            pending, work_open = await _counts()
+            await send_screen(client, chat_id,
+                              S.queue(pending=pending, work_open=work_open,
+                                      back="admin"),
+                              old_msg=q.message)
+            await q.answer()
+            return
+
+        if action == "manage":
+            from kurosoden.bots.lelouch.handlers.management import render_manage
+            await render_manage(client, container, chat_id, q.message)
+            await q.answer()
+            return
+
+        if action == "avail":
+            from kurosoden.bots.lelouch.handlers.management import render_availability
+            await render_availability(client, container, chat_id, q.message)
+            await q.answer()
+            return
+
+        if action == "hours":
+            from kurosoden.bots.lelouch.handlers.management import render_hours
+            await render_hours(client, container, chat_id, q.message)
+            await q.answer()
+            return
+
+        if action == "pending":
+            # Hand off to the reused NekoFetch staff review list, which owns the
+            # rich per-request detail flow. Its own callbacks (staff|…) are
+            # registered on this client by register_all → review.register.
+            from nekofetch.ui.components import cb
+            from nekofetch.ui.screens import card
+            pending, _work = await _counts()
+            screen = card(
+                f"{V.ICON} <b>Pending Requests</b>\n\n"
+                f"<b>{pending}</b> awaiting a source. Open the review board to "
+                f"assign and act on each one.\n\n"
+                "<i>Indecision is the only true defeat. Move.</i>",
+                bot_name="lelouch",
+                buttons=[[("📋 Open Review Board", cb("staff", "requests", 0))],
+                         [(V.BTN_BACK_ADMIN, cb("lelouch", "admin"))]],
+            )
+            await send_screen(client, chat_id, screen, old_msg=q.message)
+            await q.answer()
+            return
+
+        await q.answer(V.UNKNOWN_ACTION, show_alert=True)
+
+    # ── Bridges for the generic welcome() screen's callbacks ──────────────────
+    # If any surface still ships NekoFetch's stock welcome (bare `home`,
+    # `admin|home`, `queue|view|<page>`), route it home/admin instead of a dead
+    # tap. Grouped after the main dispatcher so lelouch|… wins first.
+    @client.on_callback_query(filters.regex(r"^home$"))
+    async def _bridge_home(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        await _render_home(q.message.chat.id, q, old_msg=q.message)
+        await q.answer()
+
+    @client.on_callback_query(filters.regex(r"^admin\|home$"))
+    async def _bridge_admin(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        if _role(q) not in (Role.STAFF, Role.ADMIN):
+            await q.answer("🔒 Command is staff only.", show_alert=True)
+            return
+        await _render_admin(q.message.chat.id, old_msg=q.message)
+        await q.answer()
+
+    @client.on_callback_query(filters.regex(r"^queue\|view"))
+    async def _bridge_queue(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        if _role(q) not in (Role.STAFF, Role.ADMIN):
+            await q.answer("🔒 Command is staff only.", show_alert=True)
+            return
+        pending, work_open = await _counts()
+        await send_screen(client, q.message.chat.id,
+                          S.queue(pending=pending, work_open=work_open,
+                                  back="home"),
+                          old_msg=q.message)
+        await q.answer()
+
+    # ── /start — theatrical welcome, our own Lelouch home card ────────────────
     @client.on_message(filters.command("start"))
     async def _start(_: Client, message: Message) -> None:
-        from nekofetch.domain.enums import Role
-        from nekofetch.ui.screens import welcome as welcome_screen
         from kurosoden.shared.ui_helpers import send_rich_welcome
 
-        user = getattr(message, "nf_user", None)
-        role = Role(user.role) if user else Role.USER
-        name = message.from_user.first_name if message.from_user else ""
-
-        # welcome_screen() builds a NekoFetch-parity screen with the
-        # Request Anime / My Requests inline buttons + staff/admin extras;
-        # passing bot_name="lelouch" picks artwork from images/lelouch/.
-        screen = welcome_screen(
-            name,
+        role = _role(message)
+        screen = S.home(
+            _first_name(message),
             is_staff=role in (Role.STAFF, Role.ADMIN),
             is_admin=role is Role.ADMIN,
-            bot_name="lelouch",
         )
         await send_rich_welcome(client, container, message, screen)
 
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))
     async def _help(_: Client, message: Message) -> None:
+        from nekofetch.ui.components import cb
+        from nekofetch.ui.screens import card
+
         caption = (
-            "<b>🎭 Lelouch Vi Britannia — Request Bot</b>\n\n"
-            "<b>How to request:</b>\n"
+            f"{V.ICON} <b>How the game is played</b>\n\n"
             "1. Send me any anime title.\n"
-            "2. I'll check if it already exists.\n"
-            "3. If new, I'll search AniList and confirm the franchise.\n"
-            "4. Once confirmed, I assign it to our download team.\n\n"
-            "<b>Rules:</b>\n"
-            "• One active request at a time (staff can batch).\n"
-            "• You'll be notified when your anime is published.\n\n"
-            "<b>Commands:</b>\n"
-            "/start — New request\n"
-            "/myrequests — Your requests\n"
-            "/help — This help"
+            "2. I confirm it doesn't already exist in our arsenal.\n"
+            "3. If it's new, I hunt down its true form and confirm the franchise.\n"
+            "4. Once you approve, I hand it to the ones who bring it home.\n\n"
+            "<b>The rules:</b>\n"
+            "• One request in play at a time — staff may batch work.\n"
+            "• You'll be told the moment your anime is published.\n\n"
+            "<i>Make your move.</i>"
         )
-        from nekofetch.ui.components import cb, keyboard
-        await reply_with_screen(
-            client, message.chat.id, caption, bot_name="lelouch",
-            keyboard=keyboard([("⇐ Back to Home", cb("lelouch", "home"))]),
+        await send_screen(
+            client, message.chat.id,
+            card(caption, bot_name="lelouch",
+                 buttons=[[(V.BTN_HOME, cb("lelouch", "home"))]]),
         )
 
     # ── /myrequests ───────────────────────────────────────────────────────────
@@ -286,79 +304,56 @@ def build_lelouch(container: Container, token: str) -> Client:
     async def _myrequests(_: Client, message: Message) -> None:
         if not message.from_user:
             return
-        from nekofetch.services.request_service import RequestService
+        from nekofetch.ui.components import cb
+        from nekofetch.ui.screens import card
 
-        rows = await RequestService(container).list_for_user(message.from_user.id)
+        rows = await _request_service().list_for_user(message.from_user.id)
         if not rows:
-            await reply_with_screen(
+            caption = (
+                f"{V.ICON} <b>Your board is empty.</b>\n\n"
+                "You hold no requests yet. Name an anime and I'll set the machine "
+                "in motion.\n\n"
+                "<i>Every campaign begins with a single move.</i>"
+            )
+            await send_screen(
                 client, message.chat.id,
-                "📭 <b>No requests yet!</b>\n\n"
-                "Send me an anime title to get started.",
-                bot_name="lelouch",
+                card(caption, bot_name="lelouch",
+                     buttons=[[(V.BTN_REQUEST, cb("req", "new"))],
+                              [(V.BTN_HOME, cb("lelouch", "home"))]]),
             )
             return
 
-        lines = ["<b>📋 Your Requests</b>\n"]
+        emoji = {
+            "pending": "⏳", "approved": "✅", "queued": "📥",
+            "downloading": "⬇️", "processing": "⚙️", "ready": "📦",
+            "published": "🎉", "rejected": "❌", "failed": "⚠️",
+        }
+        lines = [f"{V.ICON} <b>Your Requests</b>", ""]
         for r in rows[:10]:
-            status_val = r.status.value if hasattr(r.status, 'value') else str(r.status)
-            status_emoji = {
-                "pending": "⏳", "approved": "✅", "queued": "📥",
-                "downloading": "⬇️", "processing": "⚙️", "ready": "📦",
-                "published": "🎉", "rejected": "❌", "failed": "⚠️",
-            }.get(status_val, "❓")
+            status_val = r.status.value if hasattr(r.status, "value") else str(r.status)
             lines.append(
-                f"{status_emoji} <b>{r.anime_title}</b> — "
-                f"<code>{r.code}</code> ({status_val})"
+                f"{emoji.get(status_val, '❓')} <b>{V.esc(r.anime_title)}</b> — "
+                f"<code>{V.esc(r.code)}</code> ({V.esc(status_val)})"
             )
-
-        await reply_with_screen(
-            client, message.chat.id, "\n".join(lines), bot_name="lelouch",
+        await send_screen(
+            client, message.chat.id,
+            card("\n".join(lines), bot_name="lelouch",
+                 buttons=[[(V.BTN_REQUEST, cb("req", "new"))],
+                          [(V.BTN_HOME, cb("lelouch", "home"))]]),
         )
 
     # ── /admin ────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("admin"))
     async def _admin(_: Client, message: Message) -> None:
-        from nekofetch.domain.enums import Role
-
-        user = getattr(message, "nf_user", None)
-        role = Role(user.role) if user else Role.USER
-        if role not in (Role.STAFF, Role.ADMIN):
-            await message.reply("🔒 <b>Staff only.</b>", parse_mode=ParseMode.HTML)
+        if _role(message) not in (Role.STAFF, Role.ADMIN):
+            await message.reply("🔒 <b>Command is staff only.</b>",
+                                parse_mode=ParseMode.HTML)
             return
+        await _render_admin(message.chat.id)
 
-        from nekofetch.ui.components import cb, keyboard
-        from nekofetch.ui.screens import Screen, send_screen
-
-        rows = [
-            [("📋 Pending Requests", cb("lelouch", "pending")),
-             ("👥 Manage Admins", cb("lelouch", "manage"))],
-            [("📊 Availability", cb("lelouch", "avail")),
-             ("⚙️ Settings", cb("lelouch", "settings"))],
-        ]
-        screen = Screen(
-            caption="<b>🎭 Lelouch Vi Britannia — Admin Panel</b>\n\n"
-                     "Manage requests, admins, and availability.",
-            keyboard=keyboard(*rows),
-            image=pick_artwork("lelouch"),
-        )
-        await send_screen(client, message.chat.id, screen)
-
-    # ── /settings ─────────────────────────────────────────────────────────────
+    # ── /settings ───────────────────────────────────────────────────────────────
     @client.on_message(filters.command("settings"))
     async def _settings(_: Client, message: Message) -> None:
-        from nekofetch.ui.screens import Screen, send_screen
-        from nekofetch.ui.components import cb, keyboard
-
-        screen = Screen(
-            caption="<b>⚙️ Lelouch Settings</b>\n\n"
-                     "Configure request limits, admin pools, and availability.",
-            keyboard=keyboard(
-                [("Request Limits", cb("lelouch", "set", "limits")),
-                 ("Admin Pool", cb("lelouch", "set", "admins"))],
-                [("Back", cb("lelouch", "home"))],
-            ),
-            image=pick_artwork("lelouch"),
-        )
-        await send_screen(client, message.chat.id, screen)
+        await send_screen(client, message.chat.id, S.settings_hub())
 
     return client

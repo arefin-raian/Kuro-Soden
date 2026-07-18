@@ -55,6 +55,14 @@ class AdminAvailability(Base, PKMixin, TimestampMixin):
     # Scheduled breaks: list of {start, end, reason} dicts.
     scheduled_breaks: Mapped[list | None] = mapped_column(JSONB)
     total_tasks_completed: Mapped[int] = mapped_column(Integer, default=0)
+    # Assignment weight: higher = more tasks routed here (a trusted admin can be
+    # weighted up). Effective load is active_tasks / weight, so weight 2 lets an
+    # admin carry twice the queue before they're passed over.
+    weight: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Working window as {"start": 0-23, "end": 0-23} in UTC, or NULL for always-on.
+    # Wraps past midnight when start > end (e.g. 22→6). Honoured by assignment +
+    # the idle nudge so no one is roused off the clock.
+    working_hours: Mapped[dict | None] = mapped_column(JSONB)
 
 
 # ── Assignment Engine ─────────────────────────────────────────────────────────
@@ -165,17 +173,18 @@ class AdminAssignmentEngine:
         if not stage_candidates:
             return None
 
-        # Skip admins on scheduled break.
+        # Skip admins on scheduled break or off their working hours.
         now = datetime.now(timezone.utc)
         active_candidates = [
             a for a in stage_candidates
-            if not self._is_on_break(a, now)
+            if not self._is_on_break(a, now) and self._within_hours(a, now)
         ]
         if not active_candidates:
             return None
 
-        # Count active tasks for each candidate.
-        scored: list[tuple[int, int, AdminAvailability]] = []
+        # Count active tasks, then score by *weighted* load so a higher-weighted
+        # admin absorbs more of the queue before being passed over.
+        scored: list[tuple[float, int, AdminAvailability]] = []
         for a in active_candidates:
             active_count = (
                 await session.execute(
@@ -185,9 +194,10 @@ class AdminAssignmentEngine:
                     )
                 )
             ).scalar() or 0
-            scored.append((active_count, a.total_tasks_completed, a))
+            weight = max(1, a.weight or 1)
+            scored.append((active_count / weight, a.total_tasks_completed, a))
 
-        # Sort: fewest active tasks first, then fewest total completed.
+        # Sort: lowest weighted load first, then fewest total completed.
         scored.sort(key=lambda x: (x[0], x[1]))
         return scored[0][2]
 
@@ -205,6 +215,28 @@ class AdminAssignmentEngine:
             except (KeyError, ValueError, TypeError):
                 continue
         return False
+
+    @staticmethod
+    def _within_hours(avail: AdminAvailability, now: datetime) -> bool:
+        """True when ``now`` (UTC) falls in the admin's working window.
+
+        No window set ⇒ always on. A window that wraps midnight (start > end,
+        e.g. 22→6) is treated as spanning the boundary.
+        """
+        wh = avail.working_hours
+        if not wh:
+            return True
+        try:
+            start = int(wh["start"]) % 24
+            end = int(wh["end"]) % 24
+        except (KeyError, ValueError, TypeError):
+            return True
+        hour = now.hour
+        if start == end:
+            return True  # degenerate/full-day window
+        if start < end:
+            return start <= hour < end
+        return hour >= start or hour < end  # wraps midnight
 
     async def _create_assignment(
         self, session, admin_id: int, request_code: str, stage: str, avail: AdminAvailability
