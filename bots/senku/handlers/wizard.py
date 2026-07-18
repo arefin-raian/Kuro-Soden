@@ -48,6 +48,9 @@ BOT = "senku"
 # FSM state: waiting for the admin to send the created channel's @username / id.
 STATE_AWAIT_CHANNEL = "senku:wiz:await_channel"
 
+# FSM state: waiting for the admin to paste a corrected watch order (Phase 4 edit).
+STATE_AWAIT_ORDER = "senku:wiz:await_order"
+
 # Commands that must never be swallowed by the free-text channel step.
 _RESERVED = ["start", "tasks", "create", "generate", "settings", "help", "cancel"]
 
@@ -367,22 +370,84 @@ def register(client: Client, container: Container) -> None:
         await _thumb_next(q.message.chat.id, code, old_msg=None)
 
     async def _enter_watch_order(chat_id: int, code: str, *, old_msg: Message | None) -> None:
-        """Enter the watch-order confirm step (Phase 4).
+        """Enter the watch-order confirm step (Phase 4) — the last gate before publish.
 
-        Phase 4 registers the confirm/edit/post handlers; until then this renders
-        the ordered entries so the loop's end resolves to a real card rather than a
-        dead tap.
+        Renders the numbered order with Confirm/Edit buttons. Confirm publishes;
+        Edit drops into a free-text step (``STATE_AWAIT_ORDER``) that re-maps the
+        pasted order and returns here for a second look.
         """
         entries = await cache.get_entries(code)
         franchise = await cache.get_franchise(code)
         title = await _title_of(code, franchise)
-        order_html = franchise_map.render_tree(entries, title)
+        order_html = franchise_map.render_watch_order(entries)
         await send_screen(
             client, chat_id,
             card(V.watch_order_card(title, order_html),
                  image=await _art(franchise, title), bot_name=BOT,
-                 buttons=[[(V.BTN_HOME, cb(BOT, "home"))]]),
+                 buttons=[
+                     [(V.BTN_ORDER_CORRECT, cb(BOT, "wiz", "post", code))],
+                     [(V.BTN_ORDER_EDIT, cb(BOT, "wiz", "oedit", code))],
+                     [(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))],
+                 ]),
             old_msg=old_msg,
+        )
+
+    async def _ask_order_edit(chat_id: int, user_id: int, code: str,
+                              *, old_msg: Message | None) -> None:
+        """Prompt for a corrected watch order and arm the free-text step."""
+        await fsm.set(user_id, STATE_AWAIT_ORDER, code=code)
+        entries = await cache.get_entries(code)
+        franchise = await cache.get_franchise(code)
+        title = await _title_of(code, franchise)
+        copy_block = franchise_map.render_copy_block(entries)
+        body = f"{V.WATCH_ORDER_EDIT_PROMPT}\n\n<pre>{copy_block}</pre>"
+        await send_screen(
+            client, chat_id,
+            card(body, image=await _art(franchise, title), bot_name=BOT,
+                 buttons=[[(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
+            old_msg=old_msg,
+        )
+
+    async def _publish(chat_id: int, user_id: int, code: str,
+                       *, old_msg: Message | None) -> None:
+        """Post the content pack into the channel, then hand off to Gojo."""
+        await fsm.clear(user_id)
+        franchise = await cache.get_franchise(code)
+        title = await _title_of(code, franchise)
+        # "Working" card — publishing walks the whole pack + catbox uploads.
+        await send_screen(
+            client, chat_id,
+            card(V.publishing(title), image=await _art(franchise, title), bot_name=BOT),
+            old_msg=old_msg,
+        )
+        try:
+            from kurosoden.shared.senku_publisher import SenkuPublisher
+
+            await SenkuPublisher(container).publish(client, code)
+        except Exception as exc:  # noqa: BLE001 — surface a clean failure card
+            log.warning("senku.wiz.publish_failed", code=code, error=str(exc))
+            await send_screen(
+                client, chat_id,
+                card(V.PUBLISH_FAIL, image=pick_artwork(BOT), bot_name=BOT,
+                     buttons=[[(V.BTN_PUBLISH, cb(BOT, "wiz", "post", code))],
+                              [(V.BTN_HOME, cb(BOT, "home"))]]),
+                old_msg=None,
+            )
+            return
+        # Hand the request to Gojo (publish stage) and clear the working cache.
+        try:
+            from kurosoden.shared.handoff import handoff_distribution_to_publish
+
+            await handoff_distribution_to_publish(container, code, title)
+        except Exception as exc:  # noqa: BLE001 — handoff is best-effort
+            log.warning("senku.wiz.handoff_failed", code=code, error=str(exc))
+        await cache.clear(code)
+        await send_screen(
+            client, chat_id,
+            card(V.published_done(title), image=await _art(franchise, title), bot_name=BOT,
+                 buttons=[[(V.BTN_TASKS, cb(BOT, "tasks"))],
+                          [(V.BTN_HOME, cb(BOT, "home"))]]),
+            old_msg=None,
         )
 
     # ── /create — open the wizard for the admin's most recent task ─────────────
@@ -449,9 +514,17 @@ def register(client: Client, container: Container) -> None:
                 return
             await _thumb_generate(q, code, index)
         elif action == "order":
-            # Phase 4 (watch-order confirm) picks up here.
+            # Watch-order confirm card (Phase 4).
             await q.answer()
             await _enter_watch_order(chat_id, code, old_msg=q.message)
+        elif action == "oedit":
+            # "Edit order" — arm the free-text re-map step.
+            await q.answer()
+            await _ask_order_edit(chat_id, q.from_user.id, code, old_msg=q.message)
+        elif action == "post":
+            # "Order is correct" — publish the pack into the channel.
+            await q.answer()
+            await _publish(chat_id, q.from_user.id, code, old_msg=q.message)
         elif action == "cancel":
             await fsm.clear(q.from_user.id)
             await q.answer("Cancelled.")
@@ -474,12 +547,26 @@ def register(client: Client, container: Container) -> None:
         if not message.from_user:
             return
         state, data = await fsm.get(message.from_user.id)
-        if state != STATE_AWAIT_CHANNEL:
+        if state not in (STATE_AWAIT_CHANNEL, STATE_AWAIT_ORDER):
             return  # not our turn
         if not _staff(message):
             return
         code = data.get("code", "")
         raw = (message.text or "").strip()
+
+        if state == STATE_AWAIT_ORDER:
+            if not raw:
+                await message.reply(V.watch_order_edit_failed())
+                return
+            entries = await cache.apply_order_correction(code, raw)
+            if not entries:
+                await message.reply(V.watch_order_edit_failed())
+                return
+            await fsm.clear(message.from_user.id)
+            # Re-render the confirm card with the corrected order for a second look.
+            await _enter_watch_order(message.chat.id, code, old_msg=None)
+            return
+
         if not raw:
             await message.reply(V.channel_missing("the channel @username or ID"))
             return

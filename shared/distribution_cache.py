@@ -160,6 +160,17 @@ class DistributionCache:
             log.warning("dist_cache.expand.failed", code=code, error=str(exc))
             return self._entries_from_relations(franchise)
 
+        entries = self._mapping_to_entries(mapping)
+        if entries:
+            return entries
+        return self._entries_from_relations(franchise)
+
+    def _mapping_to_entries(self, mapping: Any) -> list[EntryData]:
+        """Convert a :class:`FranchiseMapping`'s included entries to ``EntryData``.
+
+        Shared by the first expansion and the watch-order edit path so both
+        produce identically-shaped entries (index, label, kind, ids).
+        """
         entries: list[EntryData] = []
         for i, e in enumerate(mapping.included_entries, start=1):
             kind = getattr(e.kind, "value", None) or str(getattr(e, "kind", "season"))
@@ -175,9 +186,37 @@ class DistributionCache:
                 media_type="movie" if str(kind).lower() == "movie" else "tv",
                 format=getattr(e, "format", None) or "tv",
             ))
-        if entries:
-            return entries
-        return self._entries_from_relations(franchise)
+        return entries
+
+    async def apply_order_correction(self, code: str, text: str) -> list[EntryData] | None:
+        """Re-map an admin's edited watch-order text and persist the result.
+
+        Rebuilds the canonical mapping, applies the correction via
+        :meth:`FranchiseFlowService.parse_mapping_correction` (the same parser
+        the request pipeline uses), converts back to ``EntryData``, and
+        overwrites the cached entry list. Returns the new entries, or ``None``
+        if the text couldn't be parsed (caller shows the retry prompt).
+        """
+        franchise = await self.get_franchise(code) or await self.ensure(code)
+        if not franchise:
+            return None
+        try:
+            from nekofetch.services.franchise_flow import FranchiseFlowService
+
+            svc = FranchiseFlowService(self._c)
+            doc_id = franchise.get("anime_doc_id") or code
+            mapping = svc.build_mapping(franchise, doc_id)
+            corrected = svc.parse_mapping_correction(text, mapping)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("dist_cache.order_edit.failed", code=code, error=str(exc))
+            return None
+        if corrected is None:
+            return None
+        entries = self._mapping_to_entries(corrected)
+        if not entries:
+            return None
+        await self.set_entries(code, entries)
+        return entries
 
     @staticmethod
     def _entry_label(entry: Any) -> str:

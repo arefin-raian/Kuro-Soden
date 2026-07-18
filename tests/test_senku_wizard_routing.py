@@ -104,6 +104,8 @@ WIZARD_CALLBACKS = [
     f"senku|wiz|pick|{CODE}|1|logo|2",   # numbered asset pick
     f"senku|wiz|gen|{CODE}|1",      # generate one entry's thumbnail
     f"senku|wiz|order|{CODE}",      # all rendered → watch-order confirm
+    f"senku|wiz|oedit|{CODE}",      # "Edit order" → free-text re-map step
+    f"senku|wiz|post|{CODE}",       # "Order is correct" → publish
     f"senku|wiz|cancel|{CODE}",     # cancel from any step
 ]
 

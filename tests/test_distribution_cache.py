@@ -153,3 +153,42 @@ async def test_get_selections_survives_corrupt_blob(cache):
 async def test_get_entries_survives_corrupt_blob(cache):
     await cache._redis.set("nf:dist:REQ-1:entries", "[not json")
     assert await cache.get_entries("REQ-1") == []
+
+
+# ── apply_order_correction (watch-order edit) ─────────────────────────────────────
+
+async def _seed_franchise(cache, code):
+    """Seed a minimal aggregated franchise so build_mapping has something to map."""
+    fr = {"title": "Root", "franchise_seasons": 3, "franchise_episodes": 12,
+          "anime_doc_id": "doc1"}
+    await cache._redis.set(f"nf:dist:{code}:franchise", json.dumps(fr))
+    return fr
+
+
+@pytest.mark.asyncio
+async def test_apply_order_correction_persists_remap(cache):
+    from nekofetch.services.franchise_flow import FranchiseFlowService
+
+    await _seed_franchise(cache, "REQ-1")
+    # Build the canonical block the admin would edit, then feed it back verbatim.
+    svc = FranchiseFlowService(cache._c)
+    fr = await cache.get_franchise("REQ-1")
+    block = svc.format_mapping_code_block(svc.build_mapping(fr, "doc1"))
+
+    out = await cache.apply_order_correction("REQ-1", block)
+    assert out is not None and len(out) == 3
+    # Result is persisted as the new canonical entry list.
+    stored = await cache.get_entries("REQ-1")
+    assert [e.index for e in stored] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_apply_order_correction_rejects_garbage(cache):
+    await _seed_franchise(cache, "REQ-1")
+    assert await cache.apply_order_correction("REQ-1", "") is None
+
+
+@pytest.mark.asyncio
+async def test_apply_order_correction_no_franchise(cache):
+    # No franchise seeded and ensure() can't resolve (no DB) → None, no crash.
+    assert await cache.apply_order_correction("REQ-missing", "anything") is None
