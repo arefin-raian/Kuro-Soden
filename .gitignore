@@ -42,3 +42,6 @@ htmlcov/
 # ── OS ──────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# Vendored third-party downloader (own repo/secrets) — not part of Kuro Soden
+Leech-main/

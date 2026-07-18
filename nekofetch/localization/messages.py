@@ -262,6 +262,29 @@ class M:
     ATTN_PROVIDE_PROMPT = "attn_provide_prompt"
     ATTN_PROVIDE_DONE = "attn_provide_done"
     ATTN_PROVIDE_FAILED = "attn_provide_failed"
+    ATTN_ABANDON_CONFIRM = "attn_abandon_confirm"
+    ATTN_ABANDONED = "attn_abandoned"
+    CC_BTN_ABANDON = "cc_btn_abandon"
+    CC_BTN_ABANDON_CONFIRM = "cc_btn_abandon_confirm"
+
+    # ── Levi live download card (Kuro Sōden — no log channel) ──
+    DL_CARD_TITLE = "dl_card_title"
+    DL_CARD_EP = "dl_card_ep"
+    DL_CARD_VER = "dl_card_ver"
+    DL_CARD_STAGE_DOWNLOADING = "dl_card_stage_downloading"
+    DL_CARD_STAGE_RETRYING = "dl_card_stage_retrying"
+    DL_CARD_STAGE_GENERIC = "dl_card_stage_generic"
+    DL_CARD_STAT_SPEED = "dl_card_stat_speed"
+    DL_CARD_STAT_SIZE = "dl_card_stat_size"
+    DL_CARD_STAT_ETA = "dl_card_stat_eta"
+    DL_CARD_STAT_ELAPSED = "dl_card_stat_elapsed"
+    DL_CARD_LOW_DISK = "dl_card_low_disk"
+    DL_CARD_DONE = "dl_card_done"
+    DL_CARD_FAILED = "dl_card_failed"
+    DL_BTN_RETRY = "dl_btn_retry"
+    DL_BTN_SKIP = "dl_btn_skip"
+    DL_TOAST_RETRYING = "dl_toast_retrying"
+    DL_TOAST_SKIPPED = "dl_toast_skipped"
 
     # ── log channel: notice emoji + human labels (category → key) ──
     LOG_EMOJI = {
@@ -308,6 +331,7 @@ class M:
     REVIEW_ROW = "review_row"
     SITE_BTN_ANIKOTO_PRIMARY = "site_btn_anikoto_primary"
     SITE_BTN_KICKASS_PRIMARY = "site_btn_kickass_primary"
+    SITE_BTN_MIRURO_PRIMARY = "site_btn_miruro_primary"
     WEB_REPORT_LOADING = "web_report_loading"
     WEB_REPORT_FAILED = "web_report_failed"
     WEB_REPORT_TITLE = "web_report_title"

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import html
 
 from pyrogram.enums import ParseMode
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import Message
 
 from nekofetch.core.constants import BAR_EMPTY, BAR_FILLED
+from nekofetch.localization.messages import M, t
 
 
 def bar(percent: float, *, width: int = 10) -> str:
@@ -140,3 +142,101 @@ def human_eta(seconds: int | None) -> str:
     if h:
         return f"{h:02d}h {m:02d}m"
     return f"{m:02d}m {s:02d}s"
+
+
+def human_elapsed(seconds: int | None) -> str:
+    """Compact elapsed clock: MM:SS, or HH:MM:SS once past an hour."""
+    if seconds is None or seconds < 0:
+        return "00:00"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h:d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def _esc(text: object) -> str:
+    return html.escape(str(text if text is not None else ""), quote=False)
+
+
+def download_card_html(
+    *,
+    title: str,
+    job_id: int,
+    status: str,
+    progress: float = 0.0,
+    stage: str | None = None,
+    season: int | None = None,
+    current_episode: int | None = None,
+    episode_index: int | None = None,
+    total_episodes: int | None = None,
+    resolution: str | None = None,
+    audio: str | None = None,
+    speed_bps: float = 0.0,
+    downloaded_bytes: int = 0,
+    total_bytes: int = 0,
+    eta_seconds: int | None = None,
+    elapsed_seconds: int | None = None,
+    retry_attempt: int = 0,
+    retry_max: int = 0,
+    retry_reason: str | None = None,
+    low_disk: bool = False,
+) -> str:
+    """Mobile-first live download card shown through Levi (no log channel here).
+
+    One short fact per line so nothing wraps on a narrow phone: title+job, the
+    episode, the variant, a stage line (Downloading / Retrying N/M), a 10-cell
+    bar, then speed/size and ETA/elapsed paired two-per-line.
+    """
+    lines: list[str] = [t(M.DL_CARD_TITLE, title=_esc(title), job=job_id)]
+
+    # Episode line — "S01E005 · 5 / 24"
+    if current_episode is not None:
+        of = ""
+        if episode_index and total_episodes:
+            of = f"  ·  {episode_index} / {total_episodes}"
+        lines.append(t(M.DL_CARD_EP, season=(season or 1),
+                       episode=current_episode, of=of))
+
+    # Variant line — "1080p · DUAL"
+    ver_bits = [b for b in (resolution, (audio or "").upper() or None) if b]
+    if ver_bits:
+        lines.append(t(M.DL_CARD_VER, ver=_esc(" · ".join(ver_bits))))
+
+    lines.append("")  # blank spacer
+
+    # Stage line — retrying takes priority so a stall is never silent.
+    if retry_attempt and retry_max:
+        reason = f" · {_esc(retry_reason)}" if retry_reason else ""
+        lines.append(t(M.DL_CARD_STAGE_RETRYING, attempt=retry_attempt,
+                       max=retry_max, reason=reason))
+    elif stage and stage.lower() not in ("downloading", "download"):
+        lines.append(t(M.DL_CARD_STAGE_GENERIC, stage=_esc(stage)))
+    else:
+        lines.append(t(M.DL_CARD_STAGE_DOWNLOADING))
+
+    lines.append(f"<b>{bar(progress)}</b>")
+
+    # speed · size  (only the parts we actually know)
+    row1: list[str] = []
+    if speed_bps > 0:
+        row1.append(t(M.DL_CARD_STAT_SPEED, speed=_esc(human_speed(speed_bps))))
+    if total_bytes > 0:
+        row1.append(t(M.DL_CARD_STAT_SIZE, done=_esc(human_bytes(downloaded_bytes)),
+                      total=_esc(human_bytes(total_bytes))))
+    if row1:
+        lines.append("   ·   ".join(row1))
+
+    # eta · elapsed
+    row2: list[str] = []
+    if eta_seconds is not None:
+        row2.append(t(M.DL_CARD_STAT_ETA, eta=_esc(human_eta(eta_seconds))))
+    if elapsed_seconds is not None:
+        row2.append(t(M.DL_CARD_STAT_ELAPSED, elapsed=_esc(human_elapsed(elapsed_seconds))))
+    if row2:
+        lines.append("   ·   ".join(row2))
+
+    if low_disk:
+        lines.append(t(M.DL_CARD_LOW_DISK))
+
+    return "\n".join(lines)

@@ -206,7 +206,7 @@ index_channel:
 
 sources:
   # Only authorized sources are enabled. Pirate-site plugins are not shipped.
-  enabled: [local, telegram, anikoto, kickassanime, anizone, nyaa]
+  enabled: [local, telegram, anikoto, kickassanime, anizone, miruro, nyaa]
   default: telegram
 
 localization:

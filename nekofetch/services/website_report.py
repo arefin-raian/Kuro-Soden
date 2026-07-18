@@ -137,7 +137,7 @@ async def build_website_report(container: Container, *, title: str,
             return SourceCoverage(source=name, matched_title=title, source_ref="",
                                   available=False, note="error")
 
-    sources_to_check = [("anikoto"), ("kickassanime")]
+    sources_to_check = ["anikoto", "kickassanime", "miruro"]
     if not skip_anizone:
         sources_to_check.append("anizone")
     report.coverages = list(await asyncio.gather(

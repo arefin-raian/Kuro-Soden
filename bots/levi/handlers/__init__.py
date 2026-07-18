@@ -51,3 +51,19 @@ def register_all(client: Client, container: Container) -> None:
     from kurosoden.bots.levi.handlers.tasks import register as register_tasks
 
     register_tasks(client, container)
+
+    # ── Live download progress card + its skip/cancel/abandon controls ─────
+    # Kuro Sōden has no log channel, so this is the only live download UI the
+    # admin sees. The card is spawned at enqueue time (see review.register,
+    # which is handed the spawn hook below).
+    from kurosoden.bots.levi.handlers.progress_monitor import register as register_progress
+    from kurosoden.bots.levi.handlers.progress_monitor import start_monitor
+
+    register_progress(client, container)
+
+    # Expose the spawn hook on the container so the shared review enqueue path
+    # can raise a live card without importing a Levi module directly.
+    async def _spawn_card(job_id: int, chat_id: int) -> None:
+        await start_monitor(client, container, job_id, chat_id)
+
+    container.levi_progress_card = _spawn_card  # type: ignore[attr-defined]

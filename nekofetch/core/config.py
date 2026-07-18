@@ -436,7 +436,9 @@ class IndexChannelConfig(BaseModel):
 
 class SourcesConfig(BaseModel):
     enabled: list[str] = Field(
-        default_factory=lambda: ["local", "telegram", "anikoto", "anizone", "kickassanime", "nyaa"]
+        default_factory=lambda: [
+            "local", "telegram", "anikoto", "anizone", "kickassanime", "miruro", "nyaa",
+        ]
     )
     default: str = "telegram"
 

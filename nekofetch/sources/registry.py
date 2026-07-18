@@ -87,6 +87,7 @@ def build_default_registry() -> SourceRegistry:
     from nekofetch.sources.anizone import AnizoneSource
     from nekofetch.sources.kickassanime import KickAssAnimeSource
     from nekofetch.sources.local import LocalFileSource
+    from nekofetch.sources.miruro import MiruroSource
     from nekofetch.sources.nyaa import NyaaSource
     from nekofetch.sources.telegram.source import TelegramSource
 
@@ -95,6 +96,7 @@ def build_default_registry() -> SourceRegistry:
     registry.register(KickAssAnimeSource)
     registry.register(AnikotoSource)
     registry.register(AnizoneSource)
+    registry.register(MiruroSource)
     registry.register(NyaaSource)
     registry.register(TelegramSource)
     return registry

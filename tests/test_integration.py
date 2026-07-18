@@ -53,6 +53,7 @@ class TestConfigYAML:
         config = AppConfig.load(str(config_path))
         assert config.sources.enabled is not None
         assert len(config.sources.enabled) > 0
+        assert "miruro" in config.sources.enabled
 
     def test_config_has_branding_section(self):
         from nekofetch.core.config import AppConfig

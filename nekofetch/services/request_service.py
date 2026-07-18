@@ -197,6 +197,160 @@ class RequestService:
             session.expunge(req)
             return req
 
+    async def title_for(self, code: str) -> str:
+        """Best-effort human title for a request code; falls back to the code."""
+        try:
+            async with session_scope(self._c.pg_sessionmaker) as session:
+                req = await RequestRepository(session).get_by_code(code)
+                return req.anime_title if req and req.anime_title else code
+        except Exception:  # noqa: BLE001
+            return code
+
+    async def abandon(self, code: str) -> dict:
+        """Tear a request all the way back down so a fresh source can be tried.
+
+        Deletes, in order: any storage-channel packs (their channel messages +
+        rows), all local work files + their DB rows, and the request's download
+        jobs. The request itself is reset to PENDING (kept so its code/history
+        survive). Live progress + stuck/skip/cancel flags are cleared. Returns a
+        summary ``{title, files, packs}`` for the confirmation message.
+
+        Destructive and irreversible — callers must confirm with the admin first.
+        """
+        from sqlalchemy import delete, select
+
+        from nekofetch.infrastructure.database.postgres.models import (
+            DownloadJob,
+            MediaFile,
+            StoragePack,
+        )
+
+        removed_files = 0
+        removed_packs = 0
+        title = code
+        job_ids: list[int] = []
+        work_folder: str | None = None
+
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            req = await RequestRepository(session).get_by_code(code)
+            if req is None:
+                raise NotFound(code)
+            title = req.anime_title or code
+            anime_doc_id = req.anime_doc_id
+            from nekofetch.core.parsing import clean_anilist_id
+            doc_key = anime_doc_id or clean_anilist_id(req.source_ref)
+
+            jobs = (await session.execute(
+                select(DownloadJob).where(DownloadJob.request_id == req.id)
+            )).scalars().all()
+            job_ids = [j.id for j in jobs]
+
+            files = (await session.execute(
+                select(MediaFile).where(MediaFile.job_id.in_(job_ids))
+            )).scalars().all() if job_ids else []
+
+            packs = (await session.execute(
+                select(StoragePack).where(StoragePack.anime_doc_id == doc_key)
+            )).scalars().all() if doc_key else []
+
+            # Purge storage-channel messages before dropping the rows, so we don't
+            # orphan uploaded media in the channel.
+            for pack in packs:
+                await self._purge_pack_messages(pack)
+                removed_packs += 1
+
+            # Remove local work files best-effort; collect the folder to prune after.
+            from pathlib import Path
+            for mf in files:
+                removed_files += 1
+                if mf.local_path:
+                    try:
+                        p = Path(mf.local_path)
+                        work_folder = work_folder or (p.parent.name if p.parent else None)
+                        p.unlink(missing_ok=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            if job_ids:
+                await session.execute(delete(MediaFile).where(MediaFile.job_id.in_(job_ids)))
+            for pack in packs:
+                await session.delete(pack)
+            for job in jobs:
+                await session.delete(job)
+
+            # Reset to PENDING so the request re-enters the source-pick flow.
+            # ``source`` stays put (the column is NOT NULL); the next source pick
+            # overwrites it via ``update_source``.
+            req.status = RequestStatus.PENDING
+            req.episodes = None
+            await session.flush()
+
+        # Prune the on-disk work directory for this title (best effort).
+        try:
+            import shutil
+            from nekofetch.services.download_service import _safe_folder  # local import
+            folder = None
+            async with session_scope(self._c.pg_sessionmaker) as session:
+                req = await RequestRepository(session).get_by_code(code)
+                if req is not None:
+                    folder = _safe_folder(req)
+            if folder:
+                work_dir = self._c.env.storage_path / "work" / folder
+                if work_dir.exists():
+                    shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Clear live progress + worker flags for every job we removed.
+        if self._c.redis:
+            for jid in job_ids:
+                try:
+                    if self._c.progress:
+                        await self._c.progress.delete(jid)
+                    await self._c.redis.delete(
+                        f"nf:job:{jid}:skip", f"nf:job:{jid}:cancel",
+                        f"nf:job:{jid}:progressmsg",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                await self._c.redis.delete(f"nf:stuck:{code}")
+            except Exception:  # noqa: BLE001
+                pass
+
+        from nekofetch.services.log_channel_service import LogChannelService
+        await LogChannelService(self._c).event(
+            "admin", "abandoned", code=code, anime=title,
+            files=removed_files, packs=removed_packs,
+        )
+        return {"title": title, "files": removed_files, "packs": removed_packs}
+
+    async def _purge_pack_messages(self, pack) -> None:
+        """Delete a storage pack's channel messages (header, files, end sticker).
+        Best-effort — a missing message or disabled channel must not abort abandon."""
+        client = getattr(self._c, "admin_client", None)
+        if client is None or not pack.channel_id:
+            return
+        ids: list[int] = []
+        if pack.header_message_id:
+            ids.append(pack.header_message_id)
+        if pack.file_message_ids:
+            ids.extend(int(m) for m in pack.file_message_ids)
+        elif pack.start_message_id and pack.end_message_id:
+            ids.extend(range(pack.start_message_id, pack.end_message_id + 1))
+        if not ids:
+            return
+        try:
+            await client.delete_messages(pack.channel_id, ids)
+        except Exception:  # noqa: BLE001
+            # Fall back to one-by-one so a single un-deletable message doesn't
+            # strand the rest.
+            for mid in ids:
+                try:
+                    await client.delete_messages(pack.channel_id, mid)
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def update_franchise_data(self, code: str, data: dict) -> None:
         """Replace the franchise_data JSON blob for a request.
 

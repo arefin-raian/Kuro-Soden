@@ -31,6 +31,10 @@ class ProgressSnapshot:
     season: int | None = None
     episode_index: int | None = None   # n-th of total_episodes
     total_episodes: int | None = None
+    retry_attempt: int = 0             # 0 = first try; >0 = which retry is in flight
+    retry_max: int = 0                 # total attempts configured (retry_attempts)
+    retry_reason: str | None = None    # human reason for the last failure (from _classify)
+    low_disk: bool = False             # True when chunker fell back to one-episode-at-a-time
 
 
 class ProgressStore:

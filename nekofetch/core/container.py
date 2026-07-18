@@ -72,6 +72,9 @@ class Container:
         from nekofetch.providers.metadata.tmdb import TmdbClient
         from nekofetch.sources.telegram.resilient_client import ResilientMetadataClient
         self.anilist = ResilientMetadataClient()
+        # Arm the @acutebot userbot tier as the last resort when both AniList
+        # and Jikan miss. Stays dormant unless a userbot session is present.
+        self.anilist.enable_acute_fallback(env)
         self.tmdb = TmdbClient(
             token=env.tmdb_read_access_token,
             api_key=env.tmdb_api_key,

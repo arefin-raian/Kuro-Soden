@@ -27,7 +27,10 @@ from nekofetch.services.franchise_flow import FranchiseFlowService
 from nekofetch.ui.components import cb, keyboard, lock_buttons, paginate
 from nekofetch.ui.franchise_screens import franchise_map_selection
 from nekofetch.ui.typography import user_label
+from nekofetch.core.logging import get_logger
 from nekofetch.ui.screens import show
+
+log = get_logger(__name__)
 
 PAGE_SIZE = 8
 STATE_MANUAL_COMP = "staff:manual:comp"
@@ -335,6 +338,18 @@ def register(client: Client, container: Container) -> None:
     auth = AuthService(container)
     fsm = FSM(container.redis, bot="admin")
     L = container.localizer.get
+
+    async def _spawn_progress_card(job_id: int, chat_id: int | None) -> None:
+        """Raise a live download card for a freshly-queued job, if the host wired
+        one up (Kuro Sōden / Levi does; the standalone admin bot leaves it unset).
+        Never let a card failure surface to the queueing path."""
+        hook = getattr(container, "levi_progress_card", None)
+        if hook is None or not chat_id:
+            return
+        try:
+            await hook(job_id, chat_id)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("review.progress_card_spawn_failed", job_id=job_id, error=str(exc))
 
     async def _prompt_channel_reply(
         message: Message, state: str, hint: str, **data,
@@ -690,6 +705,7 @@ def register(client: Client, container: Container) -> None:
             await q.answer(L(M.ERR_GENERIC), show_alert=True)
             return
         await fsm.clear(q.from_user.id)
+        await _spawn_progress_card(job_id, q.from_user.id)
         await q.answer(L(M.TORRENT_QUEUED, title=f"job #{job_id}"), show_alert=True)
         try:
             await q.message.delete()
@@ -727,15 +743,21 @@ def register(client: Client, container: Container) -> None:
         from nekofetch.services.queue_service import QueueService
         from nekofetch.services.request_service import RequestService
 
-        parts = q.data.split("|", 4)
-        code, primary, fallback = parts[2], parts[3], parts[4]
-        priority_str = f"{primary}>{fallback}"
+        parts = q.data.split("|")
+        code = parts[2]
+        priority = [p for p in parts[3:] if p]
+        if len(priority) < 2:
+            await q.answer(L(M.ERR_GENERIC), show_alert=True)
+            return
+        primary = priority[0]
+        priority_str = ">".join(priority)
         try:
             await RequestService(container).update_source(code, priority_str)
             job_id = await QueueService(container).enqueue(code)
         except NekoFetchError as exc:
             await q.answer(getattr(exc, "detail", None) or L(M.ERR_GENERIC), show_alert=True)
             return
+        await _spawn_progress_card(job_id, q.from_user.id)
         await q.answer(L(M.TOAST_QUEUED, source=primary, job=job_id), show_alert=True)
         try:
             await q.message.delete()
@@ -746,7 +768,7 @@ def register(client: Client, container: Container) -> None:
         src: Message | CallbackQuery,
         code: str,
     ) -> None:
-        """Build the website report (anikoto + kickassanime) and show source
+        """Build the website report and show source
         selection buttons. AniZone is intentionally skipped here — its title
         format is incompatible with AniList-based matching, so it has its own
         slug-mapping flow."""
@@ -769,10 +791,12 @@ def register(client: Client, container: Container) -> None:
                 skip_anizone=True,
             )
             kb = keyboard(
+                [(L(M.SITE_BTN_MIRURO_PRIMARY),
+                  cb("staff", "rsiteprio", code, "miruro", "anikoto", "kickassanime"))],
                 [(L(M.SITE_BTN_ANIKOTO_PRIMARY),
-                  cb("staff", "rsiteprio", code, "anikoto", "kickassanime")),
-                 (L(M.SITE_BTN_KICKASS_PRIMARY),
-                  cb("staff", "rsiteprio", code, "kickassanime", "anikoto"))],
+                  cb("staff", "rsiteprio", code, "anikoto", "miruro", "kickassanime"))],
+                [(L(M.SITE_BTN_KICKASS_PRIMARY),
+                  cb("staff", "rsiteprio", code, "kickassanime", "miruro", "anikoto"))],
                 [(L(M.BTN_BACK), cb("staff", "rdetail", code))],
             )
             await show(client, loading, render_report(report), kb)
@@ -896,12 +920,14 @@ def register(client: Client, container: Container) -> None:
         raw = await container.redis.get(f"nf:stuck:{code}")
         return json.loads(raw) if raw else None
 
-    async def _requeue(code: str, episodes: list, *, new_source: str | None = None) -> bool:
+    async def _requeue(code: str, episodes: list, *, new_source: str | None = None,
+                       chat_id: int | None = None) -> bool:
         from nekofetch.services.queue_service import QueueService
         from nekofetch.services.request_service import RequestService
         try:
             await RequestService(container).retry_episodes(code, episodes, new_source=new_source)
-            await QueueService(container).enqueue(code)
+            job_id = await QueueService(container).enqueue(code)
+            await _spawn_progress_card(job_id, chat_id)
             return True
         except NekoFetchError:
             return False
@@ -913,7 +939,7 @@ def register(client: Client, container: Container) -> None:
         code = q.data.split("|", 2)[2]
         await lock_buttons(q)
         stuck = await _load_stuck(code)
-        if not stuck or not await _requeue(code, stuck["episodes"]):
+        if not stuck or not await _requeue(code, stuck["episodes"], chat_id=q.from_user.id):
             await q.answer(L(M.ERR_GENERIC), show_alert=True)
             return
         await q.answer(L(M.TOAST_RETRY_QUEUED))
@@ -986,7 +1012,8 @@ def register(client: Client, container: Container) -> None:
         await lock_buttons(q)
         stuck = await _load_stuck(code)
         alt = (stuck or {}).get("alt_source")
-        if not (stuck and alt and await _requeue(code, stuck["episodes"], new_source=alt)):
+        if not (stuck and alt and await _requeue(code, stuck["episodes"], new_source=alt,
+                                                  chat_id=q.from_user.id)):
             await q.answer(L(M.ERR_GENERIC), show_alert=True)
             return
         await q.answer(L(M.TOAST_RETRY_QUEUED))
@@ -1251,6 +1278,7 @@ def register(client: Client, container: Container) -> None:
             from nekofetch.services.request_service import RequestService
             await RequestService(container).update_source(code, source)
             job_id = await QueueService(container).enqueue(code)
+            await _spawn_progress_card(job_id, q.from_user.id)
             await q.answer(L(M.TOAST_QUEUED, source=source, job=job_id), show_alert=True)
             await fsm.clear(q.from_user.id)
             try:
@@ -1492,6 +1520,7 @@ def register(client: Client, container: Container) -> None:
         from nekofetch.services.queue_service import QueueService as _QS
         await _RS(container).update_source(code, "anizone")
         job_id = await _QS(container).enqueue(code)
+        await _spawn_progress_card(job_id, message.chat.id)
         # Post a SEPARATE confirmation card so the slug prompt stays as an audit
         # trail (we deliberately do NOT edit the slug prompt card in place). After
         # 5 seconds, fire-and-forget cleanup removes BOTH this confirmation AND
@@ -2336,6 +2365,7 @@ def register(client: Client, container: Container) -> None:
                 req.episodes = None
 
             job_id = await QueueService(container).enqueue(code)
+            await _spawn_progress_card(job_id, user_id)
             return True, str(job_id)
         except NekoFetchError as exc:
             return False, getattr(exc, "detail", None) or L(M.ERR_GENERIC)

@@ -73,6 +73,18 @@ def test_dedup_result_defaults():
     assert r2.source == "main_channel"
 
 
+def test_miruro_source_imports():
+    """Miruro source adapter should import and expose the source name."""
+    from nekofetch.sources.miruro import MiruroSource
+
+    src = MiruroSource(base_url="http://localhost:8000")
+    assert src.name == "miruro"
+    assert src.base_url == "http://localhost:8000"
+
+    configured = MiruroSource({"api_base_url": "http://127.0.0.1:8000"})
+    assert configured.base_url == "http://127.0.0.1:8000"
+
+
 def test_admin_assignment_result_defaults():
     """AssignmentResult should hold correct admin info."""
     from kurosoden.shared.admin_assignment import AssignmentResult

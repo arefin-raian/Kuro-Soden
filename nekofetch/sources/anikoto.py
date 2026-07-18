@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -54,7 +55,7 @@ def _rank_by_title(query: str, results: list[AnimeStub]) -> list[AnimeStub]:
     return sorted(results, key=key, reverse=True)
 
 BASE_URL = "https://anikototv.to"
-MAPPER_API = "https://mapper.nekostream.site/api/mal/"
+MAPPER_API = "https://mapper.nekostream.site/api/mal"
 
 # Header only the site's XHR/AJAX endpoints (ajax/server, getSources, mapper) want.
 # It must NOT ride on the actual playlist/segment CDN fetches: a real <video> tag
@@ -67,6 +68,100 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/141.0.0.0 Safari/537.36"
 )
+
+_M3U8_RE = re.compile(r"""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""", re.I)
+_SOURCE_TAG_RE = re.compile(r"""<source[^>]+src=["']([^"']+\.m3u8[^"']*)""", re.I)
+_JS_VAR_M3U8_RE = re.compile(
+    r"""(?:var|let|const)\s+\w+\s*=\s*["']([^"']*(?:\.m3u8|/stream/)[^"']*)["']"""
+    r"""|(?:file|source|url|src)\s*[:=]\s*["']([^"']*(?:\.m3u8|/stream/)[^"']*)["']""",
+    re.I,
+)
+_HOST_MAP_RE = re.compile(r"""var\s+HOST_MAP\s*=\s*\{([^}]+)\}""", re.I)
+_HOST_ENTRY_RE = re.compile(r"""['"]([^'"]+)['"]\s*:\s*['"]([^'"]+)['"]""")
+
+
+def _first_source_url(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return str(value.get("file") or value.get("url") or value.get("src") or "")
+    if isinstance(value, list):
+        for item in value:
+            found = _first_source_url(item)
+            if found:
+                return found
+    return ""
+
+
+def _media_like(url: str) -> bool:
+    return bool(
+        url
+        and (
+            ".m3u8" in url
+            or re.search(r"\.(mp4|mkv|webm)(?:\?|$)", url, re.I)
+        )
+    )
+
+
+def _normalize_stream_kind(raw: str) -> str:
+    raw = re.sub(r"\s+", "", str(raw or "").strip().lower())
+    return {
+        "a-dub": "dub",
+        "adub": "dub",
+        "dub": "dub",
+        "h-sub": "hsub",
+        "hsub": "hsub",
+        "hard-sub": "hsub",
+        "hardsub": "hsub",
+        "s-sub": "sub",
+        "ssub": "sub",
+        "soft-sub": "sub",
+        "softsub": "sub",
+        "sub": "sub",
+    }.get(raw, raw or "sub")
+
+
+def _host_root(url: str, fallback: str) -> str:
+    host = re.match(r"https?://([^/]+)", url or "")
+    return f"https://{host.group(1)}/" if host else fallback
+
+
+def _mapper_urls(value) -> list[str]:
+    urls: list[str] = []
+    if isinstance(value, str):
+        urls.append(value)
+    elif isinstance(value, dict):
+        direct = value.get("url") or value.get("file") or value.get("src")
+        if direct:
+            urls.append(str(direct))
+        for key in ("stream", "streams", "source", "sources", "embed", "embeds"):
+            urls.extend(_mapper_urls(value.get(key)))
+        for bucket in ("download", "downloads"):
+            nested = value.get(bucket)
+            if isinstance(nested, dict):
+                urls.extend(str(v) for v in nested.values() if v)
+            elif isinstance(nested, list):
+                urls.extend(_mapper_urls(nested))
+            elif nested:
+                urls.append(str(nested))
+    elif isinstance(value, list):
+        for item in value:
+            urls.extend(_mapper_urls(item))
+    return [u for u in urls if u]
+
+
+def _parse_host_map(html: str) -> dict[str, str]:
+    match = _HOST_MAP_RE.search(html)
+    if not match:
+        return {}
+    return {m.group(1): m.group(2) for m in _HOST_ENTRY_RE.finditer(match.group(1))}
+
+
+def _apply_host_map(url: str, host_map: dict[str, str]) -> str:
+    for origin, proxy in host_map.items():
+        if origin in url:
+            return url.replace(origin, proxy, 1)
+    return url
 
 
 class AnikotoSource(AnimeSource):
@@ -248,8 +343,9 @@ class AnikotoSource(AnimeSource):
             ep_title = anchor.get("title", "")
             data_ids = anchor.get("data-ids", "")
             data_mal = anchor.get("data-mal", "")
+            data_slug = anchor.get("data-slug", "")
             data_timestamp = anchor.get("data-timestamp", "")
-            ep_slug = f"{video_id}/{data_ids}/{data_mal}/{data_timestamp}"
+            ep_slug = f"{video_id}/{data_ids}/{data_mal}/{data_timestamp}/{data_slug}"
             episodes.append(
                 Episode(
                     source_ref=ep_slug,
@@ -317,7 +413,8 @@ class AnikotoSource(AnimeSource):
         parts = episode_ref.split("/")
         if len(parts) < 4:
             return []
-        video_id, data_ids, data_mal, data_timestamp = parts[:4]
+        _video_id, data_ids, data_mal, data_timestamp = parts[:4]
+        data_slug = parts[4] if len(parts) > 4 else self._ep_number_from_ref(episode_ref)
 
         # Ordered fallback servers per audio type. Each entry is a candidate the
         # downloader tries in turn until one yields a clean file.
@@ -334,6 +431,7 @@ class AnikotoSource(AnimeSource):
             if not url or url in seen:
                 return
             seen.add(url)
+            kind = _normalize_stream_kind(kind)
             audio = AudioType.DUBBED if kind == "dub" else AudioType.SUBBED
             candidates[audio].append({
                 "video_url": url,
@@ -342,7 +440,7 @@ class AnikotoSource(AnimeSource):
                 "subtitles": subtitles or [],
             })
 
-        await self._collect_mapper(data_mal, episode_ref, data_timestamp, add)
+        await self._collect_mapper(data_mal, data_slug, data_timestamp, add)
         await self._collect_server_list(data_ids, add)
 
         # Surface exactly how many servers we enumerated per audio track and their
@@ -435,26 +533,23 @@ class AnikotoSource(AnimeSource):
             "sub_dur": d_sub, "dub_dur": d_dub,
         }
 
-    async def _collect_mapper(self, data_mal, episode_ref, data_timestamp, add) -> None:
+    async def _collect_mapper(self, data_mal, data_slug, data_timestamp, add) -> None:
         """Kiwi/mapper servers — usually soft-sub + dub HLS streams."""
         try:
-            ep_no = self._ep_number_from_ref(episode_ref)
+            if not (data_mal and data_slug and data_timestamp):
+                return
             r = await self.http.get(
-                f"{MAPPER_API}{data_mal}/{ep_no}/{data_timestamp}",
+                f"{MAPPER_API}/{data_mal}/{data_slug}/{data_timestamp}",
                 headers={"referer": self.base_url, "origin": self.base_url, **_XHR},
             )
             if r.status_code != 200:
                 return
             for stream_key, block in r.json().items():
-                if "Stream" not in stream_key or not isinstance(block, dict):
+                if stream_key.lower() == "status" or not isinstance(block, dict):
                     continue
                 for audio_key in ("sub", "dub"):
-                    code = block.get(audio_key)
-                    code = code.get("url") if isinstance(code, dict) else code
-                    if not code:
-                        continue
-                    url = await self._resolve_server(code)
-                    add(audio_key, url, self.base_url)
+                    for raw in _mapper_urls(block.get(audio_key)):
+                        await self._add_stream_or_embed(raw, audio_key, self.base_url, add)
         except Exception as exc:
             log.debug("kiwi.stream.failed", error=str(exc))
 
@@ -479,8 +574,12 @@ class AnikotoSource(AnimeSource):
                 return
             soup = BeautifulSoup(r.json().get("result", ""), "html.parser")
             for server in soup.find_all("div", class_="type"):
-                # data-type is one of sub / hsub / dub
-                kind = server.get("data-type", "sub").lower()
+                # data-type is usually sub / hsub / dub, but labels may expose
+                # H-Sub, S-Sub, or A-Dub on sibling domains.
+                label = server.find("label", recursive=False)
+                kind = _normalize_stream_kind(
+                    server.get("data-type") or (label.get_text(strip=True) if label else "")
+                )
                 for li in server.find_all("li"):
                     link_id = li.get("data-link-id")
                     if not link_id:
@@ -492,8 +591,38 @@ class AnikotoSource(AnimeSource):
         except Exception as exc:
             log.debug("server.list.failed", error=str(exc))
 
-    async def _extract_embed(self, embed_url: str, kind: str, add) -> None:
+    async def _add_stream_or_embed(self, raw_url: str, kind: str, referer: str, add) -> None:
+        url = raw_url.strip()
+        if not url:
+            return
+        if not url.startswith("http"):
+            url = await self._resolve_server(url)
+            if not url:
+                return
+        if _media_like(url):
+            add(kind, url, _host_root(url, referer))
+            return
+        await self._extract_embed(url, kind, add, page_referer=referer)
+
+    async def _extract_embed(
+        self,
+        embed_url: str,
+        kind: str,
+        add,
+        *,
+        page_referer: str | None = None,
+        depth: int = 0,
+    ) -> None:
         """Replicate the website player: fetch embed -> getSources -> m3u8 + subs."""
+        if depth > 3:
+            return
+        if _media_like(embed_url):
+            add(kind, embed_url, _host_root(embed_url, page_referer or f"{self.base_url}/"))
+            return
+        if "mewcdn.online/player/plyr.php" in embed_url and "#" in embed_url:
+            await self._extract_mewcdn(embed_url, kind, add)
+            return
+
         host = re.match(r"https?://([^/]+)", embed_url)
         if not host:
             return
@@ -501,36 +630,57 @@ class AnikotoSource(AnimeSource):
         host_root = f"https://{host}/"
         try:
             main_html = (
-                await self.http.get(embed_url, headers={"referer": f"{self.base_url}/"})
+                await self.http.get(
+                    embed_url,
+                    headers={"referer": page_referer or f"{self.base_url}/"},
+                )
             ).text
         except Exception:
             return
 
-        # --- Primary: megaplay/vidtube-style data-id + {host}/stream/getSources ---
-        id_match = re.search(r'data-id=["\'](\w+)["\']', main_html)
+        id_match = re.search(r'data-id=["\']([^"\']+)["\']', main_html)
         if id_match:
             try:
-                gs = await self.http.get(
-                    f"https://{host}/stream/getSources",
-                    params={"id": id_match.group(1)},
-                    headers={"referer": embed_url, "x-requested-with": "XMLHttpRequest"},
-                )
-                if gs.status_code == 200:
-                    data = gs.json()
-                    file_url = data.get("sources", {}).get("file", "")
-                    subs = [
-                        (t.get("label", t.get("kind", "")), t.get("file", ""))
-                        for t in data.get("tracks", [])
-                        if t.get("kind") == "captions" and t.get("file")
-                    ]
-                    # CDN requires the embed HOST ROOT as referer, not the full URL.
-                    add(kind, file_url, host_root, subs)
-                    if file_url:
-                        return
+                data = await self._fetch_source_data(id_match.group(1), host, embed_url)
+                file_url = _first_source_url(data.get("sources"))
+                subs = [
+                    (t.get("label", t.get("kind", "")), t.get("file", ""))
+                    for t in data.get("tracks", [])
+                    if isinstance(t, dict) and t.get("kind") == "captions" and t.get("file")
+                ]
+                add(kind, file_url, host_root, subs)
+                if file_url:
+                    return
             except Exception as exc:
                 log.debug("getsources.failed", host=host, error=str(exc))
 
-        # --- Fallback: legacy save_data.php embeds ---
+        iframe = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', main_html, re.I)
+        if iframe:
+            await self._extract_embed(
+                urljoin(embed_url, iframe.group(1)),
+                kind,
+                add,
+                page_referer=embed_url,
+                depth=depth + 1,
+            )
+            return
+
+        direct = _M3U8_RE.search(main_html)
+        if direct:
+            add(kind, direct.group(0), host_root)
+            return
+
+        source = _SOURCE_TAG_RE.search(main_html)
+        if source:
+            add(kind, urljoin(embed_url, source.group(1)), host_root)
+            return
+
+        js_url = _JS_VAR_M3U8_RE.search(main_html)
+        if js_url:
+            resolved = urljoin(embed_url, next(g for g in js_url.groups() if g))
+            await self._extract_stream_page(resolved, kind, host_root, add)
+            return
+
         id_2_match = re.search(r' data-ep-id="(\d+)"', main_html)
         type_match = re.search(r"type: '(\w+)',", main_html)
         domain_match = re.search(r"domain2_url: '(.+)',", main_html)
@@ -547,6 +697,67 @@ class AnikotoSource(AnimeSource):
                         add(kind, src.get("url", ""), host_root)
             except Exception as exc:
                 log.debug("savedata.failed", error=str(exc))
+
+    async def _fetch_source_data(self, data_id: str, host: str, embed_url: str) -> dict:
+        headers = {
+            "accept": "*/*",
+            "referer": embed_url,
+            "origin": f"https://{host}",
+            **_XHR,
+        }
+        stream_type = ""
+        path_type = embed_url.rstrip("/").rsplit("/", 1)[-1]
+        if path_type in {"sub", "dub"}:
+            stream_type = path_type
+
+        for endpoint in ("getSources", "getSourcesNew"):
+            params = {"id": data_id}
+            if endpoint == "getSourcesNew" and stream_type:
+                params["type"] = stream_type
+            resp = await self.http.get(
+                f"https://{host}/stream/{endpoint}",
+                params=params,
+                headers=headers,
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            if _first_source_url(data.get("sources")):
+                return data
+        raise RuntimeError("no playable source from getSources/getSourcesNew")
+
+    async def _extract_stream_page(self, url: str, kind: str, referer: str, add) -> None:
+        if _media_like(url):
+            add(kind, url, referer)
+            return
+        resp = await self.http.get(url, headers={"referer": referer})
+        resp.raise_for_status()
+        body = resp.text
+        if body.lstrip().startswith("#EXTM3U"):
+            add(kind, url, referer)
+            return
+        match = _M3U8_RE.search(body)
+        if match:
+            add(kind, match.group(0), referer)
+
+    async def _extract_mewcdn(self, embed_url: str, kind: str, add) -> None:
+        fragment = embed_url.split("#", 1)[1].split("#", 1)[0].strip()
+        if not fragment:
+            return
+        try:
+            raw = base64.b64decode(fragment).decode("utf-8").strip()
+        except Exception:
+            return
+        if not raw.startswith("http"):
+            return
+        try:
+            html = (
+                await self.http.get(embed_url, headers={"referer": f"{self.base_url}/"})
+            ).text
+            raw = _apply_host_map(raw, _parse_host_map(html))
+        except Exception:
+            pass
+        add(kind, raw, "https://mewcdn.online/")
 
     async def _resolve_server(self, code: str, *, decode: bool = True) -> str:
         """Resolve an ``ajax/server`` code to a playable URL (optionally b64-decoded)."""

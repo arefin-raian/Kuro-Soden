@@ -41,6 +41,8 @@ class PipelineManager:
         self._clients: dict[str, Any] = {}  # name → Pyrogram Client
         self._conn_watchdog_task: asyncio.Task | None = None
         self._scheduler = None
+        self._worker = None                       # DownloadWorker instance
+        self._worker_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start all pipeline bots. Order: Lelouch → Levi → Senku → Gojo."""
@@ -68,6 +70,23 @@ class PipelineManager:
 
         # ── 4. Gojo — Publisher Bot ───────────────────────────────────────────
         await self._start_bot("gojo", "PUBLISHER_BOT_TOKEN")
+
+        # ── Download worker loop ──────────────────────────────────────────────
+        # NekoFetch's BotManager (unused here) is what normally launches this
+        # loop, so without it queued jobs would sit in QUEUED forever. Levi owns
+        # the download stage, so the worker is meaningful only once Levi is up.
+        if self._c.config.features.download_queue and self.levi is not None:
+            from nekofetch.services.download_service import DownloadWorker
+
+            self._worker = DownloadWorker(self._c)
+            self._worker_task = asyncio.create_task(self._worker.run_forever())
+            log.info("kuro-soden.download_worker.started")
+        else:
+            log.warning(
+                "kuro-soden.download_worker.skipped",
+                download_queue=self._c.config.features.download_queue,
+                levi_up=self.levi is not None,
+            )
 
         # ── Scheduler for background tasks ────────────────────────────────────
         self._scheduler = Scheduler()
@@ -185,6 +204,12 @@ class PipelineManager:
 
     async def stop(self) -> None:
         """Gracefully stop all bots."""
+        if self._worker_task is not None and not self._worker_task.done():
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         if self._scheduler is not None:
             self._scheduler.shutdown()
         if self._conn_watchdog_task is not None and not self._conn_watchdog_task.done():

@@ -402,8 +402,10 @@ class DownloadWorker:
               f".{variant.container or 'mkv'}"
         )
         on_progress = self._make_progress(job_id, ep, variant, cfg)
+        on_retry = self._make_retry(job_id, ep, variant, cfg)
         try:
-            result = await self._download_watched(job_id, source, variant, dest, on_progress, cfg)
+            result = await self._download_watched(job_id, source, variant, dest,
+                                                  on_progress, cfg, on_retry)
         except _SkipEpisode:
             log.info("download.episode.stopped", season=ep.season, episode=ep.number)
             return False
@@ -417,11 +419,13 @@ class DownloadWorker:
         await self._record_file(job_id, req, ep, variant, dest, result)
         return True
 
-    async def _download_watched(self, job_id, source, variant, dest, on_progress, cfg) -> dict:
+    async def _download_watched(self, job_id, source, variant, dest, on_progress, cfg,
+                                on_retry=None) -> dict:
         """Run the (retrying) download as a sub-task while polling the Stop flag, so
         an admin can stop the CURRENT episode without killing the whole job."""
         task = asyncio.ensure_future(self._download_with_retry(
             source, variant, dest, on_progress, cfg.retry_attempts, cfg.retry_backoff_seconds,
+            on_retry=on_retry,
         ))
         while True:
             cancel = await self._cancel_requested(job_id)
@@ -467,6 +471,29 @@ class DownloadWorker:
                     # actually downloading fine.
                     log.debug("download.progress_redis_blip", job_id=job_id)
         return on_progress
+
+    def _make_retry(self, job_id, ep, variant, cfg):
+        """Build the on-retry callback fired between auto-retry attempts for one unit.
+
+        Publishes a snapshot marking WHICH attempt is now in flight and a human
+        reason, so the live card can render "🔁 Retrying 2/3 · connection reset"
+        instead of silently stalling."""
+        async def on_retry(attempt: int, reason: str | None) -> None:
+            if not self._c.progress:
+                return
+            try:
+                await self._c.progress.set(ProgressSnapshot(
+                    job_id=job_id, status=JobStatus.RUNNING.value,
+                    current_episode=ep.number, season=ep.season,
+                    resolution=variant.resolution, audio=variant.audio.value,
+                    stage="Retrying",
+                    retry_attempt=attempt, retry_max=cfg.retry_attempts,
+                    retry_reason=reason,
+                    label=f"S{ep.season:02d}E{ep.number:03d} {variant.resolution} {variant.audio.value}",
+                ))
+            except Exception:  # noqa: BLE001 - telemetry, never fail the download
+                log.debug("download.retry_redis_blip", job_id=job_id)
+        return on_retry
 
     async def _retry_unit(self, job_id, req, source, chain, spec, folder, cfg) -> bool:
         """Retry one failed unit ONCE with freshly re-extracted metadata."""
@@ -930,7 +957,7 @@ class DownloadWorker:
         return wanted
 
     async def _download_with_retry(
-        self, source, variant, dest, on_progress, attempts, backoff
+        self, source, variant, dest, on_progress, attempts, backoff, on_retry=None
     ) -> dict:
         resume_state: dict | None = None
         for attempt in range(1, attempts + 1):
@@ -938,11 +965,21 @@ class DownloadWorker:
                 return await source.download(
                     variant, dest, on_progress=on_progress, resume_state=resume_state
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:  # noqa: BLE001
+                _kind, reason = _classify(exc)
                 log.warning("download.retry", attempt=attempt, error=str(exc))
                 resume_state = {"partial": True} if self._c.config.downloads.resume_interrupted else None
                 if attempt >= attempts:
                     raise
+                # Announce the NEXT attempt (attempt+1) before backing off, so the
+                # live card reflects the retry while we sleep.
+                if on_retry is not None:
+                    try:
+                        await on_retry(attempt + 1, reason)
+                    except Exception:  # noqa: BLE001 - telemetry only
+                        pass
                 await asyncio.sleep(backoff * attempt)
         return {}
 
@@ -1197,7 +1234,7 @@ class DownloadWorker:
                 pass
 
 
-_WEBSITE_SOURCES = ("anikoto", "anizone", "kickassanime")
+_WEBSITE_SOURCES = ("anikoto", "anizone", "kickassanime", "miruro")
 
 
 from nekofetch.core.parsing import clean_anilist_id

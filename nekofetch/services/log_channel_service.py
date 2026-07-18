@@ -793,8 +793,11 @@ class LogChannelService:
         Retry / Switch-source / Provide-file controls. ``failures`` is a list of
         ``{"ep": n, "audio": "subbed"|"dubbed"|...}`` so the card names exactly which
         version failed. The stuck-state is persisted for the action handlers."""
-        if not self._active():
-            return
+        # Persist the stuck-state FIRST, unconditionally — the recovery-action
+        # handlers (staff|aretry / aswitch / aprovide / abandon) read it, and in
+        # deployments with no log channel (Kuro Sōden) the Levi progress monitor
+        # renders the recovery card from this same state. Without this, an
+        # inactive channel would silently strip every recovery control.
         episodes = sorted({f["ep"] for f in failures})
         audio_kinds = sorted({f["audio"] for f in failures if f.get("audio")})
         if self._c.redis:
@@ -802,6 +805,9 @@ class LogChannelService:
                 "episodes": episodes, "title": title, "source": source,
                 "audio_kinds": audio_kinds, "alt_source": alt_source,
             }), ex=86400)
+
+        if not self._active():
+            return
 
         def _btn(key: str, *parts: str) -> InlineKeyboardButton:
             return InlineKeyboardButton(t(key), callback_data=cb(*parts))
