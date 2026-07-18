@@ -88,14 +88,29 @@ async def main(assume_yes: bool, wipe_all: bool) -> None:
         from nekofetch.infrastructure.database.postgres.models import Base
 
         keep = set() if wipe_all else _KEEP_TABLES
-        tables = [t.name for t in Base.metadata.sorted_tables if t.name not in keep]
-        if tables and container.pg_engine is not None:
+        wanted = [t.name for t in Base.metadata.sorted_tables if t.name not in keep]
+        if wanted and container.pg_engine is not None:
             async with container.pg_engine.begin() as conn:
-                await conn.execute(
-                    text(f"TRUNCATE {', '.join(tables)} RESTART IDENTITY CASCADE")
+                # Intersect the ORM's view with what's actually in the DB. A model
+                # can outrun its migration (e.g. ``work_items`` registered in
+                # metadata but never created), so TRUNCATEing the raw metadata
+                # list can hit a non-existent relation and abort the whole batch.
+                rows = await conn.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                    )
                 )
+                existing = {r[0] for r in rows}
+                tables = [t for t in wanted if t in existing]
+                missing = [t for t in wanted if t not in existing]
+                if tables:
+                    await conn.execute(
+                        text(f"TRUNCATE {', '.join(tables)} RESTART IDENTITY CASCADE")
+                    )
             kept = "nothing" if wipe_all else sorted(_KEEP_TABLES)
             print(f"postgres: truncated {len(tables)} table(s), kept {kept}")
+            if missing:
+                print(f"postgres: skipped {len(missing)} not-yet-migrated: {sorted(missing)}")
 
         # ── Mongo: empty every collection ──
         if container.mongo is not None:
@@ -110,7 +125,7 @@ async def main(assume_yes: bool, wipe_all: bool) -> None:
             print("redis: flushed all keys (dedicated instance)")
 
         tail = "" if wipe_all else " (users preserved)"
-        print(f"done — Kuro Sōden database cleared{tail}")
+        print(f"done - Kuro Soden database cleared{tail}")
     finally:
         await container.shutdown()
 
