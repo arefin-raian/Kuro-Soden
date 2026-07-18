@@ -1,0 +1,301 @@
+"""Senku Ishigami — the distribution bot's voice.
+
+Every user-facing line Senku speaks lives here so his tone stays consistent and
+can be re-tuned in one place. He is the scientist of the pipeline: exuberant,
+exacting, relentlessly curious. He treats each distribution step like an
+experiment with a measurable, reproducible result — logos, posters, backdrops,
+watch order, the final published card. Ten billion percent precision, delivered
+with a grin. First person, a little emoji (🧪⚗️🔬📊), never breaking character.
+Generic NekoFetch copy stays in the JSON catalog (``localization.messages``);
+this module holds only what is distinctly *Senku*.
+
+All strings are authored as Telegram HTML (the pipeline's default parse mode).
+Callables take runtime values and return finished HTML; plain strings are used
+as-is. Handlers reference these — never inline character copy — so a rewrite of
+his voice is a single-file edit. Mirrors ``levi_voice`` / ``lelouch_voice``
+structurally.
+"""
+
+from __future__ import annotations
+
+import html
+
+ICON = "🧪"  # the flask that heads every Senku card
+
+
+def esc(text: str) -> str:
+    """HTML-escape a runtime value before it lands in a caption."""
+    return html.escape(str(text or ""), quote=False)
+
+
+# ── Welcome / home ────────────────────────────────────────────────────────────
+
+def home_title(name: str) -> str:
+    who = esc(name) or "researcher"
+    return f"{ICON} <b>Senku Ishigami</b> — distribution lab's open, {who}."
+
+
+HOME_BODY = (
+    "<i>\"Ten billion percent — this channel will be perfect.\"</i>\n\n"
+    "Levi hands me a finished pack; I turn it into a channel people actually want "
+    "to open. Build the channel, forge the thumbnails, lock the watch order, then "
+    "publish the info card. Every step is reproducible. Every result is clean. "
+    "Pick a title and let's run the experiment."
+)
+
+HOME_ADMIN_TAG = (
+    "<blockquote>Distribution is method, not vibes. Follow each step, confirm each "
+    "result, and the channel comes out identical every single time.</blockquote>"
+)
+
+
+# ── Task list ─────────────────────────────────────────────────────────────────
+
+TASKS_EMPTY = (
+    f"{ICON} <b>No experiments queued.</b>\n\n"
+    "Nothing assigned to the distribution lab right now. The instant Levi finishes "
+    "a pack it lands here — and then the real fun starts."
+)
+
+
+def tasks_title(count: int) -> str:
+    n = "title" if count == 1 else "titles"
+    return f"{ICON} <b>{count} {n}</b> ready for distribution. Pick one — let's get exhilarated."
+
+
+# ── Handoff / franchise intro card ──────────────────────────────────────────────
+
+def handoff_card(title: str, code: str, entry_count: int | None = None) -> str:
+    lines = [
+        f"{ICON} <b>{esc(title)}</b>",
+        f"<code>{esc(code)}</code>",
+    ]
+    if entry_count:
+        unit = "entry" if entry_count == 1 else "entries"
+        lines.append(f"📊 Franchise map: <b>{entry_count} {unit}</b>")
+    lines.append(
+        "\nDownloaded, renamed, spotless. Now we distribute. Tap <b>Begin</b> and I'll "
+        "walk you through it one measured step at a time."
+    )
+    return "\n".join(lines)
+
+
+def franchise_map_card(title: str, tree_html: str) -> str:
+    return (
+        f"{ICON} <b>{esc(title)}</b> — the full franchise, mapped.\n\n"
+        f"{tree_html}\n\n"
+        "<i>This is the watch order we'll distribute in. Confirmed canonical entries "
+        "only — spin-offs and recaps stay out of the sequence.</i>"
+    )
+
+
+# ── Channel-creation step ───────────────────────────────────────────────────────
+
+def channel_intro(title: str) -> str:
+    return (
+        f"{ICON} <b>Step 1 — Build the channel</b>\n\n"
+        f"We're setting up the distribution channel for <b>{esc(title)}</b>. "
+        "I'll hand you every piece you need in order — title, poster, description, "
+        "admins. Do them top to bottom, then tell me you're done."
+    )
+
+
+def channel_title_block(title_text: str) -> str:
+    return (
+        "🏷 <b>Channel title</b> — tap to copy:\n"
+        f"<code>{esc(title_text)}</code>\n\n"
+        "That's the exact name, built from the pack's audio, languages and qualities. "
+        "Paste it as the channel title verbatim."
+    )
+
+
+def channel_pfp_line() -> str:
+    return (
+        "🖼 <b>Profile picture</b>\n"
+        "Open the TMDB poster page below, download a clean poster, and set it as the "
+        "channel photo. Pick one you did <b>not</b> already use as the file thumbnail — "
+        "variety reads as effort."
+    )
+
+
+def channel_description_block(description_text: str) -> str:
+    return (
+        "📝 <b>Channel description</b> — tap to copy:\n"
+        f"<code>{esc(description_text)}</code>\n\n"
+        "Same description on every channel. Paste it into the channel bio exactly."
+    )
+
+
+CHANNEL_ADMINS_LINE = (
+    "👥 <b>Add the bots as admins</b>\n"
+    "Add <b>Senku</b> (me) and <b>Gojo</b> as administrators on the new channel. "
+    "I post the info card and watch guide; Gojo handles the publishing side. "
+    "Without admin rights, neither of us can touch it."
+)
+
+
+def channel_missing(what: str) -> str:
+    return (
+        f"{ICON} <b>Not so fast.</b> I still need: {esc(what)}. "
+        "Finish that and tap <b>I've created it</b> again — I don't publish half-built experiments."
+    )
+
+
+CHANNEL_ASK_USERNAME = (
+    f"{ICON} <b>Channel ready?</b>\n\n"
+    "Send me the channel <b>@username</b> or its numeric ID so I can verify my access "
+    "and start forging thumbnails. Reply /cancel to abort."
+)
+
+
+def channel_verified(handle: str) -> str:
+    return (
+        f"{ICON} <b>Verified.</b> I can see <b>{esc(handle)}</b> and I've got admin rights. "
+        "Onto the fun part — thumbnails."
+    )
+
+
+def channel_verify_failed(handle: str) -> str:
+    return (
+        f"{ICON} <b>Can't reach {esc(handle)}.</b> Either the handle's wrong or I'm not an "
+        "admin there yet. Add me as admin, double-check the username, and send it again."
+    )
+
+
+# ── Thumbnail loop ──────────────────────────────────────────────────────────────
+
+def thumb_intro(title: str, total: int) -> str:
+    unit = "entry" if total == 1 else "entries"
+    return (
+        f"{ICON} <b>Step 2 — Forge the thumbnails</b>\n\n"
+        f"<b>{esc(title)}</b> has <b>{total} {unit}</b>. For each one we pick a logo, a "
+        "poster and a backdrop, then I render the card. We'll go in order — one clean "
+        "result at a time."
+    )
+
+
+def thumb_entry_header(label: str, index: int, total: int) -> str:
+    return (
+        f"{ICON} <b>Entry {index} / {total}</b>\n"
+        f"<b>{esc(label)}</b>\n\n"
+        "Pick the assets below. Tap to open the gallery, then tap the number you want."
+    )
+
+
+def thumb_pick_prompt(asset: str) -> str:
+    words = {"logo": "logo", "poster": "poster", "bg": "backdrop"}
+    a = words.get(asset, asset)
+    return (
+        f"🔬 <b>Choose a {a}</b>\n"
+        f"Open the gallery, find the {a} you like, and tap its number. "
+        "The clean choice beats the flashy one nine times out of ten."
+    )
+
+
+def thumb_selected(asset: str, number: int) -> str:
+    words = {"logo": "Logo", "poster": "Poster", "bg": "Backdrop"}
+    return f"✅ {words.get(asset, asset.title())} #{number} locked in."
+
+
+def thumb_generated(index: int, total: int) -> str:
+    if index >= total:
+        return (
+            f"{ICON} <b>All thumbnails rendered.</b> Every entry's got a card. "
+            "Now let's make sure the watch order is exactly right."
+        )
+    return (
+        f"⚗️ <b>Rendered.</b> Entry {index} of {total} is done — "
+        f"moving to entry {index + 1}."
+    )
+
+
+THUMB_GALLERY_FAIL = (
+    f"{ICON} <b>Gallery didn't load.</b> That's the network, not the method — "
+    "tap the button again and it'll come through."
+)
+
+
+# ── Watch-order confirm / edit ──────────────────────────────────────────────────
+
+def watch_order_card(title: str, order_html: str) -> str:
+    return (
+        f"{ICON} <b>Step 3 — Confirm the watch order</b>\n\n"
+        f"<b>{esc(title)}</b>\n\n"
+        f"{order_html}\n\n"
+        "<i>Season 3 Part 2 is not Season 4 — I've kept them straight, but you have "
+        "the final call. If it's right, confirm. If not, edit it.</i>"
+    )
+
+
+WATCH_ORDER_EDIT_PROMPT = (
+    f"{ICON} <b>Send the corrected order.</b>\n\n"
+    "Reply with the watch order in Markdown or HTML — whichever you like. I'll parse "
+    "it, re-map the entries, and show you the result before anything's published."
+)
+
+
+def watch_order_edit_failed() -> str:
+    return (
+        f"{ICON} <b>Couldn't parse that.</b> Give me one entry per line — "
+        "season/part or movie/OVA labels — and I'll re-map it clean."
+    )
+
+
+# ── Publishing ──────────────────────────────────────────────────────────────────
+
+def publishing(title: str) -> str:
+    return (
+        f"{ICON} <b>Publishing {esc(title)}.</b> Posting the info card, dropping the "
+        "divider sticker, pinning the watch guide. Give me a few seconds — precision "
+        "takes a moment."
+    )
+
+
+def published_done(title: str) -> str:
+    return (
+        f"{ICON} <b>Done. Ten billion percent clean.</b> {esc(title)} is live — info card "
+        "pinned, watch guide pinned, notices cleared. Handed to Gojo for publishing. "
+        "Next experiment's up whenever you are."
+    )
+
+
+PUBLISH_FAIL = (
+    f"{ICON} <b>Something broke mid-publish.</b> The method's sound — it's the wire. "
+    "Check the logs and run it again; the flow picks up where it left off."
+)
+
+
+# ── Errors / misc ───────────────────────────────────────────────────────────────
+
+GENERIC_FAIL = (
+    f"{ICON} A step misfired. That's data, not defeat — check the logs and re-run it."
+)
+
+NO_TASK = (
+    f"{ICON} <b>No such experiment.</b> That title isn't in my distribution queue — "
+    "it may not have finished downloading yet."
+)
+
+
+# ── Button labels ───────────────────────────────────────────────────────────────
+
+BTN_BEGIN = "▶️ Begin"
+BTN_CONTINUE = "✓ Continue"
+BTN_TASKS = "📋 My Titles"
+BTN_HOME = "⇐ Home"
+BTN_BACK = "⇐ Back"
+BTN_SETTINGS = "⚙️ Settings"
+BTN_HELP = "❔ How it works"
+BTN_CANCEL = "✗ Cancel"
+
+BTN_CHANNEL_DONE = "✅ I've created it"
+BTN_TMDB_POSTER = "🖼 Open TMDB Poster Page"
+
+BTN_SHOW_LOGOS = "🔬 Show Logos"
+BTN_SHOW_POSTERS = "🖼 Show Posters"
+BTN_SHOW_BACKDROPS = "🌄 Show Backdrops"
+BTN_GENERATE = "⚗️ Generate Thumbnail"
+
+BTN_ORDER_CORRECT = "✅ Order is correct"
+BTN_ORDER_EDIT = "✏️ Edit order"
+BTN_PUBLISH = "📢 Publish"
