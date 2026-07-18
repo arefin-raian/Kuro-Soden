@@ -66,7 +66,8 @@ async def handoff_download_to_distribution(
         "channel and generate its content.</i>"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🧪 Open Distribution", callback_data=cb("senku", "tasks"))],
+        [InlineKeyboardButton(
+            "🧪 Open Distribution", callback_data=cb("senku", "wiz", "open", code))],
     ])
 
     # Rotating artwork from this anime's own gallery — the handoff card carries

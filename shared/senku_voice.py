@@ -109,6 +109,15 @@ def channel_title_block(title_text: str) -> str:
     )
 
 
+def channel_username_block(username: str) -> str:
+    return (
+        "🔗 <b>Channel username</b> — tap to copy:\n"
+        f"<code>{esc(username)}</code>\n\n"
+        "Set this as the channel's public link (<code>t.me/…</code>). It's the same "
+        "handle the automated build would've picked, so deep-links stay consistent."
+    )
+
+
 def channel_pfp_line() -> str:
     return (
         "🖼 <b>Profile picture</b>\n"

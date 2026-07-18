@@ -39,17 +39,19 @@ def register(client: Client, container: Container) -> None:
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         active = await engine.get_active_tasks(message.from_user.id)
 
+        from kurosoden.shared import senku_voice as V
+        from nekofetch.ui.artwork import pick_artwork
+        from nekofetch.ui.screens import Screen, card, send_screen
+
         if not active:
-            await message.reply(
-                "<b>🧪 No active distribution tasks.</b>\n\n"
-                "No anime assigned to you for distribution right now.",
-                parse_mode=ParseMode.HTML,
+            await send_screen(
+                client, message.chat.id,
+                card(V.TASKS_EMPTY, image=pick_artwork("senku"), bot_name="senku"),
             )
             return
 
-        lines = ["<b>🧪 Your Distribution Tasks</b>\n"]
+        rows: list[list[tuple[str, str]]] = []
         for a in active[:10]:
-            status_icon = "🔄" if a.status == "in_progress" else "⏳"
             title = a.request_code
             try:
                 async with session_scope(container.pg_sessionmaker) as s:
@@ -58,24 +60,17 @@ def register(client: Client, container: Container) -> None:
                         title = req.anime_title
             except Exception:
                 pass
-            lines.append(f"{status_icon} <code>{a.request_code}</code> — <b>{title}</b>")
-        await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
+            icon = "🔄" if a.status == "in_progress" else "🧪"
+            label = f"{icon} {title}"[:60]
+            rows.append([(label, cb("senku", "wiz", "open", a.request_code))])
 
-    # ── /create — Channel creation wizard ────────────────────────────────────
-    @client.on_message(filters.command("create"))
-    async def _create(_: Client, message: Message) -> None:
-        """Guide the admin through creating a distribution channel."""
-        caption = (
-            "<b>📺 Create Distribution Channel</b>\n\n"
-            "<b>Step 1:</b> Create a new Telegram <b>public channel</b>.\n"
-            "<b>Step 2:</b> Set the channel title and username.\n"
-            "<b>Step 3:</b> Download the TMDB poster and set it as the profile picture.\n"
-            "<b>Step 4:</b> Remove Telegram's default 'channel created' message.\n"
-            "<b>Step 5:</b> Add <b>this bot</b> as an administrator.\n\n"
-            "<i>When ready, send the channel username or ID.\n"
-            "Reply /cancel to abort.</i>"
+        await send_screen(
+            client, message.chat.id,
+            card(V.tasks_title(len(active)), image=pick_artwork("senku"),
+                 bot_name="senku", buttons=rows),
         )
-        await message.reply(caption, parse_mode=ParseMode.HTML)
+
+    # ── /create — handled by the channel-creation wizard (handlers/wizard.py) ──
 
     # ── /generate — Generate content for a title ─────────────────────────────
     @client.on_message(filters.command("generate"))

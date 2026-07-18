@@ -59,6 +59,13 @@ def test_channel_title_block_is_tap_to_copy():
     assert "<pre>" not in out
 
 
+def test_channel_username_block_is_tap_to_copy():
+    out = V.channel_username_block("spy_x_family_axw")
+    # Monospace <code> = tap-to-copy in Telegram; the handle must be present verbatim.
+    assert "<code>" in out and "spy_x_family_axw" in out
+    assert "<pre>" not in out
+
+
 def test_channel_description_block_wraps_value_in_code():
     out = V.channel_description_block("The description.")
     assert "<code>" in out and "The description." in out
@@ -96,6 +103,7 @@ def test_callables_accept_their_args_without_raising():
         "franchise_map_card": ("T", "<blockquote>x</blockquote>"),
         "channel_intro": ("T",),
         "channel_title_block": ("T",),
+        "channel_username_block": ("spy_x_family_axw",),
         "channel_description_block": ("D",),
         "channel_missing": ("a poster",),
         "channel_verified": ("@chan",),

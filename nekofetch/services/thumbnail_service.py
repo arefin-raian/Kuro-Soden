@@ -121,6 +121,108 @@ def _flag_url(country: str | None) -> str:
     return f"https://flagcdn.com/w80/{code}.png"
 
 
+async def gather_thumbnail_fields(container: Any, title: str,
+                                  anime_doc_id: str | None = None) -> dict:
+    """Enrich a title into the display fields ``render_thumbnail`` consumes.
+
+    Pulls facts from TMDB (overview, native title, studio, rating, country,
+    genres, year/cert/runtime meta line) and AniList (romaji/native title, genres,
+    studio, 0–100 score) and derives the audio-language label from the title's
+    enabled ``StoragePack`` rows — the same lookup ``bot_factory`` uses. Every
+    provider call is best-effort: a miss degrades one field, never the whole set.
+
+    The user-picked logo/poster/backdrop are NOT set here (the caller owns those);
+    this fills everything else. Returns a kwargs dict ready to splat into
+    ``render_thumbnail`` alongside the chosen art.
+    """
+    synopsis = ""
+    native_title = romaji_title = studio = language = ""
+    meta_bits: list[str] = []
+    genres: list[str] = []
+    tmdb_rating = anilist_score = None
+    country = None
+
+    tmdb_result = None
+    try:
+        tmdb_result = await container.tmdb.search(title)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("thumbfields.tmdb.failed", error=str(exc))
+    if tmdb_result:
+        synopsis = tmdb_result.overview or synopsis
+        native_title = tmdb_result.native_title or ""
+        studio = tmdb_result.studio or ""
+        tmdb_rating = tmdb_result.rating
+        country = tmdb_result.origin_country
+        genres = list(tmdb_result.genres or [])
+        meta_bits = [b for b in (
+            tmdb_result.year, tmdb_result.certification, tmdb_result.runtime
+        ) if b]
+
+    anilist_media = None
+    try:
+        anilist_media = await container.anilist.search(title)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("thumbfields.anilist.failed", error=str(exc))
+    if anilist_media:
+        romaji_title = anilist_media.romaji or ""
+        if not native_title and len(anilist_media.titles) >= 3:
+            native_title = anilist_media.titles[2] or ""
+        if anilist_media.genres:
+            genres = list(anilist_media.genres)
+        if anilist_media.studio:
+            studio = anilist_media.studio
+        if anilist_media.score is not None:
+            # AnilistMedia.score is 0-10; the ring wants 0-100.
+            anilist_score = round(anilist_media.score * 10)
+        synopsis = synopsis or (anilist_media.synopsis or "")
+
+    # Language label from what the title actually carries (see bot_factory):
+    #   sub→Japanese, dub→English, dual→Japanese & English,
+    #   multi→Japanese, English & Hindi. Union per-pack audio into one label.
+    if anime_doc_id:
+        try:
+            from nekofetch.services.bot_naming import language_label
+            from nekofetch.domain.enums import AudioType
+            from nekofetch.infrastructure.database.postgres.models import StoragePack
+            from nekofetch.infrastructure.database.postgres.session import session_scope
+            from sqlalchemy import select
+
+            _AUDIO_LANGS = {
+                AudioType.SUBBED.value: {"japanese"},
+                AudioType.DUBBED.value: {"english"},
+                AudioType.DUAL_AUDIO.value: {"japanese", "english"},
+                AudioType.MULTI.value: {"japanese", "english", "hindi"},
+            }
+            async with session_scope(container.pg_sessionmaker) as session:
+                packs = (await session.execute(
+                    select(StoragePack).where(
+                        StoragePack.anime_doc_id == anime_doc_id,
+                        StoragePack.enabled.is_(True),
+                    )
+                )).scalars().all()
+                audios = {p.audio.value for p in packs if p.audio is not None}
+            langs: set = set()
+            for a in audios:
+                langs |= _AUDIO_LANGS.get(a, set())
+            if langs:
+                language = language_label(langs)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("thumbfields.language.failed", error=str(exc))
+
+    return {
+        "native_title": native_title,
+        "romaji_title": romaji_title,
+        "synopsis": synopsis,
+        "meta_label": " | ".join(meta_bits),
+        "language": language,
+        "genres": genres,
+        "studio": studio,
+        "tmdb_rating": tmdb_rating,
+        "anilist_score": anilist_score,
+        "country": country,
+    }
+
+
 class ThumbnailRenderService:
     """Renders the HTML template to a thumbnail image using Playwright."""
 
