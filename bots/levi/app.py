@@ -60,8 +60,7 @@ def build_levi(container: Container, token: str) -> Client:
     # maps every action to a real screen — no more "Type /X in chat" toasts.
     from pyrogram.types import (CallbackQuery, InlineKeyboardButton,
                                 InlineKeyboardMarkup)
-    from kurosoden.shared.menu_router import settings_hub, settings_onboarding, tool_screen
-    from kurosoden.shared.settings_content import ALL_BY_BOT
+    from kurosoden.shared.menu_router import tool_screen
     from nekofetch.ui.components import cb
     from nekofetch.ui.screens import Screen, send_screen
 
@@ -87,7 +86,7 @@ def build_levi(container: Container, token: str) -> Client:
             )
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📋 Tasks", callback_data=cb(bot, "tasks"))],
-                [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings")),
+                [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "set", "home")),
                  InlineKeyboardButton("❓ Help", callback_data=cb(bot, "help"))],
             ])
             await send_screen(client, q.message.chat.id,
@@ -120,42 +119,11 @@ def build_levi(container: Container, token: str) -> Client:
             await q.answer()
             return
 
-        # ¬¬ Settings hub ¬¬
-        if action == "settings":
-            caption, keyboard = settings_hub(
-                bot, title="Levi Settings",
-                body=("Configure download concurrency, retry behavior, and the "
-                      "post-download processing pipeline.\n\n"
-                      "<i>Tap a row to open the help panel for that key, then "
-                      "send the new value as a chat message.</i>"),
-                items=[("Download Settings", "downloads"),
-                       ("Processing Options", "processing")],
-            )
-            await send_screen(client, q.message.chat.id,
-                              Screen(caption=caption, image=pick_artwork(bot),
-                                     keyboard=keyboard), old_msg=q.message)
-            await q.answer()
-            return
-
-        # ¬¬ set|<key> onboarding ¬¬
-        if action == "set" and arg:
-            info = ALL_BY_BOT.get(bot, {}).get(arg)
-            if info:
-                caption, keyboard = settings_onboarding(
-                    bot, arg, title=info["title"], about=info["about"],
-                    when_to_use=info.get("when_to_use", ""),
-                    options=info.get("options"),
-                    placeholders=info.get("placeholders"),
-                    supports_html=info.get("supports_html", False),
-                    example=info.get("example", ""),
-                    danger=info.get("danger", ""),
-                    hint=info.get("hint", "Send the new value as a chat message."),
-                )
-                await send_screen(client, q.message.chat.id,
-                                  Screen(caption=caption, image=pick_artwork(bot),
-                                         keyboard=keyboard), old_msg=q.message)
-                await q.answer()
-                return
+        # ¬¬ Settings ¬¬
+        # The real, config-driven settings panel lives in handlers/settings.py
+        # under the `levi|set|…` namespace and is registered before this fallback,
+        # so it handles every settings tap. The Home button points straight at
+        # `levi|set|home`; nothing emits a bare `levi|settings` anymore.
 
         # ¬¬ Help ¬¬
         if action == "help":
@@ -216,22 +184,15 @@ def build_levi(container: Container, token: str) -> Client:
         await send_rich_welcome(client, container, message, screen)
 
     # ── /settings ─────────────────────────────────────────────────────────────
+    # Opens the real, config-driven panel (handlers/settings.py). It introspects
+    # the live AppConfig, so every download/rename/branding field is editable and
+    # self-documenting — no dead `/dlset`-style commands.
     @client.on_message(filters.command("settings"))
     async def _settings(_: Client, message: Message) -> None:
-        from nekofetch.ui.screens import Screen, send_screen
-        from nekofetch.ui.components import cb, keyboard
+        from nekofetch.ui.screens import send_screen
+        from kurosoden.bots.levi.handlers.settings import build_home_screen
 
-        screen = Screen(
-            caption="<b>⚙️ Levi Settings</b>\n\n"
-                     "Configure download preferences and pipeline options.",
-            keyboard=keyboard(
-                [("Download Settings", cb("levi", "set", "downloads")),
-                 ("Processing Options", cb("levi", "set", "processing"))],
-                [("Back", cb("levi", "home"))],
-            ),
-            image=pick_artwork("levi"),
-        )
-        await send_screen(client, message.chat.id, screen)
+        await send_screen(client, message.chat.id, build_home_screen(container))
 
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))

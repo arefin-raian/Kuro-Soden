@@ -112,6 +112,40 @@ def disabled_markup(markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup
     )
 
 
+async def edit_markup(q, rows: list[list[tuple[str, str]]]) -> bool:
+    """Swap ONLY the inline keyboard on the message a callback fired from.
+
+    This is the house primitive for option/toggle keyboards (franchise-map
+    selection, resolution picks, on/off switches): when a tap changes nothing but
+    the buttons, edit the markup in place instead of deleting and resending the
+    whole card. A resend re-uploads the photo and churns the chat; an in-place
+    ``edit_reply_markup`` is one lightweight API call and keeps the card steady.
+
+    ``rows`` is the same shape :func:`keyboard` takes — rows of
+    ``(label, callback_data)`` pairs. Returns ``True`` if the edit landed.
+
+    Telegram raises ``MESSAGE_NOT_MODIFIED`` when the markup is byte-identical to
+    what's already shown (e.g. a double-tap that nets no change); that's benign,
+    so it's swallowed and reported as ``False`` rather than surfaced.
+
+    Use this for keyboard-only changes. When the caption or image also changes,
+    use ``send_screen(..., old_msg=q.message)`` instead — you can't edit a photo
+    caption into existence on a text message or vice-versa.
+    """
+    try:
+        await q.message.edit_reply_markup(
+            InlineKeyboardMarkup(
+                [[InlineKeyboardButton(label, callback_data=data)
+                  for label, data in row] for row in rows]
+            )
+        )
+        return True
+    except Exception:
+        # MESSAGE_NOT_MODIFIED (no-op double-tap) and transient edit failures are
+        # non-fatal — the visible state is already what we wanted.
+        return False
+
+
 async def lock_buttons(q) -> None:
     """Immediately neutralize the buttons on the message a callback fired from.
 

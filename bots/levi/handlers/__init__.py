@@ -40,6 +40,13 @@ def register_all(client: Client, container: Container) -> None:
 
     review.register(client, container)
 
+    # ── Levi's native config-driven settings panel (levi|set|…) ────────────
+    # Registered before the app.py `levi|` fallback so every settings tap is
+    # handled here. Replaces the old static /dlset-style screens.
+    from kurosoden.bots.levi.handlers.settings import register as register_settings
+
+    register_settings(client, container)
+
     # ── Levi task handlers (task list → routes into the review flow) ───────
     from kurosoden.bots.levi.handlers.tasks import register as register_tasks
 

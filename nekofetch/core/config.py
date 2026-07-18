@@ -108,6 +108,14 @@ class EnvSettings(BaseSettings):
     def _coerce_session_path(cls, v: Any) -> Path:
         return _portable_path(v, "data/sessions")
 
+    # Userbot (Telegram USER session — not a bot token). Powers the @acutebot
+    # metadata fallback and any userbot-only capability (channel history, etc.).
+    # Generate a StringSession once interactively, then paste it here. The pool
+    # (``UserbotPool.from_env``) also honours ``TELEGRAM_USERBOT_ACCOUNTS`` (inline
+    # JSON array) and ``TELEGRAM_USERBOT_ACCOUNTS_FILE`` (path to a JSON array) for
+    # multi-account rotation; a single session string is the simplest setup.
+    telegram_userbot_session: str = Field("", alias="TELEGRAM_USERBOT_SESSION")
+
     # TMDB
     tmdb_read_access_token: str = Field("", alias="TMDB_API_READ_ACCESS_TOKEN")
     tmdb_api_key: str = Field("", alias="TMDB_API_KEY")

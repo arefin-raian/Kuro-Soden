@@ -1,5 +1,11 @@
 # ── Secrets ──────────────────────────────────────────────────────────────────
 .env
+# Timestamped .env backups written by scripts/userbot_manager.py — these hold
+# live userbot session strings, so they must never be committed.
+.env.bak
+.env.bak-*
+*.session
+*.session-journal
 
 # ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
