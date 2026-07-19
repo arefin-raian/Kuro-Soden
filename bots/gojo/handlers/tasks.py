@@ -9,6 +9,8 @@ Key principle: Gojo does NOT reimplement publishing. It delegates to:
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import CallbackQuery, Message
@@ -16,14 +18,26 @@ from pyrogram.types import CallbackQuery, Message
 from nekofetch.bots.fsm import FSM
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
-from nekofetch.localization.messages import t
 from nekofetch.ui.components import cb, keyboard
 from nekofetch.ui.artwork import pick_artwork
 from nekofetch.ui.screens import Screen, send_screen
+from kurosoden.shared import gojo_voice as V
 
 log = get_logger(__name__)
 
 STATE_EDIT_CAPTION = "gojo:await_caption_edit"
+STATE_SCHEDULE = "gojo:await_schedule"
+
+
+def _publish_keyboard(code: str):
+    """The review card's action row — publish now / silent / schedule / edit."""
+    return keyboard(
+        [(V.BTN_PUBLISH_NOW, cb("gojo", "publish_confirm", code)),
+         (V.BTN_PUBLISH_SILENT, cb("gojo", "publish_silent", code))],
+        [(V.BTN_SCHEDULE, cb("gojo", "publish_schedule", code)),
+         (V.BTN_EDIT_CAPTION, cb("gojo", "publish_edit", code))],
+        [(V.BTN_CANCEL, cb("gojo", "home"))],
+    )
 
 
 def register(client: Client, container: Container) -> None:
@@ -68,19 +82,58 @@ def register(client: Client, container: Container) -> None:
     async def _cb_publish(_: Client, q: CallbackQuery) -> None:
         _, _, code = q.data.split("|", 2)
         await q.answer("Publishing...")
-        await _execute_publish(client, container, q.message, code)
+        await _execute_publish(client, container, q.message, code, silent=False)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|publish_silent\|"))
+    async def _cb_publish_silent(_: Client, q: CallbackQuery) -> None:
+        _, _, code = q.data.split("|", 2)
+        await q.answer("Publishing silently...")
+        await _execute_publish(client, container, q.message, code, silent=True)
 
     @client.on_callback_query(filters.regex(r"^gojo\|publish_edit\|"))
     async def _cb_edit(_: Client, q: CallbackQuery) -> None:
         _, _, code = q.data.split("|", 2)
         await q.answer()
         await fsm.set(q.from_user.id, STATE_EDIT_CAPTION, request_code=code)
-        await q.message.reply(
-            "<b>✏️ Edit Caption</b>\n\n"
-            "Send the edited caption (Markdown or HTML format).\n"
-            "Use /cancel to abort.",
-            parse_mode=ParseMode.HTML,
-        )
+        await q.message.reply(V.EDIT_CAPTION_PROMPT, parse_mode=ParseMode.HTML)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|publish_schedule\|"))
+    async def _cb_schedule(_: Client, q: CallbackQuery) -> None:
+        _, _, code = q.data.split("|", 2)
+        await q.answer()
+        await fsm.set(q.from_user.id, STATE_SCHEDULE, request_code=code)
+        await q.message.reply(V.SCHEDULE_PROMPT, parse_mode=ParseMode.HTML)
+
+    # ── FSM text consumer — caption edit + schedule time ──────────────────────
+    @client.on_message(filters.text & filters.private & ~filters.command(["cancel"]))
+    async def _fsm_text(_: Client, message: Message) -> None:
+        if not message.from_user:
+            return
+        state, data = await fsm.get(message.from_user.id)
+        code = data.get("request_code")
+        if state == STATE_EDIT_CAPTION and code:
+            from kurosoden.shared.settings_ui import parse_user_markup
+
+            caption = parse_user_markup(message)
+            await fsm.clear(message.from_user.id)
+            await _execute_publish(
+                client, container, message, code,
+                silent=False, caption_override=caption,
+            )
+        elif state == STATE_SCHEDULE and code:
+            raw = (message.text or "").strip()
+            when = _parse_schedule(raw)
+            if when is None:
+                await message.reply(V.schedule_bad_time(raw), parse_mode=ParseMode.HTML)
+                return
+            await fsm.clear(message.from_user.id)
+            await _schedule_publish(client, container, message, code, when)
+
+    @client.on_message(filters.command("cancel"))
+    async def _cancel(_: Client, message: Message) -> None:
+        if message.from_user:
+            await fsm.clear(message.from_user.id)
+        await message.reply(f"{V.ICON} Cancelled.", parse_mode=ParseMode.HTML)
 
     # ── /publish — Review and publish flow ────────────────────────────────────
     @client.on_message(filters.command("publish"))
@@ -119,17 +172,6 @@ def register(client: Client, container: Container) -> None:
         request_code = parts[1].strip()
         await _recover_channel(client, container, message, request_code)
 
-    # ── /schedule — Schedule a post ───────────────────────────────────────────
-    @client.on_message(filters.command("schedule"))
-    async def _schedule_cmd(_: Client, message: Message) -> None:
-        await message.reply(
-            "<b>📅 Schedule Publication</b>\n\n"
-            "Usage: <code>/schedule REQ-XXXX YYYY-MM-DD HH:MM</code>\n\n"
-            "<i>Scheduling will be available in a future update. "
-            "Use /publish for immediate publishing.</i>",
-            parse_mode=ParseMode.HTML,
-        )
-
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))
     async def _help(_: Client, message: Message) -> None:
@@ -155,21 +197,9 @@ def register(client: Client, container: Container) -> None:
                    keyboard=keyboard([("◀ Back", cb("gojo", "home"))])),
         )
 
-    # ── /settings ─────────────────────────────────────────────────────────────
-    @client.on_message(filters.command("settings"))
-    async def _settings(_: Client, message: Message) -> None:
-        screen = Screen(
-            caption="<b>⚙️ Gojo Settings</b>\n\n"
-                     "Configure publishing preferences and caption templates.",
-            keyboard=keyboard(
-                [("Caption Template", cb("gojo", "set", "caption")),
-                 ("Main Channel", cb("gojo", "set", "main")),
-                 ("Index Settings", cb("gojo", "set", "index"))],
-                [("Back", cb("gojo", "home"))],
-            ),
-            image=pick_artwork("gojo"),
-        )
-        await send_screen(client, message.chat.id, screen)
+    # ── /settings ── handled by the shared human-friendly settings engine
+    # (register_settings in handlers/__init__.py) under the gojo|set|… namespace.
+    # A local /settings handler here would shadow it — see the app.py note.
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -194,46 +224,49 @@ async def _review_for_publish(
         title = req.anime_title
         anime_doc_id = req.anime_doc_id
 
-    # Show a preview with publish/edit buttons.
-    markup = keyboard([
-        [("🚀 Publish Now", cb("gojo", "publish_confirm", request_code)),
-         ("✏️ Edit Caption", cb("gojo", "publish_edit", request_code))],
-        [("❌ Cancel", cb("gojo", "home"))],
-    ])
-
-    caption_preview = (
-        f"<b>📰 Ready to Publish</b>\n\n"
-        f"📋 <b>Request:</b> <code>{request_code}</code>\n"
-        f"🎬 <b>Anime:</b> {title}\n"
-        f"🆔 <b>ID:</b> <code>{anime_doc_id or '—'}</code>\n\n"
-        "<i>Review the content below and choose:</i>\n"
-        "<b>Publish Now</b> — immediately publish to the main channel.\n"
-        "<b>Edit Caption</b> — send a modified version (Markdown/HTML)."
-    )
-
-    await message.reply(
-        caption_preview,
-        reply_markup=markup,
-        parse_mode=ParseMode.HTML,
+    await send_screen(
+        client, message.chat.id,
+        Screen(
+            caption=V.review_card(title, request_code, anime_doc_id),
+            image=pick_artwork("gojo"),
+            keyboard=_publish_keyboard(request_code),
+        ),
     )
 
 
 async def _execute_publish(
     client: Client, container: Container, message: Message, request_code: str,
+    *, caption_override: str | None = None, silent: bool = False,
 ) -> None:
-    """Publish to the main channel and update the index."""
+    """Publish to the main channel and update the index.
+
+    ``caption_override`` carries an admin-edited caption (already parsed to HTML
+    with styling and line breaks preserved); ``silent`` posts without a channel
+    notification. Both flow straight through ``PublishingService.publish``.
+    """
     try:
-        # Reuse NekoFetch's PublishingService for the full publish flow.
         from nekofetch.services.publishing_service import PublishingService
 
-        count = await PublishingService(container).publish(request_code)
+        title = request_code
+        try:
+            from nekofetch.infrastructure.database.postgres.session import session_scope
+            from nekofetch.infrastructure.repositories.request_repo import RequestRepository
+            async with session_scope(container.pg_sessionmaker) as session:
+                req = await RequestRepository(session).get_by_code(request_code)
+                if req:
+                    title = req.anime_title
+        except Exception:  # noqa: BLE001 — title is decorative on the receipt
+            pass
 
-        await message.reply(
-            f"✅ <b>Published Successfully!</b>\n\n"
-            f"📋 Request: <code>{request_code}</code>\n"
-            f"📦 Files: {count}\n\n"
-            "<i>Main channel post created. Index updated.</i>",
-            parse_mode=ParseMode.HTML,
+        await PublishingService(container).publish(
+            request_code, caption_override=caption_override, silent=silent,
+        )
+
+        await send_screen(
+            client, message.chat.id,
+            Screen(caption=V.published(title, silent=silent),
+                   image=pick_artwork("gojo"),
+                   keyboard=keyboard([(V.BTN_TASKS, cb("gojo", "tasks"))])),
         )
 
         # Mark task as completed.
@@ -243,9 +276,12 @@ async def _execute_publish(
 
     except Exception as exc:
         log.warning("gojo.publish.failed", code=request_code, error=str(exc))
-        await message.reply(
-            f"❌ <b>Publish failed:</b> {str(exc)[:300]}",
-            parse_mode=ParseMode.HTML,
+        # ``message`` may be a Message (has .reply) or a bare Chat (scheduled
+        # fire) — resolve a chat id either way and send through the client.
+        chat_id = getattr(message, "chat", message)
+        chat_id = getattr(chat_id, "id", chat_id)
+        await client.send_message(
+            chat_id, V.fail(str(exc)[:300]), parse_mode=ParseMode.HTML,
         )
 
 
@@ -304,3 +340,71 @@ async def _recover_channel(
             f"❌ <b>Recovery failed:</b> {str(exc)[:300]}",
             parse_mode=ParseMode.HTML,
         )
+
+
+# ── Scheduling ─────────────────────────────────────────────────────────────────
+
+
+def _parse_schedule(raw: str) -> datetime | None:
+    """Parse ``YYYY-MM-DD HH:MM`` into a future ``datetime``, or ``None``.
+
+    Server-local time. Anything unparseable or already in the past returns
+    ``None`` so the caller can show the "bad time" prompt.
+    """
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            when = datetime.strptime(raw.strip(), fmt)
+            break
+        except ValueError:
+            when = None
+    if when is None:
+        return None
+    if when <= datetime.now():
+        return None
+    return when
+
+
+async def _schedule_publish(
+    client: Client, container: Container, message: Message,
+    request_code: str, when: datetime,
+) -> None:
+    """Register an APScheduler one-shot that publishes ``request_code`` at ``when``.
+
+    Reuses the same ``_execute_publish`` path the buttons use, so a scheduled
+    publish is byte-identical to an immediate one — just deferred.
+    """
+    scheduler = getattr(container, "scheduler", None)
+    if scheduler is None:
+        await message.reply(V.fail("scheduler unavailable"), parse_mode=ParseMode.HTML)
+        return
+
+    chat_id = message.chat.id
+
+    async def _fire() -> None:
+        # Build a minimal stand-in so _execute_publish can reply into the chat.
+        try:
+            await _execute_publish(
+                client, container,
+                await client.get_chat(chat_id), request_code, silent=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — a scheduled fire must never crash the loop
+            log.warning("gojo.schedule.fire_failed", code=request_code, error=str(exc))
+
+    title = request_code
+    try:
+        from nekofetch.infrastructure.database.postgres.session import session_scope
+        from nekofetch.infrastructure.repositories.request_repo import RequestRepository
+        async with session_scope(container.pg_sessionmaker) as session:
+            req = await RequestRepository(session).get_by_code(request_code)
+            if req:
+                title = req.anime_title
+    except Exception:  # noqa: BLE001
+        pass
+
+    scheduler.at(when, _fire, id=f"gojo-publish-{request_code}")
+    await send_screen(
+        client, message.chat.id,
+        Screen(caption=V.scheduled(title, when.strftime("%Y-%m-%d %H:%M")),
+               image=pick_artwork("gojo"),
+               keyboard=keyboard([(V.BTN_TASKS, cb("gojo", "tasks"))])),
+    )

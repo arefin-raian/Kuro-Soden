@@ -171,12 +171,23 @@ class MainChannelService:
             row.append(InlineKeyboardButton(self.cfg.download_button_text, url=dl))
         return InlineKeyboardMarkup([row]) if row else None
 
-    async def publish(self, anime_doc_id: str) -> int | None:
-        """Post (or edit) the main-channel entry for a title. Returns the message id."""
+    async def publish(
+        self,
+        anime_doc_id: str,
+        *,
+        caption_override: str | None = None,
+        silent: bool = False,
+    ) -> int | None:
+        """Post (or edit) the main-channel entry for a title. Returns the message id.
+
+        ``caption_override`` replaces the templated caption verbatim (already
+        finished HTML, e.g. an admin's hand-edited version). ``silent`` posts with
+        notifications disabled — the "silent publish" option from Gojo's review card.
+        """
         if not self._active():
             return None
         facts = await self.gather_facts(anime_doc_id)
-        caption = self._caption(facts)
+        caption = caption_override if caption_override is not None else self._caption(facts)
         markup = await self._buttons(facts)
         client = self._c.admin_client
 
@@ -201,13 +212,13 @@ class MainChannelService:
             elif photo_url:
                 sent = await client.send_photo(
                     self.cfg.channel_id, photo_url, caption=caption, reply_markup=markup,
-                    parse_mode=ParseMode.HTML,
+                    parse_mode=ParseMode.HTML, disable_notification=silent,
                 )
                 message_id = sent.id
             else:
                 sent = await client.send_message(
                     self.cfg.channel_id, caption, reply_markup=markup,
-                    parse_mode=ParseMode.HTML,
+                    parse_mode=ParseMode.HTML, disable_notification=silent,
                 )
                 message_id = sent.id
         except Exception as exc:  # noqa: BLE001

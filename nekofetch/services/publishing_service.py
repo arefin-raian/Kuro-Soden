@@ -168,9 +168,19 @@ class PublishingService:
             shutil.rmtree(d, ignore_errors=True)
         log.info("storage.cleanup.done", code=code, removed=len(targets))
 
-    async def publish(self, code: str) -> int:
+    async def publish(
+        self,
+        code: str,
+        *,
+        caption_override: str | None = None,
+        silent: bool = False,
+    ) -> int:
         """Make stored content user-visible: wait for thumbnails → create bot
         → post to main channel + index.
+
+        ``caption_override`` / ``silent`` flow straight through to
+        :meth:`MainChannelService.publish` so Gojo's review card can publish an
+        admin-edited caption and/or suppress the channel notification.
 
         New flow per operator feedback:
           1. Mark the request PUBLISHED (file.published=True, DB row updated).
@@ -243,7 +253,9 @@ class PublishingService:
         from nekofetch.services.index_channel_service import IndexChannelService
         from nekofetch.services.main_channel_service import MainChannelService
 
-        await MainChannelService(self._c).publish(anime_doc_id)
+        await MainChannelService(self._c).publish(
+            anime_doc_id, caption_override=caption_override, silent=silent,
+        )
         await IndexChannelService(self._c).refresh_letter(
             IndexChannelService.letter_of(title)
         )

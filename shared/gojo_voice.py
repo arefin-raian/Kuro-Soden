@@ -1,0 +1,244 @@
+"""Gojo Satoru — the publisher bot's voice.
+
+Every user-facing line Gojo speaks lives here so his tone stays consistent and
+can be re-tuned in one place. He is the strongest — effortless, playful,
+supremely confident, a little smug, but never careless. Publishing is the final
+flourish: the channel goes public, the index updates, the catalog grows. He
+treats it like the closing move of a fight already won. First person, a little
+flair (🔮✨🌀), never breaking character. Generic NekoFetch copy stays in the
+JSON catalog (``localization.messages``); this module holds only what is
+distinctly *Gojo*.
+
+All strings are authored as Telegram HTML (the pipeline's default parse mode).
+Callables take runtime values and return finished HTML; plain strings are used
+as-is. Handlers reference these — never inline character copy — so a rewrite of
+his voice is a single-file edit. Mirrors ``senku_voice`` / ``levi_voice`` /
+``lelouch_voice`` structurally.
+"""
+
+from __future__ import annotations
+
+import html
+
+ICON = "🔮"  # the infinity that heads every Gojo card
+
+
+def esc(text: str) -> str:
+    """HTML-escape a runtime value before it lands in a caption."""
+    return html.escape(str(text or ""), quote=False)
+
+
+# ── Welcome / home ────────────────────────────────────────────────────────────
+
+def home_title(name: str) -> str:
+    who = esc(name) or "sorcerer"
+    return f"{ICON} <b>Gojo Satoru</b> — the strongest's on the clock, {who}."
+
+
+HOME_BODY = (
+    "<i>\"Throughout heaven and earth, I alone am the honored one.\"</i>\n\n"
+    "Senku hands me a finished channel; I take it public. Build the main-channel "
+    "card, average the ratings, drop the synopsis, wire the buttons, and light up "
+    "the index. Nothing gets past me and nothing goes out sloppy. Pick a title — "
+    "let's make it official."
+)
+
+HOME_ADMIN_TAG = (
+    "<blockquote>Publishing is the last word. Once it's live, the whole catalog "
+    "sees it — so we get it right, every card, every button, every time.</blockquote>"
+)
+
+
+# ── Task list ─────────────────────────────────────────────────────────────────
+
+TASKS_EMPTY = (
+    f"{ICON} <b>Nothing to publish.</b>\n\n"
+    "No titles waiting on me right now. The moment Senku finishes a channel it "
+    "lands here — and then I take it public."
+)
+
+
+def tasks_title(count: int) -> str:
+    n = "title" if count == 1 else "titles"
+    return f"{ICON} <b>{count} {n}</b> ready to go public. Pick one — this part's easy."
+
+
+def task_row(code: str, title: str, *, in_progress: bool = False) -> str:
+    icon = "🌀" if in_progress else "⏳"
+    return f"{icon} <code>{esc(code)}</code> — <b>{esc(title)}</b>"
+
+
+# ── Publish review card ─────────────────────────────────────────────────────────
+
+def review_card(title: str, code: str, anime_doc_id: str | None = None) -> str:
+    lines = [
+        f"{ICON} <b>Ready to go public</b>",
+        "",
+        f"🎬 <b>{esc(title)}</b>",
+        f"<code>{esc(code)}</code>",
+    ]
+    if anime_doc_id:
+        lines.append(f"🆔 <code>{esc(anime_doc_id)}</code>")
+    lines.append(
+        "\nThis is the main-channel card — franchise synopsis, averaged rating, "
+        "the season-one art. Publish it as-is, send it quietly, schedule it for "
+        "later, or tweak the caption first. Your call."
+    )
+    return "\n".join(lines)
+
+
+EDIT_CAPTION_PROMPT = (
+    f"{ICON} <b>Rewrite the caption.</b>\n\n"
+    "Send the new version — Telegram styling, Markdown, or raw HTML all work, and "
+    "your line breaks are kept exactly. I'll publish with your text instead of the "
+    "generated one. <code>/cancel</code> to back out."
+)
+
+
+def published(title: str, *, silent: bool = False) -> str:
+    how = "quietly" if silent else "loud and clear"
+    return (
+        f"{ICON} <b>Live.</b>\n\n"
+        f"🎬 <b>{esc(title)}</b> is on the main channel, posted {how}. Index is "
+        "updated, buttons are wired, catalog's one bigger. Told you this part was easy."
+    )
+
+
+def scheduled(title: str, when_text: str) -> str:
+    return (
+        f"{ICON} <b>Locked in for {esc(when_text)}.</b>\n\n"
+        f"🎬 <b>{esc(title)}</b> will go public then — nothing for you to do. "
+        "I don't miss."
+    )
+
+
+SCHEDULE_PROMPT = (
+    f"{ICON} <b>When should it drop?</b>\n\n"
+    "Send a time as <code>YYYY-MM-DD HH:MM</code> (24-hour, server time). "
+    "<code>/cancel</code> to back out."
+)
+
+
+def schedule_bad_time(raw: str) -> str:
+    return (
+        f"{ICON} <b>That time doesn't parse.</b> I read <code>{esc(raw)}</code> but "
+        "I need <code>YYYY-MM-DD HH:MM</code> — and it has to be in the future."
+    )
+
+
+# ── Footer edit (universal) ──────────────────────────────────────────────────────
+
+FOOTER_EDIT_PROMPT = (
+    f"{ICON} <b>New footer, every channel.</b>\n\n"
+    "Send the footer text — Telegram styling, Markdown, or raw HTML, line breaks "
+    "kept. I'll rewrite the footer caption across every distribution channel we "
+    "run, all at once. <code>/cancel</code> to back out."
+)
+
+
+def footer_updated(ok: int, total: int) -> str:
+    return (
+        f"{ICON} <b>Footer rewritten.</b>\n\n"
+        f"Updated <b>{ok}</b> of <b>{total}</b> channels. The rest I couldn't reach "
+        "right now — I'll skip the unreachable ones and you can re-run any time."
+    )
+
+
+# ── Updates / maintenance ─────────────────────────────────────────────────────────
+
+def updates_found(count: int) -> str:
+    n = "new entry" if count == 1 else "new entries"
+    return (
+        f"{ICON} <b>{count} {n} across the catalog.</b>\n\n"
+        "Finished seasons, movies, and extras that aren't up yet. Review the list, "
+        "trim or add whatever you want, then submit — I'll push each one back "
+        "through the pipeline and update its channel when it's ready."
+    )
+
+
+UPDATES_NONE = (
+    f"{ICON} <b>Everything's current.</b>\n\n"
+    "Swept the whole catalog — no finished entries missing. Nothing to do."
+)
+
+UPDATES_EDIT_PROMPT = (
+    f"{ICON} <b>Edit the list.</b>\n\n"
+    "Copy the text below, remove any lines you don't want, and add new ones if you "
+    "like — one per line. For adds, use the <b>official AniList English title</b> so "
+    "I match the right entry. Send it back when it's ready. <code>/cancel</code> to back out."
+)
+
+
+def updates_submitted(count: int) -> str:
+    n = "entry" if count == 1 else "entries"
+    return (
+        f"{ICON} <b>{count} {n} back in the pipeline.</b>\n\n"
+        "Each one runs the normal course — download, thumbnail, then its channel "
+        "gets the new card. No main-channel repost; these just extend what's already up."
+    )
+
+
+# ── Ban check / recovery ──────────────────────────────────────────────────────────
+
+def ban_check_result(banned: int, checked: int) -> str:
+    if not banned:
+        return (
+            f"{ICON} <b>All clear.</b>\n\n"
+            f"Checked {checked} channels — every one's reachable. Nothing's down."
+        )
+    n = "channel" if banned == 1 else "channels"
+    return (
+        f"{ICON} <b>{banned} {n} down.</b>\n\n"
+        f"Out of {checked} checked. I've pinged Senku to rebuild them — once the new "
+        "channel's up, I repost everything from backup, exactly as it was. No re-render."
+    )
+
+
+def recovered(title: str) -> str:
+    return (
+        f"{ICON} <b>Back from backup.</b>\n\n"
+        f"🎬 <b>{esc(title)}</b> is restored — every card, divider, and footer posted "
+        "again just as it was. Buttons across the main channel and index point at the "
+        "new channel now."
+    )
+
+
+# ── Errors / misc ───────────────────────────────────────────────────────────────
+
+GENERIC_FAIL = (
+    f"{ICON} Something misfired. Not a problem I can't handle — check the logs and "
+    "run it again."
+)
+
+NO_TASK = (
+    f"{ICON} <b>That one's not on my board.</b> It isn't in my publish queue — it "
+    "may not have finished distribution yet."
+)
+
+
+def fail(reason: str) -> str:
+    return f"{ICON} <b>That didn't land:</b> {esc(reason)}"
+
+
+# ── Button labels ───────────────────────────────────────────────────────────────
+
+BTN_PUBLISH_NOW = "🚀 Publish Now"
+BTN_PUBLISH_SILENT = "🔕 Silent Publish"
+BTN_SCHEDULE = "📅 Schedule"
+BTN_EDIT_CAPTION = "✏️ Edit Caption"
+BTN_CANCEL = "✗ Cancel"
+
+BTN_TASKS = "📋 My Titles"
+BTN_HOME = "⇐ Home"
+BTN_BACK = "⇐ Back"
+BTN_SETTINGS = "⚙️ Settings"
+BTN_HELP = "❔ How it works"
+
+BTN_CHECK_UPDATES = "🔁 Check Updates"
+BTN_CHECK_BANNED = "🛡 Check Banned"
+BTN_EDIT_FOOTER = "✏️ Edit Footer (all channels)"
+BTN_EDIT_LIST = "✏️ Edit list"
+BTN_SUBMIT = "✅ Submit"
+BTN_STATS = "📊 Stats"
+BTN_RECOVER = "🛡 Recover"
+BTN_CHANGE_MAIN = "📡 Change Main Channel"
