@@ -136,11 +136,18 @@ FOOTER_EDIT_PROMPT = (
 )
 
 
-def footer_updated(ok: int, total: int) -> str:
+def footer_updated(ok: bool, footers: int, bots: int = 0) -> str:
+    if not ok:
+        return (
+            f"{ICON} <b>Nothing to rewrite.</b>\n\n"
+            "That came through empty, so I left the footer as-is. Send the new "
+            "text and I'll fan it out."
+        )
     return (
         f"{ICON} <b>Footer rewritten.</b>\n\n"
-        f"Updated <b>{ok}</b> of <b>{total}</b> channels. The rest I couldn't reach "
-        "right now — I'll skip the unreachable ones and you can re-run any time."
+        f"Updated <b>{footers}</b> footer post(s) across <b>{bots}</b> channel(s). "
+        "Returning users get the new footer on their next start — future posts "
+        "already use it."
     )
 
 

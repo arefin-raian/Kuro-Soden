@@ -95,6 +95,7 @@ def build_gojo(container: Container, token: str) -> Client:
                  InlineKeyboardButton("🔮 Publish", callback_data=cb(bot, "publish"))],
                 [InlineKeyboardButton("📅 Schedule", callback_data=cb(bot, "schedule")),
                  InlineKeyboardButton("🛡 Recover", callback_data=cb(bot, "recover"))],
+                [InlineKeyboardButton("✏️ Edit Footer", callback_data=cb(bot, "edit_footer"))],
                 [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
             ])
             await send_screen(client, q.message.chat.id,
@@ -194,6 +195,7 @@ def build_gojo(container: Container, token: str) -> Client:
              ("🔮 Publish", cb("gojo", "publish"))],
             [("📅 Schedule", cb("gojo", "schedule")),
              ("🛡 Recover", cb("gojo", "recover"))],
+            [("✏️ Edit Footer", cb("gojo", "edit_footer"))],
             [("⚙️ Settings", cb("gojo", "settings")),
              ("❓ Help", cb("gojo", "help"))],
         ]

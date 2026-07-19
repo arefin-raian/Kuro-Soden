@@ -27,6 +27,7 @@ log = get_logger(__name__)
 
 STATE_EDIT_CAPTION = "gojo:await_caption_edit"
 STATE_SCHEDULE = "gojo:await_schedule"
+STATE_EDIT_FOOTER = "gojo:await_footer_edit"
 
 
 def _publish_keyboard(code: str):
@@ -104,6 +105,21 @@ def register(client: Client, container: Container) -> None:
         await fsm.set(q.from_user.id, STATE_SCHEDULE, request_code=code)
         await q.message.reply(V.SCHEDULE_PROMPT, parse_mode=ParseMode.HTML)
 
+    # ── Universal footer edit — /footer or the gojo|edit_footer button ────────
+    async def _arm_footer(user_id: int, reply_to: Message) -> None:
+        await fsm.set(user_id, STATE_EDIT_FOOTER)
+        await reply_to.reply(V.FOOTER_EDIT_PROMPT, parse_mode=ParseMode.HTML)
+
+    @client.on_message(filters.command("footer"))
+    async def _footer_cmd(_: Client, message: Message) -> None:
+        if message.from_user:
+            await _arm_footer(message.from_user.id, message)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|edit_footer$"))
+    async def _cb_footer(_: Client, q: CallbackQuery) -> None:
+        await q.answer()
+        await _arm_footer(q.from_user.id, q.message)
+
     # ── FSM text consumer — caption edit + schedule time ──────────────────────
     @client.on_message(filters.text & filters.private & ~filters.command(["cancel"]))
     async def _fsm_text(_: Client, message: Message) -> None:
@@ -128,6 +144,18 @@ def register(client: Client, container: Container) -> None:
                 return
             await fsm.clear(message.from_user.id)
             await _schedule_publish(client, container, message, code, when)
+        elif state == STATE_EDIT_FOOTER:
+            from kurosoden.shared.settings_ui import parse_user_markup
+            from nekofetch.services.footer_service import FooterService
+
+            html = parse_user_markup(message)
+            await fsm.clear(message.from_user.id)
+            result = await FooterService(container).set_footer(html)
+            await message.reply(
+                V.footer_updated(result.ok, result.footers_rewritten,
+                                 result.bots_bumped),
+                parse_mode=ParseMode.HTML,
+            )
 
     @client.on_message(filters.command("cancel"))
     async def _cancel(_: Client, message: Message) -> None:

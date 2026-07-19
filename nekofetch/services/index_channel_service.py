@@ -119,6 +119,16 @@ async def seed_index_sections(session_maker) -> None:
 
 # ── Caption rendering ────────────────────────────────────────────────────────
 
+def _strip_bullet(title: str) -> str:
+    """Drop any leading ``⦿`` (and surrounding space) a title already carries.
+
+    Empty index cards are seeded with a bare ``⦿`` bullet, and some legacy
+    titles arrive with the bullet baked in. Without this, prepending the
+    template bullet yields a doubled ``⦿ ⦿ Name``. Strip first, then format.
+    """
+    return title.lstrip().removeprefix("⦿").strip()
+
+
 def _letter_caption(label: str, titles: list[str]) -> str:
     """Build a bold-HTML caption for a letter section.
 
@@ -132,7 +142,8 @@ def _letter_caption(label: str, titles: list[str]) -> str:
         <b>•─────────────────────•</b>
     """
     header = f"<b>•────────•°• {label} •°•────────•</b>"
-    body = "\n".join(f"<b>⦿ {t}</b>" for t in titles) if titles else "<b>⦿</b>"
+    body = ("\n".join(f"<b>⦿ {_strip_bullet(t)}</b>" for t in titles)
+            if titles else "<b>⦿</b>")
     footer = "<b>•─────────────────────•</b>"
     return f"{header}\n\n{body}\n\n{footer}"
 
@@ -146,7 +157,7 @@ def _chunk_titles(titles: list[str], label: str) -> list[list[str]]:
     current_len = header_len
 
     for title in titles:
-        entry = f"<b>⦿ {title}</b>"
+        entry = f"<b>⦿ {_strip_bullet(title)}</b>"
         entry_len = len(entry) + 1  # +1 for newline
         if current_len + entry_len > _CAPTION_LIMIT:
             chunks.append(current)
