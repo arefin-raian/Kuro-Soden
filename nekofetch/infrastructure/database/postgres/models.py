@@ -289,6 +289,56 @@ class PublishedPostBackup(Base, PKMixin, TimestampMixin):
     source_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
+class ChannelLayout(Base, PKMixin, TimestampMixin):
+    """The ordered message layout of a distribution channel's content pack.
+
+    When Senku (or the auto pipeline) publishes a channel, every message it
+    posts — info card, season/extra cards, dividers, watch guide, footer — gets
+    one row here in send order (``seq``). This lets a later *incremental* update
+    (a new franchise entry finishing the pipeline) find the exact footer/divider
+    message ids, delete just those, append the new card(s), and re-post a fresh
+    divider + footer — without re-rendering the whole channel or touching the
+    main channel. ``anilist_id`` ties a card to the entry it shows so a re-run
+    never double-posts the same season.
+    """
+
+    __tablename__ = "channel_layout"
+
+    channel_bot_id: Mapped[int] = mapped_column(
+        ForeignKey("bots.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # info_card | season_card | movie_card | watch_guide | divider | footer
+    tg_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    anilist_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class ChannelBroadcast(Base, PKMixin, TimestampMixin):
+    """One broadcast message posted into a distribution channel.
+
+    An operator can push a single announcement to *every* distribution channel
+    at once (see :class:`BroadcastService`). Each delivered copy gets one row
+    here so a scheduled auto-deletion survives a restart: ``delete_at`` is when
+    the message should be removed (``None`` = permanent), and the scheduler's
+    :meth:`BroadcastService.sweep_expired` job deletes any past-due, not-yet-
+    deleted row. ``batch_id`` ties every copy of one broadcast together for
+    reporting. The main channel is never a target — this is channels only.
+    """
+
+    __tablename__ = "channel_broadcasts"
+
+    batch_id: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    delete_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )  # None = permanent
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
 class IndexSection(Base, PKMixin, TimestampMixin):
     """Dynamic index-channel section mapping.
 

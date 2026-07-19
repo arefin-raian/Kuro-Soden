@@ -210,6 +210,13 @@ class PublishingService:
             first = next((f for f in files if f.local_path), None)
             res = first.resolution if first else None
             aud = first.audio.value if first and first.audio else None
+            # Franchise-update requests (created by UpdateCheckService) carry an
+            # ``update_entry`` flag + their own anilist_id. When set, this entry
+            # extends an already-published title: we update its distribution
+            # channel in place instead of creating a new one / reposting main.
+            fd = req.franchise_data or {}
+            is_update_entry = bool(fd.get("update_entry"))
+            update_anilist_id = fd.get("anilist_id")
 
         from nekofetch.services.analytics_service import AnalyticsService
 
@@ -243,22 +250,42 @@ class PublishingService:
                     anime=anime_doc_id, error=str(exc),
                 )
 
-        # Step 2: Create distribution bot (if auto-create is enabled and feature is on).
-        if self._c.config.features.distribution_bots and self._c.config.bot.auto_create_on_publish:
-            from nekofetch.services.bot_orchestrator import BotOrchestratorService
+        # Franchise-update branch: this entry extends an already-published
+        # title. Append its card to the existing distribution channel in place
+        # and STOP — no new bot/channel, no main-channel repost, no index
+        # reshuffle (the title is already listed). Everything below (log/stats/
+        # notify) still runs so the update is observable.
+        if is_update_entry:
+            try:
+                from kurosoden.shared.senku_publisher import SenkuPublisher
 
-            await BotOrchestratorService(self._c).ensure_bot_for_anime(anime_doc_id)
+                ids = [int(update_anilist_id)] if update_anilist_id is not None else None
+                await SenkuPublisher(self._c).update_distribution_channel(
+                    self._c.admin_client, anime_doc_id, ids,
+                )
+            except Exception as exc:  # noqa: BLE001 — never fail an update publish
+                from nekofetch.core.logging import get_logger
+                get_logger(__name__).warning(
+                    "publish.channel_update.failed",
+                    anime=anime_doc_id, error=str(exc),
+                )
+        else:
+            # Step 2: Create distribution bot (if auto-create is enabled and feature is on).
+            if self._c.config.features.distribution_bots and self._c.config.bot.auto_create_on_publish:
+                from nekofetch.services.bot_orchestrator import BotOrchestratorService
 
-        # Step 3: Post to main channel (uses first season's generated thumbnail).
-        from nekofetch.services.index_channel_service import IndexChannelService
-        from nekofetch.services.main_channel_service import MainChannelService
+                await BotOrchestratorService(self._c).ensure_bot_for_anime(anime_doc_id)
 
-        await MainChannelService(self._c).publish(
-            anime_doc_id, caption_override=caption_override, silent=silent,
-        )
-        await IndexChannelService(self._c).refresh_letter(
-            IndexChannelService.letter_of(title)
-        )
+            # Step 3: Post to main channel (uses first season's generated thumbnail).
+            from nekofetch.services.index_channel_service import IndexChannelService
+            from nekofetch.services.main_channel_service import MainChannelService
+
+            await MainChannelService(self._c).publish(
+                anime_doc_id, caption_override=caption_override, silent=silent,
+            )
+            await IndexChannelService(self._c).refresh_letter(
+                IndexChannelService.letter_of(title)
+            )
 
         from nekofetch.services.log_channel_service import LogChannelService
 

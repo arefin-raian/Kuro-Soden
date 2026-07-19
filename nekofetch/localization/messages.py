@@ -527,6 +527,19 @@ class M:
     BROADCAST_SENDING = "broadcast_sending"
     BROADCAST_DONE = "broadcast_done"
 
+    # ── channel broadcast (to every distribution channel) ──
+    ADMIN_BTN_CH_BROADCAST = "admin_btn_ch_broadcast"
+    CH_BROADCAST_PROMPT = "ch_broadcast_prompt"
+    CH_BROADCAST_DURATION = "ch_broadcast_duration"
+    CH_BROADCAST_SENDING = "ch_broadcast_sending"
+    CH_BROADCAST_DONE = "ch_broadcast_done"
+    CH_BROADCAST_NO_CHANNELS = "ch_broadcast_no_channels"
+    BTN_CH_BC_PERMANENT = "btn_ch_bc_permanent"
+    BTN_CH_BC_1H = "btn_ch_bc_1h"
+    BTN_CH_BC_6H = "btn_ch_bc_6h"
+    BTN_CH_BC_24H = "btn_ch_bc_24h"
+    BTN_CH_BC_7D = "btn_ch_bc_7d"
+
     # ── misc / distribution ──
     BTN_REFRESH = "btn_refresh"
     DIST_NOT_SUBSCRIBED = "dist_not_subscribed"

@@ -70,26 +70,337 @@ class SenkuPublisher:
         if not channel or not channel.get("chat_id"):
             raise PublishError(f"no verified channel for {code}")
         chat_id = int(channel["chat_id"])
+        handle = channel.get("handle")
 
-        posts, title = await self._build_posts(code)
+        posts, title, anime_doc_id = await self._build_posts(code)
         if not posts:
             raise PublishError(f"no content to publish for {code}")
 
-        posted, pinned = await self._send_posts(client, chat_id, posts)
+        posted, pinned, layout = await self._send_posts(client, chat_id, posts)
+
+        # Register a durable channel anchor + persist the message layout so a
+        # later franchise update can find this channel and its footer/divider
+        # message ids. The manual (wizard) flow has no DistributionBot row yet;
+        # the auto pipeline already made one — register_channel is idempotent.
+        try:
+            await self._persist_channel(
+                anime_doc_id, chat_id, title, handle, layout,
+            )
+        except Exception as exc:  # noqa: BLE001 — a publish still succeeds
+            log.warning("senku.publish.persist_failed",
+                        code=code, anime=anime_doc_id, error=str(exc))
+
         log.info("senku.publish.done", code=code, chat_id=chat_id,
                  posted=posted, pinned=len(pinned))
         return {"title": title, "chat_id": chat_id, "posted": posted,
                 "pinned": pinned}
 
+    async def update_distribution_channel(
+        self, client, anime_doc_id: str, new_anilist_ids: list[int] | None = None,
+    ) -> dict:
+        """Incrementally update a published channel with newly-finished entries.
+
+        Phase 6 franchise-update path: a new season/extra finished the pipeline,
+        so we append *only its* card(s) to the channel it belongs to. We do
+        **not** re-render or repost the whole channel, and we never touch the
+        main channel.
+
+        Choreography (mirrors the publish tail): delete the trailing footer
+        message and the divider right before it, send ``divider → new card``
+        for each new entry, then ``divider → footer`` again — and rewrite the
+        tail of :class:`ChannelLayout` to match. The pinned info card and watch
+        guide are left exactly where they are.
+
+        ``new_anilist_ids`` restricts the update to those entries (the update
+        checker knows which entry just finished). When ``None`` we reconcile:
+        every entry that now has packs but isn't already in the layout.
+
+        Returns ``{"appended": n, "chat_id": id}``. A no-op (no channel row, no
+        new cards) returns ``appended=0`` — never raises for the "nothing to do"
+        case, so a normal pipeline run without updates stays quiet.
+        """
+        from sqlalchemy import select
+
+        from nekofetch.infrastructure.database.postgres.models import (
+            ChannelLayout,
+            DistributionBot,
+        )
+        from nekofetch.infrastructure.database.postgres.session import session_scope
+
+        # 1. Resolve the durable channel anchor + its saved layout.
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            bot = (
+                await session.execute(
+                    select(DistributionBot).where(
+                        DistributionBot.anime_doc_id == anime_doc_id,
+                        DistributionBot.is_channel.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if bot is None or not bot.chat_id:
+                log.info("senku.update.no_channel", anime=anime_doc_id)
+                return {"appended": 0, "chat_id": None}
+            bot_id = bot.id
+            chat_id = int(bot.chat_id)
+            layout_rows = (
+                await session.execute(
+                    select(ChannelLayout)
+                    .where(ChannelLayout.channel_bot_id == bot_id)
+                    .order_by(ChannelLayout.seq)
+                )
+            ).scalars().all()
+            layout = [
+                {"kind": r.kind, "tg_message_id": r.tg_message_id,
+                 "anilist_id": r.anilist_id, "is_pinned": r.is_pinned}
+                for r in layout_rows
+            ]
+
+        already = {
+            item["anilist_id"] for item in layout
+            if item["anilist_id"] is not None
+        }
+
+        # 2. Build cards for the new entries (reusing publish's builders).
+        new_cards = await self._build_update_cards(
+            anime_doc_id, new_anilist_ids, already,
+        )
+        if not new_cards:
+            log.info("senku.update.nothing", anime=anime_doc_id)
+            return {"appended": 0, "chat_id": chat_id}
+
+        # 3. Re-choreograph the tail: drop old footer (+ its leading divider),
+        #    append each new card behind a divider, then divider + footer.
+        appended = await self._append_and_refooter(
+            client, chat_id, bot_id, layout, new_cards,
+        )
+        log.info("senku.update.done", anime=anime_doc_id, chat_id=chat_id,
+                 appended=appended)
+        return {"appended": appended, "chat_id": chat_id}
+
+    async def _build_update_cards(
+        self, anime_doc_id: str, new_anilist_ids: list[int] | None,
+        already: set[int],
+    ) -> list[dict]:
+        """Build the post dicts for entries not yet present in the channel.
+
+        Reuses the same card builders as :meth:`_build_posts`. Only entries that
+        (a) have finished packs and (b) aren't already in the layout are built;
+        when ``new_anilist_ids`` is given, we additionally restrict to that set.
+        """
+        from nekofetch.services.bot_content import BotContentService
+
+        svc = BotContentService(self._c)
+        packs = await svc._load_packs(anime_doc_id)
+        if not packs:
+            return []
+        meta = await svc._gather_metadata(anime_doc_id)
+        walked = await svc._walk_franchise(anime_doc_id, meta)
+
+        wanted = set(new_anilist_ids or [])
+        tv = list(walked.get("tv", []))
+        cards: list[dict] = []
+
+        for entry in walked.get("all", []):
+            aid = getattr(entry, "anilist_id", None)
+            if aid is None or aid in already:
+                continue
+            if wanted and aid not in wanted:
+                continue
+
+            entry_meta = svc._entry_meta(meta, entry)
+            if entry.format in _TV_FORMATS:
+                season = (tv.index(entry) + 1) if entry in tv else 1
+                entry_packs = [p for p in packs if p.season == season]
+                caption, image = svc._build_season_card(entry_meta, season, entry_packs)
+                buttons = await svc._build_season_buttons(entry_packs)
+                post_type = "season_card"
+            else:
+                entry_packs = [
+                    p for p in packs
+                    if (p.entry_id is not None and p.entry_id == aid)
+                    or (p.entry_id is None and p.season is None)
+                ]
+                if not entry_packs:
+                    continue
+                is_movie = entry.format == "MOVIE" or (
+                    entry.format in ("OVA", "ONA", "SPECIAL")
+                    and (getattr(entry, "episodes", 0) or 0) <= 1
+                )
+                caption, image = svc._build_season_card(entry_meta, 1, entry_packs)
+                buttons = await svc._build_season_buttons(entry_packs)
+                post_type = "movie_card" if is_movie else "season_card"
+
+            # Skip an entry that has no packs at all (not finished yet).
+            if not entry_packs:
+                continue
+            cards.append({
+                "post_type": post_type,
+                "caption": caption,
+                "image": await self._cache_image(image),
+                "button_data": buttons,
+                "pinned": False,
+                "anilist_id": aid,
+            })
+        return cards
+
+    async def _append_and_refooter(
+        self, client, chat_id: int, bot_id: int,
+        layout: list[dict], new_cards: list[dict],
+    ) -> int:
+        """Delete *only* the trailing footer, append cards, re-post the footer.
+
+        The divider that already sits right before the footer stays put — it's
+        correctly placed, so deleting and re-sending the same sticker in the
+        same spot would be pointless churn. We keep it and slot the new cards in
+        after it, each followed by its own divider, then re-post the footer:
+
+            … <kept divider> card₁ <divider> card₂ … <divider> footer
+
+        Rewrites this channel's :class:`ChannelLayout` to reflect the new tail.
+        Best-effort on Telegram calls (a failed delete/send is logged, never
+        aborts), so a partial update still leaves a consistent saved layout.
+        """
+        from sqlalchemy import delete
+        from pyrogram.enums import ParseMode
+
+        from nekofetch.infrastructure.database.postgres.models import ChannelLayout
+        from nekofetch.infrastructure.database.postgres.session import session_scope
+
+        fmt = self._c.config.post_format
+        divider_id = fmt.divider_sticker_id or self._c.config.bot.divider_sticker_id
+
+        try:
+            chat = await client.get_chat(chat_id)
+            handle = getattr(chat, "username", None)
+        except Exception:  # noqa: BLE001
+            handle = None
+
+        # Find the trailing footer. We delete only the footer message; the
+        # divider before it is left in place (the new cards go after it).
+        footer_idx = next(
+            (i for i in range(len(layout) - 1, -1, -1)
+             if layout[i]["kind"] == "footer"),
+            None,
+        )
+        if footer_idx is not None:
+            footer_post = layout[footer_idx]
+            body = layout[:footer_idx]  # keeps the pre-footer divider
+            fmid = footer_post.get("tg_message_id")
+            if fmid:
+                try:
+                    await client.delete_messages(chat_id, fmid)
+                except Exception as exc:  # noqa: BLE001 — stale id, already gone
+                    log.warning("senku.update.delete_failed", mid=fmid, error=str(exc))
+        else:
+            # No footer tracked — append after everything, then add a footer.
+            body = list(layout)
+            footer_post = None
+
+        new_layout = list(body)
+        appended = 0
+
+        async def _emit_divider() -> None:
+            if not divider_id:
+                return
+            div = await self._send_divider(client, chat_id, divider_id)
+            if div is not None:
+                new_layout.append({"kind": "divider", "tg_message_id": div,
+                                   "anilist_id": None, "is_pinned": False})
+
+        async def _send_card(post: dict) -> None:
+            nonlocal appended
+            caption = self._resolve_caption(post.get("caption") or "", handle, fmt)
+            markup = build_audio_keyboard(post.get("button_data"), fmt)
+            image = post.get("image")
+            try:
+                if image:
+                    msg = await client.send_photo(
+                        chat_id, image, caption=caption,
+                        reply_markup=markup, parse_mode=ParseMode.HTML,
+                    )
+                else:
+                    msg = await client.send_message(
+                        chat_id, caption, reply_markup=markup,
+                        parse_mode=ParseMode.HTML,
+                    )
+            except Exception as exc:  # noqa: BLE001 — a partial update still ships
+                log.warning("senku.update.card_failed",
+                            post_type=post.get("post_type"), error=str(exc))
+                return
+            new_layout.append({
+                "kind": post.get("post_type") or "season_card",
+                "tg_message_id": msg.id,
+                "anilist_id": post.get("anilist_id"),
+                "is_pinned": False,
+            })
+            appended += 1
+
+        # A divider only needs to *lead* the first new card when the body
+        # doesn't already end in one — the footer path keeps the pre-footer
+        # divider, but the no-footer path ends on a card and needs a separator.
+        need_leading_divider = bool(body) and body[-1].get("kind") != "divider"
+        for i, post in enumerate(new_cards):
+            if (i == 0 and need_leading_divider) or i > 0:
+                await _emit_divider()
+            await _send_card(post)
+
+        # Divider + re-posted footer (reuse the old footer's text/image).
+        await _emit_divider()
+        footer_caption, footer_image = await self._footer_content(footer_post)
+        try:
+            caption = self._resolve_caption(footer_caption, handle, fmt)
+            if footer_image:
+                fmsg = await client.send_photo(
+                    chat_id, footer_image, caption=caption, parse_mode=ParseMode.HTML,
+                )
+            else:
+                fmsg = await client.send_message(
+                    chat_id, caption, parse_mode=ParseMode.HTML,
+                )
+            new_layout.append({"kind": "footer", "tg_message_id": fmsg.id,
+                               "anilist_id": None, "is_pinned": False})
+        except Exception as exc:  # noqa: BLE001 — footer is best-effort
+            log.warning("senku.update.footer_failed", error=str(exc))
+
+        # Persist the rewritten layout.
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            await session.execute(
+                delete(ChannelLayout).where(ChannelLayout.channel_bot_id == bot_id)
+            )
+            for seq, item in enumerate(new_layout):
+                session.add(ChannelLayout(
+                    channel_bot_id=bot_id, seq=seq, kind=item["kind"],
+                    tg_message_id=item.get("tg_message_id"),
+                    anilist_id=item.get("anilist_id"),
+                    is_pinned=bool(item.get("is_pinned")),
+                ))
+        return appended
+
+    async def _footer_content(self, footer_post: dict | None) -> tuple[str, str | None]:
+        """Resolve the footer caption + image for a re-posted footer.
+
+        We don't keep the footer's rendered text in the layout table (only its
+        message id), so rebuild it from config exactly as :meth:`_build_posts`
+        does. ``footer_post`` is accepted for future use (per-channel footers).
+        """
+        from nekofetch.localization.messages import M, t
+
+        footer_text = self._c.config.bot.footer_text or t(M.BOT_FOOTER)
+        footer_image = self._c.config.bot.footer_image_url or None
+        return footer_text, await self._cache_image(footer_image)
+
     # ── build ────────────────────────────────────────────────────────────────────
 
-    async def _build_posts(self, code: str) -> tuple[list[dict], str]:
+    async def _build_posts(self, code: str) -> tuple[list[dict], str, str]:
         """Assemble the ordered post list, reusing BotContentService builders.
 
         The returned posts are plain dicts (not persisted ``BotContentPost``
         rows — the channel has no bot row); each carries ``caption``, an
         ``image`` (catbox/AniList URL or ``None``), ``button_data``, and the
         ``pinned``/``post_type`` flags the sender needs.
+
+        Also returns the resolved ``anime_doc_id`` so the caller can anchor the
+        channel + its message layout for later incremental updates.
         """
         from nekofetch.services.bot_content import BotContentService
 
@@ -147,6 +458,7 @@ class SenkuPublisher:
                 "caption": caption,
                 "image": await self._cache_image(image),
                 "button_data": buttons, "pinned": False,
+                "anilist_id": entry.anilist_id,
             })
             order += 1
 
@@ -172,6 +484,7 @@ class SenkuPublisher:
                 "order": order, "caption": caption,
                 "image": await self._cache_image(image),
                 "button_data": buttons, "pinned": False,
+                "anilist_id": entry.anilist_id,
             })
             order += 1
 
@@ -198,7 +511,73 @@ class SenkuPublisher:
             "button_data": None, "pinned": False,
         })
 
-        return posts, title
+        return posts, title, anime_doc_id
+
+    async def _persist_channel(
+        self, anime_doc_id: str, chat_id: int, title: str,
+        handle: str | None, layout: list[dict],
+    ) -> None:
+        """Register the channel's DistributionBot anchor + save its layout.
+
+        Idempotent on the anchor: the auto pipeline already registered a bot
+        row; the manual wizard flow hasn't, so we create one keyed by
+        ``anime_doc_id``. Either way we then replace this channel's
+        :class:`ChannelLayout` rows with the freshly-posted message list.
+        """
+        from sqlalchemy import delete, select
+
+        from nekofetch.infrastructure.database.postgres.models import (
+            ChannelLayout,
+            DistributionBot,
+        )
+        from nekofetch.infrastructure.database.postgres.session import session_scope
+
+        # Resolve (or create) the durable channel anchor.
+        bot_id: int | None = None
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            row = (
+                await session.execute(
+                    select(DistributionBot).where(
+                        DistributionBot.chat_id == chat_id,
+                        DistributionBot.is_channel.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is not None:
+                bot_id = row.id
+                if row.anime_doc_id is None:
+                    row.anime_doc_id = anime_doc_id
+
+        if bot_id is None:
+            from nekofetch.services.bot_management_service import BotManagementService
+
+            handle_clean = (handle or "").lstrip("@") or None
+            name = title or (handle_clean or f"channel-{chat_id}")
+            try:
+                info = await BotManagementService(self._c).register_channel(
+                    chat_id, name=name, username=handle_clean,
+                    anime_doc_id=anime_doc_id,
+                )
+                bot_id = info.id
+            except Exception as exc:  # noqa: BLE001 — anchor is best-effort
+                log.warning("senku.publish.register_channel_failed",
+                            anime=anime_doc_id, chat_id=chat_id, error=str(exc))
+                return
+
+        # Replace the layout snapshot for this channel.
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            await session.execute(
+                delete(ChannelLayout).where(ChannelLayout.channel_bot_id == bot_id)
+            )
+            for seq, item in enumerate(layout):
+                session.add(ChannelLayout(
+                    channel_bot_id=bot_id,
+                    seq=seq,
+                    kind=item["kind"],
+                    tg_message_id=item.get("tg_message_id"),
+                    anilist_id=item.get("anilist_id"),
+                    is_pinned=bool(item.get("is_pinned")),
+                ))
 
     def _reorder_franchise(
         self, walked: dict, entries: list[EntryData],
@@ -290,13 +669,18 @@ class SenkuPublisher:
 
     async def _send_posts(
         self, client, chat_id: int, posts: list[dict],
-    ) -> tuple[int, list[int]]:
+    ) -> tuple[int, list[int], list[dict]]:
         """Post every card into the channel, mirroring the distribution app.
 
         Divider sticker between sections, URL buttons from ``button_data``,
         ``{BOT_QUAL:...}`` placeholders resolved to the channel handle, and
-        the info card + watch guide pinned (service notices swept). Returns
-        ``(posted_count, pinned_message_ids)``.
+        the info card + watch guide pinned (service notices swept).
+
+        Returns ``(posted_count, pinned_message_ids, layout)`` where ``layout``
+        is the ordered list of every message actually sent — including the
+        divider stickers — as ``{"kind", "tg_message_id", "anilist_id",
+        "is_pinned"}`` dicts. A later incremental update reads this to find the
+        footer + trailing divider it must delete.
         """
         import re
 
@@ -304,6 +688,7 @@ class SenkuPublisher:
         divider_id = fmt.divider_sticker_id or self._c.config.bot.divider_sticker_id
         posted = 0
         pinned_ids: list[int] = []
+        layout: list[dict] = []
 
         # Resolve a public handle for {BOT_QUAL} links. In a channel these point
         # at the channel itself (deep-linking to messages fails in private chat).
@@ -315,23 +700,12 @@ class SenkuPublisher:
 
         for i, post in enumerate(posts):
             if i > 0 and divider_id:
-                try:
-                    await client.send_sticker(chat_id, divider_id)
-                except Exception:  # noqa: BLE001 — divider is decorative
-                    pass
+                div = await self._send_divider(client, chat_id, divider_id)
+                if div is not None:
+                    layout.append({"kind": "divider", "tg_message_id": div,
+                                   "anilist_id": None, "is_pinned": False})
 
-            caption = post.get("caption") or ""
-            if caption:
-                if handle:
-                    caption = re.sub(
-                        r"\{BOT_QUAL:([^}]+)\}",
-                        rf'<a href="https://t.me/{handle}">\1</a>',
-                        caption,
-                    )
-                else:
-                    caption = re.sub(r"\{BOT_QUAL:([^}]+)\}", r"\1", caption)
-                caption = resolve_premium_emoji(caption, fmt)
-
+            caption = self._resolve_caption(post.get("caption") or "", handle, fmt)
             markup = build_audio_keyboard(post.get("button_data"), fmt)
             image = post.get("image")
             try:
@@ -351,11 +725,44 @@ class SenkuPublisher:
                             post_type=post.get("post_type"), error=str(exc))
                 continue
 
-            if post.get("pinned"):
+            pinned = bool(post.get("pinned"))
+            if pinned:
                 await self._pin_silently(client, chat_id, msg.id)
                 pinned_ids.append(msg.id)
 
-        return posted, pinned_ids
+            layout.append({
+                "kind": post.get("post_type") or "season_card",
+                "tg_message_id": msg.id,
+                "anilist_id": post.get("anilist_id"),
+                "is_pinned": pinned,
+            })
+
+        return posted, pinned_ids, layout
+
+    def _resolve_caption(self, caption: str, handle: str | None, fmt) -> str:
+        """Resolve ``{BOT_QUAL:...}`` links + premium emoji in a channel caption."""
+        import re
+
+        if not caption:
+            return caption
+        if handle:
+            caption = re.sub(
+                r"\{BOT_QUAL:([^}]+)\}",
+                rf'<a href="https://t.me/{handle}">\1</a>',
+                caption,
+            )
+        else:
+            caption = re.sub(r"\{BOT_QUAL:([^}]+)\}", r"\1", caption)
+        return resolve_premium_emoji(caption, fmt)
+
+    @staticmethod
+    async def _send_divider(client, chat_id: int, divider_id: str) -> int | None:
+        """Post a divider sticker; return its message id (``None`` on failure)."""
+        try:
+            msg = await client.send_sticker(chat_id, divider_id)
+            return msg.id
+        except Exception:  # noqa: BLE001 — divider is decorative
+            return None
 
     @staticmethod
     async def _pin_silently(client, chat_id: int, message_id: int) -> None:

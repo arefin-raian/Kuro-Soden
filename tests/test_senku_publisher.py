@@ -249,7 +249,9 @@ class _FakeClient:
         return _FakeChat()
 
     async def send_sticker(self, chat_id, sticker):
+        self._next_id += 1
         self.stickers.append(sticker)
+        return _FakeMsg(self._next_id)
 
     async def send_photo(self, chat_id, image, caption=None, reply_markup=None, parse_mode=None):
         self._next_id += 1
@@ -290,9 +292,14 @@ async def test_send_posts_dividers_pins_and_qual(pub):
         {"post_type": "watch_guide", "caption": "Guide", "image": None,
          "button_data": None, "pinned": True},
     ]
-    posted, pinned = await pub._send_posts(client, -100123, posts)
+    posted, pinned, layout = await pub._send_posts(client, -100123, posts)
 
     assert posted == 3
+    # Layout captures every message in order: 3 cards + 2 dividers.
+    assert [it["kind"] for it in layout] == [
+        "info_card", "divider", "season_card", "divider", "watch_guide",
+    ]
+    assert all(it["tg_message_id"] is not None for it in layout)
     # Info + guide pinned (two ids), season card not.
     assert len(pinned) == 2 and len(client.pinned) == 2
     # Dividers: one between each of the 3 posts → 2 stickers.
@@ -322,7 +329,9 @@ async def test_send_posts_survives_a_failed_card(pub):
         {"post_type": "footer", "caption": "Footer", "image": None,
          "button_data": None, "pinned": False},
     ]
-    posted, pinned = await pub._send_posts(client, -100123, posts)
+    posted, pinned, layout = await pub._send_posts(client, -100123, posts)
     # The photo card failed; the text footer still posted.
     assert posted == 1
     assert client.messages == ["Footer"]
+    # Only the successfully-sent footer is recorded in the layout.
+    assert [it["kind"] for it in layout] == ["footer"]

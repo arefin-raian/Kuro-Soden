@@ -153,6 +153,17 @@ def footer_updated(ok: bool, footers: int, bots: int = 0) -> str:
 
 # ── Updates / maintenance ─────────────────────────────────────────────────────────
 
+UPDATES_RUNNING = (
+    f"{ICON} <b>Sweeping the catalog…</b> checking every franchise for finished "
+    "seasons, movies, and extras that aren't up yet. Nothing's queued until you say so."
+)
+
+BANCHECK_RUNNING = (
+    f"{ICON} <b>Probing channels…</b> pinging every distribution channel and the main "
+    "one to see who's still reachable."
+)
+
+
 def updates_found(count: int) -> str:
     n = "new entry" if count == 1 else "new entries"
     return (
@@ -167,6 +178,16 @@ UPDATES_NONE = (
     f"{ICON} <b>Everything's current.</b>\n\n"
     "Swept the whole catalog — no finished entries missing. Nothing to do."
 )
+
+
+def remove_entry_label(title: str) -> str:
+    """A per-entry drop button — trimmed so the row stays readable."""
+    short = title if len(title) <= 34 else title[:33].rstrip() + "…"
+    return f"✖ {short}"
+
+
+def entry_dropped(title: str) -> str:
+    return f"Dropped {title} — won't be requested."
 
 UPDATES_EDIT_PROMPT = (
     f"{ICON} <b>Edit the list.</b>\n\n"
@@ -198,6 +219,22 @@ def ban_check_result(banned: int, checked: int) -> str:
         f"{ICON} <b>{banned} {n} down.</b>\n\n"
         f"Out of {checked} checked. I've pinged Senku to rebuild them — once the new "
         "channel's up, I repost everything from backup, exactly as it was. No re-render."
+    )
+
+
+def ban_recovered(old_name: str, new_handle: str) -> str:
+    return (
+        f"{ICON} <b>{old_name} — back up.</b>\n\n"
+        f"Rebuilt as <b>@{new_handle}</b> and every backed-up post is restored, "
+        "buttons repointed across the main and index channels. Nothing re-rendered."
+    )
+
+
+def ban_recover_failed(name: str, error: str) -> str:
+    return (
+        f"{ICON} <b>{name} — recovery stalled.</b>\n\n"
+        f"<code>{error[:300]}</code>\n\n"
+        "The backup's intact, so it's safe to retry from the task's 🛡 Recover button."
     )
 
 

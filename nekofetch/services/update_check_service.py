@@ -72,17 +72,21 @@ class UpdateCheckService:
     def __init__(self, container: Container) -> None:
         self._c = container
 
-    async def check_all(self) -> list[CheckResult]:
+    async def check_all(self, *, create: bool = True) -> list[CheckResult]:
         """Check EVERY published anime for new franchise entries.
 
         Returns a list of ``CheckResult``, one per anime. Only results with
         ``new_entries`` are actionable; the rest are informational.
+
+        ``create=False`` runs a **detect-only** sweep — no requests are created,
+        so a Gojo admin can review/trim the list first (edit-before-submit) and
+        commit later via :meth:`create_requests_for`.
         """
         anime_list = await self._list_published_anime()
         results: list[CheckResult] = []
         for anime_doc_id, title in anime_list:
             try:
-                result = await self.check_for_anime(anime_doc_id, title)
+                result = await self.check_for_anime(anime_doc_id, title, create=create)
                 results.append(result)
                 if result.new_entries:
                     log.info(
@@ -108,12 +112,13 @@ class UpdateCheckService:
         return results
 
     async def check_for_anime(
-        self, anime_doc_id: str, title: str | None = None
+        self, anime_doc_id: str, title: str | None = None, *, create: bool = True
     ) -> CheckResult:
         """Check a single anime for new franchise entries.
 
         Walks the franchise graph, compares against existing storage packs,
-        and creates requests for any new entries found.
+        and (when ``create``) creates requests for any new entries found. Pass
+        ``create=False`` for a detect-only pass that leaves the queue untouched.
         """
         if title is None:
             title = anime_doc_id
@@ -196,8 +201,8 @@ class UpdateCheckService:
                         )
                     )
 
-        # Create requests for all new entries.
-        if new_entries:
+        # Create requests for all new entries (unless this is a detect-only pass).
+        if new_entries and create:
             await self._create_requests(anime_doc_id, title, new_entries)
 
         return CheckResult(
@@ -206,6 +211,19 @@ class UpdateCheckService:
             new_entries=new_entries,
             total_entries=len(entries),
         )
+
+    async def create_requests_for(
+        self, anime_doc_id: str, title: str, new_entries: list[NewEntry]
+    ) -> int:
+        """Commit an admin-reviewed list of new entries; return how many stuck.
+
+        The edit-before-submit counterpart to a detect-only :meth:`check_all`:
+        Gojo shows the discovered entries, the admin trims/adds, and the final
+        list is handed here to create requests — same path the auto-sweep uses.
+        """
+        if not new_entries:
+            return 0
+        return await self._create_requests(anime_doc_id, title, new_entries)
 
     # ── helpers ─────────────────────────────────────────────────────────────
 
@@ -337,8 +355,8 @@ class UpdateCheckService:
         anime_doc_id: str,
         franchise_title: str,
         new_entries: list[NewEntry],
-    ) -> None:
-        """Create a request for each new entry.
+    ) -> int:
+        """Create a request for each new entry; return how many were created.
 
         Uses the owner's telegram_id (from config) as the requester, and
         copies the source chain from the original request for this anime.
@@ -353,7 +371,7 @@ class UpdateCheckService:
         owner_ids = AuthService(self._c).owner_ids()
         if not owner_ids:
             log.warning("update_check.no_owner", anime=anime_doc_id)
-            return
+            return 0
         owner_telegram_id = next(iter(owner_ids))
 
         # Find the original request's source chain.
@@ -364,11 +382,12 @@ class UpdateCheckService:
                 anime=anime_doc_id,
                 entries=[e.english_title for e in new_entries],
             )
-            return
+            return 0
 
         # Dedup: skip entries that already have a request for this anime + season.
         existing_seasons = await self._get_existing_request_seasons(anime_doc_id)
 
+        created = 0
         svc = RequestService(self._c)
         for entry in new_entries:
             if entry.season_number is not None and entry.season_number in existing_seasons:
@@ -396,8 +415,14 @@ class UpdateCheckService:
                         "english": entry.english_title,
                         "title": franchise_title,
                         "franchise_seasons": 1,
+                        # Marks this as a franchise-*update* request: on publish it
+                        # updates the existing distribution channel in place (append
+                        # this entry's card) instead of the normal new-channel /
+                        # main-channel path. See PublishingService.publish.
+                        "update_entry": True,
                     },
                 )
+                created += 1
                 log.info(
                     "update_check.request_created",
                     anime=anime_doc_id,
@@ -412,6 +437,7 @@ class UpdateCheckService:
                     entry=entry.english_title,
                     error=str(exc),
                 )
+        return created
 
     async def _get_original_source(self, anime_doc_id: str) -> str | None:
         """Find the source chain from the first request for this anime."""

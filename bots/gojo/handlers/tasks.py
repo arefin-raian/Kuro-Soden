@@ -29,6 +29,7 @@ STATE_EDIT_CAPTION = "gojo:await_caption_edit"
 STATE_SCHEDULE = "gojo:await_schedule"
 STATE_EDIT_FOOTER = "gojo:await_footer_edit"
 STATE_CHANGE_MAIN = "gojo:await_new_main_channel"
+STATE_UPDATES_REVIEW = "gojo:await_updates_review"
 
 
 def _publish_keyboard(code: str):
@@ -147,6 +148,158 @@ def register(client: Client, container: Container) -> None:
         await q.answer()
         await fsm.set(q.from_user.id, STATE_CHANGE_MAIN)
         await q.message.reply(V.CHANGE_MAIN_PROMPT, parse_mode=ParseMode.HTML)
+
+    # ── Update check — detect-only sweep + edit-before-submit ─────────────────
+    def _updates_review_markup(rows: list[dict]):
+        """Build the review keyboard: one ✖ per entry, then Submit / Cancel.
+
+        Each entry uses the official AniList name (``t``) and carries its index
+        in the callback so a tap removes exactly that row before re-rendering.
+        """
+        btn_rows = [
+            [(V.remove_entry_label(r["t"]), cb("gojo", "updates_drop", str(i)))]
+            for i, r in enumerate(rows)
+        ]
+        if rows:
+            btn_rows.append([(V.BTN_SUBMIT, cb("gojo", "updates_submit"))])
+        btn_rows.append([(V.BTN_CANCEL, cb("gojo", "home"))])
+        return keyboard(*btn_rows)
+
+    async def _render_updates_review(edit_target: Message, rows: list[dict]) -> None:
+        if not rows:
+            await edit_target.edit_text(V.UPDATES_NONE, parse_mode=ParseMode.HTML)
+            return
+        listing = "\n".join(f"⦿ {r['t']}" for r in rows)
+        await edit_target.edit_text(
+            f"{V.updates_found(len(rows))}\n\n<pre>{listing}</pre>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=_updates_review_markup(rows),
+        )
+
+    async def _run_update_check(reply_to: Message, user_id: int) -> None:
+        from nekofetch.services.maintenance_service import MaintenanceService
+
+        note = await reply_to.reply(V.UPDATES_RUNNING, parse_mode=ParseMode.HTML)
+        results = await MaintenanceService(container).scan_updates()
+        if not results:
+            await note.edit_text(V.UPDATES_NONE, parse_mode=ParseMode.HTML)
+            return
+        # Flatten every new entry into a serializable row and stash for submit.
+        # We keep the whole NewEntry shape so the submit step can rebuild it
+        # without re-walking the franchise graph.
+        rows = [
+            {
+                "doc": r.anime_doc_id, "title": r.title,
+                "aid": e.anilist_id, "fmt": e.format, "t": e.english_title,
+                "season": e.season_number, "eps": e.episode_count,
+                "rel": e.relation,
+            }
+            for r in results for e in r.new_entries
+        ]
+        await fsm.set(user_id, STATE_UPDATES_REVIEW, rows=rows)
+        await _render_updates_review(note, rows)
+
+    @client.on_message(filters.command("updates"))
+    async def _updates_cmd(_: Client, message: Message) -> None:
+        if message.from_user:
+            await _run_update_check(message, message.from_user.id)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|check_updates$"))
+    async def _cb_check_updates(_: Client, q: CallbackQuery) -> None:
+        await q.answer("Sweeping…")
+        await _run_update_check(q.message, q.from_user.id)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|updates_drop\|"))
+    async def _cb_updates_drop(_: Client, q: CallbackQuery) -> None:
+        state, data = await fsm.get(q.from_user.id)
+        if state != STATE_UPDATES_REVIEW:
+            await q.answer("This list expired — run the check again.", show_alert=True)
+            return
+        rows = data.get("rows", [])
+        try:
+            idx = int(q.data.rsplit("|", 1)[1])
+        except (ValueError, IndexError):
+            await q.answer()
+            return
+        if 0 <= idx < len(rows):
+            dropped = rows.pop(idx)
+            await fsm.update(q.from_user.id, rows=rows)
+            await q.answer(V.entry_dropped(dropped["t"]))
+        else:
+            await q.answer()
+        if not rows:
+            await fsm.clear(q.from_user.id)
+        await _render_updates_review(q.message, rows)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|updates_submit$"))
+    async def _cb_updates_submit(_: Client, q: CallbackQuery) -> None:
+        state, data = await fsm.get(q.from_user.id)
+        if state != STATE_UPDATES_REVIEW:
+            await q.answer("Nothing to submit.", show_alert=True)
+            return
+        await q.answer("Submitting…")
+        rows = data.get("rows", [])
+        await fsm.clear(q.from_user.id)
+        from nekofetch.services.update_check_service import NewEntry, UpdateCheckService
+
+        svc = UpdateCheckService(container)
+        # Rebuild NewEntry objects grouped by anime, then commit each group.
+        by_doc: dict[str, tuple[str, list[NewEntry]]] = {}
+        for r in rows:
+            title, entries = by_doc.setdefault(r["doc"], (r["title"], []))
+            entries.append(NewEntry(
+                anilist_id=r["aid"], format=r["fmt"], english_title=r["t"],
+                season_number=r["season"], episode_count=r["eps"],
+                relation=r.get("rel", ""),
+            ))
+        made = 0
+        for doc, (title, entries) in by_doc.items():
+            made += await svc.create_requests_for(doc, title, entries)
+        await q.message.reply(V.updates_submitted(made), parse_mode=ParseMode.HTML)
+
+    # ── Ban check — probe every channel; recover the ones that are down ───────
+    async def _run_ban_check(reply_to: Message) -> None:
+        from nekofetch.services.maintenance_service import MaintenanceService
+
+        note = await reply_to.reply(V.BANCHECK_RUNNING, parse_mode=ParseMode.HTML)
+        result = await MaintenanceService(container).probe_channels()
+        await note.edit_text(
+            V.ban_check_result(len(result.banned), result.checked),
+            parse_mode=ParseMode.HTML,
+        )
+        if not result.banned:
+            return
+        # Recover each down channel through the same path /recover uses: Senku
+        # rebuilds the entity, then every backed-up post is restored to it. The
+        # main channel has no anime_doc_id — it goes through change-main instead,
+        # so we only auto-recover distribution channels here.
+        from nekofetch.services.bot_orchestrator import BotOrchestratorService
+
+        orch = BotOrchestratorService(container)
+        for probe in result.banned:
+            if not probe.anime_doc_id:
+                continue
+            try:
+                info = await orch.recreate_bot(probe.anime_doc_id)
+                if info:
+                    await reply_to.reply(
+                        V.ban_recovered(probe.name, info.username or info.name),
+                        parse_mode=ParseMode.HTML,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                await reply_to.reply(
+                    V.ban_recover_failed(probe.name, str(exc)),
+                    parse_mode=ParseMode.HTML,
+                )
+
+    @client.on_message(filters.command("bancheck"))
+    async def _bancheck_cmd(_: Client, message: Message) -> None:
+        await _run_ban_check(message)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|check_banned$"))
+    async def _cb_check_banned(_: Client, q: CallbackQuery) -> None:
+        await q.answer("Probing…")
+        await _run_ban_check(q.message)
 
     # ── FSM text consumer — caption edit + schedule time ──────────────────────
     @client.on_message(filters.text & filters.private & ~filters.command(["cancel"]))

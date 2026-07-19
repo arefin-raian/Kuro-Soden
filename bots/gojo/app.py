@@ -30,6 +30,8 @@ GOJO_COMMANDS = [
     BotCommand("publish", "Review and publish: /publish REQ-XXXX"),
     BotCommand("recover", "Recover a banned channel: /recover REQ-XXXX"),
     BotCommand("schedule", "Schedule a post for later"),
+    BotCommand("updates", "Sweep the catalog for new franchise entries"),
+    BotCommand("bancheck", "Probe every channel for bans"),
     BotCommand("settings", "Configure the publisher bot"),
     BotCommand("help", "How publishing works"),
 ]
@@ -97,6 +99,8 @@ def build_gojo(container: Container, token: str) -> Client:
                  InlineKeyboardButton("🛡 Recover", callback_data=cb(bot, "recover"))],
                 [InlineKeyboardButton("💾 Backup", callback_data=cb(bot, "backup")),
                  InlineKeyboardButton("📡 Change Main", callback_data=cb(bot, "change_main"))],
+                [InlineKeyboardButton("🔎 Check Updates", callback_data=cb(bot, "check_updates")),
+                 InlineKeyboardButton("🩺 Ban Check", callback_data=cb(bot, "check_banned"))],
                 [InlineKeyboardButton("✏️ Edit Footer", callback_data=cb(bot, "edit_footer"))],
                 [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
             ])
@@ -199,6 +203,8 @@ def build_gojo(container: Container, token: str) -> Client:
              ("🛡 Recover", cb("gojo", "recover"))],
             [("💾 Backup", cb("gojo", "backup")),
              ("📡 Change Main", cb("gojo", "change_main"))],
+            [("🔎 Check Updates", cb("gojo", "check_updates")),
+             ("🩺 Ban Check", cb("gojo", "check_banned"))],
             [("✏️ Edit Footer", cb("gojo", "edit_footer"))],
             [("⚙️ Settings", cb("gojo", "settings")),
              ("❓ Help", cb("gojo", "help"))],

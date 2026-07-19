@@ -102,14 +102,19 @@ class TestSchemaTables:
         assert "admin_availability" in table_names
 
     def test_total_table_count(self):
-        """Sanity check: should have 17 tables (14 NekoFetch + 3 Kage:
-        admin_assignments, admin_availability, work_items)."""
+        """Sanity check: should have 20 tables (17 NekoFetch + 3 Kage:
+        admin_assignments, admin_availability, work_items).
+
+        NekoFetch side includes ``channel_layout`` — the per-channel message
+        map that lets a franchise update append cards in place — and
+        ``channel_broadcasts``, the durable record of operator broadcasts posted
+        to every distribution channel (so a timed auto-delete survives restarts)."""
         import kurosoden.shared.models  # noqa: F401
         import nekofetch.infrastructure.database.postgres.models  # noqa: F401
         from nekofetch.infrastructure.database.postgres.base import Base
 
         table_names = list(Base.metadata.tables.keys())
-        assert len(table_names) == 17
+        assert len(table_names) == 20
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

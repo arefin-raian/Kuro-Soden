@@ -122,7 +122,8 @@ def register(client: Client, container: Container) -> None:
         if is_owner:
             rows.append([(t(M.ADMIN_BTN_BOTS), cb("admin", "bots")),
                          (t(M.ADMIN_BTN_STORAGE), cb("admin", "storage"))])
-            rows.append([(t(M.ADMIN_BTN_BROADCAST), cb("admin", "broadcast"))])
+            rows.append([(t(M.ADMIN_BTN_BROADCAST), cb("admin", "broadcast")),
+                         (t(M.ADMIN_BTN_CH_BROADCAST), cb("admin", "chbroadcast"))])
         return Screen(caption=caption, image=_art(), keyboard=keyboard(*rows))
 
     @client.on_callback_query(filters.regex(r"^admin\|home"))

@@ -575,6 +575,17 @@ class BotManager:
             if tracker:
                 tracker.service_ok("temp_links")
 
+        # Broadcast auto-deletion sweep: durable backstop for *timed* channel
+        # broadcasts (APScheduler is in-memory, so a restart would forget a
+        # pending delete). Runs every minute like the link sweep and catches up
+        # on any past-due deletion after downtime.
+        from nekofetch.services.broadcast_service import BroadcastService
+
+        self._scheduler.every(
+            60, BroadcastService(self._c).sweep_expired, id="broadcast-expiry-sweep",
+        )
+        log.info("bots.broadcast_sweep.scheduled", interval_seconds=60)
+
         # Stats: refresh the pinned database stats message in the storage channel.
         if self._c.config.storage_channel.enabled:
             try:
