@@ -165,3 +165,50 @@ async def test_miruro_dual_plan_allows_matching_soft_sub_and_dub(monkeypatch):
     assert plan["mergeable"] is True
     assert plan["sub_variant"] == soft
     assert plan["dub_variant"] == dub
+
+
+def test_miruro_subtitle_pairs_drop_thumbnail_tracks():
+    """hi-anime/zoro feeds put a preview-sprite VTT in the subtitles array. It must
+    NOT be embedded as a caption, and must not make a raw stream look soft-subbed."""
+    from nekofetch.sources.miruro import _subtitle_pairs
+
+    tracks = [
+        {"file": "https://cdn.example/thumbs.vtt", "kind": "thumbnails"},
+        {"file": "https://cdn.example/sprite.vtt", "label": "Thumbnails"},
+        {"file": "https://cdn.example/en.vtt", "label": "English", "kind": "captions"},
+    ]
+    pairs = _subtitle_pairs(tracks)
+    assert pairs == [("English", "https://cdn.example/en.vtt")]
+
+
+@pytest.mark.asyncio
+async def test_miruro_variants_fall_back_to_sources_endpoint():
+    """When GET /{watch_ref} returns no streams, the source must retry the
+    documented /sources fallback before giving up on the episode."""
+    src = MiruroSource(base_url="http://localhost:8000")
+    calls: list[tuple[str, dict | None]] = []
+
+    async def fake_get_json(path, *, params=None):
+        calls.append((path, params))
+        if path == "/sources":
+            return {
+                "streams": [{"url": "https://cdn.example/master.m3u8", "quality": "1080p"}],
+                "subtitles": [{"file": "https://cdn.example/en.vtt", "label": "English"}],
+            }
+        return {}  # primary watch endpoint yields nothing
+
+    async def fake_master(_http, _url, _headers):
+        return [1080]
+
+    import nekofetch.sources.miruro as miruro_mod
+    src._get_json = fake_get_json
+    orig = miruro_mod.list_master_qualities
+    miruro_mod.list_master_qualities = fake_master
+    try:
+        variants = await src._variants_for_watch_ref("watch/kiwi/178005/sub/animepahe-1")
+    finally:
+        miruro_mod.list_master_qualities = orig
+
+    assert any(path == "/sources" for path, _ in calls), "fallback /sources was not called"
+    assert variants and variants[0].audio == AudioType.SUBBED
+    assert variants[0].resolution == "1080p"

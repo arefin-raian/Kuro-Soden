@@ -138,6 +138,12 @@ def _stream_headers(stream: dict, fallback_referer: str) -> dict:
     return headers
 
 
+# Track "kinds" that are NOT real caption tracks — hi-anime/zoro-style APIs put a
+# preview-sprite VTT in the same subtitles array as the captions. Embedding one as
+# a subtitle is wrong, and its mere presence would make a raw stream look soft-subbed.
+_NON_CAPTION_KINDS = {"thumbnails", "thumbnail", "sprite", "sprites", "storyboard", "preview"}
+
+
 def _subtitle_pairs(items: list) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for item in items or []:
@@ -146,7 +152,12 @@ def _subtitle_pairs(items: list) -> list[tuple[str, str]]:
         url = item.get("file") or item.get("url") or item.get("src")
         if not url:
             continue
+        kind = str(item.get("kind") or item.get("type") or "").strip().lower()
         label = item.get("label") or item.get("lang") or item.get("language") or "Subtitle"
+        # Drop non-caption tracks by kind AND by label (some feeds omit `kind`
+        # and only name the track "thumbnails").
+        if kind in _NON_CAPTION_KINDS or str(label).strip().lower() in _NON_CAPTION_KINDS:
+            continue
         out.append((str(label), str(url)))
     return out
 
@@ -406,7 +417,24 @@ class MiruroSource(AnimeSource):
         try:
             data = await self._get_json(f"/{episode_ref.strip('/')}")
         except httpx.HTTPError:
-            return []
+            data = {}
+
+        # Documented fallback: when the direct watch endpoint yields no streams
+        # (transient upstream miss), retry the manual /sources endpoint with the
+        # decomposed ref. See Miruro-API README "Fallback endpoint for manual control".
+        if not (data.get("streams") or data.get("sources")):
+            try:
+                data = await self._get_json(
+                    "/sources",
+                    params={
+                        "episodeId": episode_ref.strip("/"),
+                        "provider": provider,
+                        "anilistId": anilist_id,
+                        "category": category,
+                    },
+                ) or data
+            except httpx.HTTPError:
+                pass
 
         streams = data.get("streams") or data.get("sources") or []
         if isinstance(streams, dict):
