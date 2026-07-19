@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
+from nekofetch.core.parsing import clean_anilist_id
 from nekofetch.domain.enums import AudioType
 from nekofetch.infrastructure.database.postgres.models import (
     ChannelPost,
@@ -31,6 +32,21 @@ from nekofetch.ui import templates
 log = get_logger(__name__)
 
 _RES_ORDER = {"360p": 360, "480p": 480, "540p": 540, "720p": 720, "1080p": 1080}
+
+
+def _collapse(text: str | None) -> str:
+    """Flatten a synopsis to one clean paragraph.
+
+    TMDB/AniList overviews arrive with ragged hard line breaks (and AniList
+    ships HTML ``<br>`` tags) that render as broken lines inside the caption's
+    ``<blockquote>``. Collapse every run of whitespace/newlines to a single
+    space so the text flows naturally.
+    """
+    if not text or text == "—":
+        return "—"
+    # AniList synopses embed literal HTML breaks; treat them as spaces too.
+    text = text.replace("<br>", " ").replace("<br/>", " ").replace("<br />", " ")
+    return " ".join(text.split())
 # Audio track language as the user thinks of it: Dub = English, Sub = Japanese (Eng subs).
 _AUDIO_LANG = {
     AudioType.DUBBED: ["English"],
@@ -50,6 +66,7 @@ class PublicationFacts:
     languages: str = "—"
     genres: str = "—"
     overview: str = "—"
+    rating: str = "—"                   # franchise-average AniList score, e.g. "8.4"
     poster_url: str | None = None
     backdrop_url: str | None = None   # TMDB English 16:9 backdrop for the post photo
     bot_username: str | None = None
@@ -113,6 +130,13 @@ class MainChannelService:
             if data.episode_count and facts.episodes == "—":
                 facts.episodes = str(data.episode_count)
 
+        # ── Franchise-level corrections (per Gojo spec) ──
+        #   • EPISODES = Σ episodes of the TV-season continuity chain ONLY
+        #     (movies / OVAs / specials / spin-offs excluded). ``franchise_totals``
+        #     already computes exactly this via the SEQUEL/PREQUEL walk.
+        #   • RATING   = AVERAGE of every franchise entry's AniList score.
+        await self._apply_franchise_facts(anime_doc_id, facts)
+
         # 1. Prefer the FIRST franchise entry's USER-GENERATED thumbnail
         #    (the admin picked logo/poster/bg and rendered it via Playwright
         #    in the thumbnail channel). The main channel post mirrors the
@@ -147,13 +171,57 @@ class MainChannelService:
         except Exception as exc:  # noqa: BLE001
             log.debug("mainchannel.tmdb.failed", title=facts.title, error=str(exc))
 
+        # Collapse hard line breaks so the overview reads as one clean paragraph
+        # (TMDB/AniList synopses arrive with ragged newlines that look broken in
+        # the <blockquote>).
+        facts.overview = _collapse(facts.overview)
+
         return facts
+
+    async def _apply_franchise_facts(
+        self, anime_doc_id: str, facts: PublicationFacts,
+    ) -> None:
+        """Fill ``facts.episodes`` (TV-season sum) and ``facts.rating`` (franchise
+        average AniList score) by walking the AniList franchise graph.
+
+        Best-effort: any failure leaves the pack-derived episode count and a "—"
+        rating in place rather than aborting the whole post.
+        """
+        anilist = getattr(self._c, "anilist", None)
+        if anilist is None:
+            return
+        from nekofetch.core.parsing import clean_anilist_id
+
+        raw_id = clean_anilist_id(anime_doc_id)
+        if not raw_id.isdigit():
+            return
+        root_id = int(raw_id)
+
+        # Episodes = Σ TV-season episodes only (continuity chain).
+        try:
+            totals = await anilist.franchise_totals(root_id)
+            if totals.episodes:
+                facts.episodes = str(totals.episodes)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("mainchannel.franchise_totals.failed",
+                      anime=anime_doc_id, error=str(exc))
+
+        # Rating = average of every franchise entry's AniList score.
+        try:
+            entries = await anilist.walk_franchise_full(root_id)
+            scores = [e.score for e in entries.values() if e.score is not None]
+            if scores:
+                facts.rating = f"{sum(scores) / len(scores):.1f}"
+        except Exception as exc:  # noqa: BLE001
+            log.debug("mainchannel.franchise_scores.failed",
+                      anime=anime_doc_id, error=str(exc))
 
     def _caption(self, f: PublicationFacts) -> str:
         return templates.render(
             self.cfg.caption_template,
             title=f.title, tag=f.tag, episodes=f.episodes, qualities=f.qualities,
             languages=f.languages, genres=f.genres, overview=f.overview,
+            rating=f.rating,
         )
 
     async def _buttons(self, f: PublicationFacts) -> InlineKeyboardMarkup | None:

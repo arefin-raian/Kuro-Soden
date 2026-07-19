@@ -154,6 +154,7 @@ query ($ids: [Int]) {
       episodes
       duration
       status
+      averageScore
       bannerImage
       description(asHtml: false)
       title { romaji english native }
@@ -228,6 +229,7 @@ class FranchiseEntry:
     start_date: dict | None = None  # {"year": 2013, "month": 4, "day": 7}
     relation: str = ""              # how this entry connects to its parent
     synopsis: str | None = None
+    score: float | None = None      # averageScore / 10 (per-entry AniList rating)
 
 
 @dataclass
@@ -641,6 +643,8 @@ class AnilistClient:
             start_date=root_media.get("startDate"),
             relation="ROOT",
             synopsis=root_media.get("description"),
+            score=(root_media.get("averageScore") / 10
+                   if root_media.get("averageScore") is not None else None),
         )
 
         # Seed frontier from root's immediate relations.
@@ -701,6 +705,8 @@ class AnilistClient:
                     start_date=m.get("startDate"),
                     relation=relation_map.get(mid, ""),
                     synopsis=m.get("description"),
+                    score=(m.get("averageScore") / 10
+                           if m.get("averageScore") is not None else None),
                 )
                 visited.add(mid)
 
