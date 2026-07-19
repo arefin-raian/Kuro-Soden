@@ -130,6 +130,37 @@ class TelegraphClient:
         log.info("telegraph.gallery.created", path=path, images=len(images))
         return TelegraphPage(path=path, url=url, title=title)
 
+    async def upload_image(
+        self, file_bytes: bytes, *, mime_type: str = "image/jpeg",
+    ) -> str | None:
+        """Upload raw image bytes to Telegraph's file host; return the full URL.
+
+        Uses the undocumented-but-stable ``https://telegra.ph/upload`` endpoint
+        (the same one the web editor uses). Returns an absolute ``https://
+        telegra.ph/file/….jpg`` URL, or ``None`` on any failure so the caller can
+        fall back to another host. Does not require an access token — the upload
+        endpoint is anonymous.
+        """
+        if not file_bytes:
+            return None
+        files = {"file": ("card.jpg", file_bytes, mime_type)}
+        try:
+            resp = await self.http.post("https://telegra.ph/upload", files=files)
+            resp.raise_for_status()
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("telegraph.upload.failed", error=str(exc))
+            return None
+        # Success shape: [{"src": "/file/abc.jpg"}]; error shape: {"error": "..."}.
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            src = data[0].get("src")
+            if src:
+                url = f"https://telegra.ph{src}"
+                log.info("telegraph.upload.ok", url=url, bytes=len(file_bytes))
+                return url
+        log.warning("telegraph.upload.bad_response", body=str(data)[:200])
+        return None
+
 
 # Module-level shared instance (lazy-initialized via container).
 _default_client: TelegraphClient | None = None

@@ -256,6 +256,39 @@ class ChannelPost(Base, PKMixin, TimestampMixin):
     index_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
+class PublishedPostBackup(Base, PKMixin, TimestampMixin):
+    """A byte-for-byte snapshot of a main-channel post, for disaster recovery.
+
+    When the main channel is banned we rebuild every post on a fresh channel
+    from these rows alone — no re-rendering, no re-fetching metadata. Each row
+    stores everything needed to reproduce the exact message: the finished
+    caption HTML, the photo (mirrored onto independent hosts so it outlives the
+    original CDN), the structured button layout, and the divider sticker that
+    preceded it. ``source_message_id`` ties the backup to the live post so a
+    re-backup updates in place instead of duplicating.
+    """
+
+    __tablename__ = "published_post_backups"
+
+    anime_doc_id: Mapped[str] = mapped_column(
+        String(48), unique=True, index=True, nullable=False
+    )
+    title: Mapped[str | None] = mapped_column(Text)
+    # The exact rendered caption (finished HTML, styling preserved).
+    caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Image mirrors: original CDN URL + the two durable copies.
+    image_source_url: Mapped[str | None] = mapped_column(Text)
+    image_catbox_url: Mapped[str | None] = mapped_column(Text)
+    image_telegraph_url: Mapped[str | None] = mapped_column(Text)
+    # Structured button rows: [[{"text","url"|"callback_data"}, …], …].
+    button_data: Mapped[list | None] = mapped_column(JSONB)
+    # Divider sticker file_id posted before the card (channel layout detail).
+    divider_sticker_id: Mapped[str | None] = mapped_column(Text)
+    # Where the original lived, so a re-backup updates in place.
+    source_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    source_message_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
 class IndexSection(Base, PKMixin, TimestampMixin):
     """Dynamic index-channel section mapping.
 

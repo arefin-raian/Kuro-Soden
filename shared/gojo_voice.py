@@ -210,6 +210,60 @@ def recovered(title: str) -> str:
     )
 
 
+# ── Backup / restore ──────────────────────────────────────────────────────────────
+
+BACKUP_RUNNING = f"{ICON} <b>Backing up…</b> snapshotting every post + mirroring images."
+
+
+def backup_done(backed_up: int, total: int, mirrored: int) -> str:
+    return (
+        f"{ICON} <b>Catalog backed up.</b>\n\n"
+        f"Snapshotted <b>{backed_up}</b> of <b>{total}</b> posts — caption, buttons, "
+        f"dividers, all of it. <b>{mirrored}</b> image(s) mirrored to durable hosts so "
+        "they outlive the original channel. If we ever get banned, I rebuild from this "
+        "byte-for-byte, no re-render."
+    )
+
+
+BACKUP_EMPTY = (
+    f"{ICON} <b>Nothing to back up yet.</b>\n\n"
+    "No live main-channel posts on the board. Publish something first."
+)
+
+
+# ── Change main channel / restore ──────────────────────────────────────────────────
+
+CHANGE_MAIN_PROMPT = (
+    f"{ICON} <b>New main channel.</b>\n\n"
+    "Send the new channel's ID (like <code>-1001234567890</code>). Make me an admin "
+    "there first. I'll repost every saved card from backup — same caption, photo, "
+    "buttons, dividers — and repoint the ID. <code>/cancel</code> to back out."
+)
+
+
+def change_main_bad(raw: str) -> str:
+    return (
+        f"{ICON} <b>That's not a channel ID.</b> I need a numeric id like "
+        f"<code>-1001234567890</code>, not “{esc(raw)}”. Try again."
+    )
+
+
+RESTORE_RUNNING = (
+    f"{ICON} <b>Restoring from backup…</b>\n\n"
+    "Reposting every saved card to the new channel. No re-render — straight from "
+    "the snapshot. This can take a bit on a big catalog."
+)
+
+
+def restore_done(restored: int, total: int, failed: int) -> str:
+    tail = f" <b>{failed}</b> couldn't be reposted — check the logs." if failed else ""
+    return (
+        f"{ICON} <b>Channel restored.</b>\n\n"
+        f"Reposted <b>{restored}</b> of <b>{total}</b> saved posts and repointed the "
+        f"main-channel ID.{tail}"
+    )
+
+
 # ── Errors / misc ───────────────────────────────────────────────────────────────
 
 GENERIC_FAIL = (
@@ -249,3 +303,5 @@ BTN_SUBMIT = "✅ Submit"
 BTN_STATS = "📊 Stats"
 BTN_RECOVER = "🛡 Recover"
 BTN_CHANGE_MAIN = "📡 Change Main Channel"
+BTN_BACKUP_NOW = "💾 Back up catalog"
+BTN_RESTORE = "♻️ Restore to new channel"

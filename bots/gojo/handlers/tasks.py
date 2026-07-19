@@ -28,6 +28,7 @@ log = get_logger(__name__)
 STATE_EDIT_CAPTION = "gojo:await_caption_edit"
 STATE_SCHEDULE = "gojo:await_schedule"
 STATE_EDIT_FOOTER = "gojo:await_footer_edit"
+STATE_CHANGE_MAIN = "gojo:await_new_main_channel"
 
 
 def _publish_keyboard(code: str):
@@ -120,6 +121,33 @@ def register(client: Client, container: Container) -> None:
         await q.answer()
         await _arm_footer(q.from_user.id, q.message)
 
+    # ── Backup — snapshot every main-channel post to durable hosts ────────────
+    async def _run_backup(reply_to: Message) -> None:
+        from nekofetch.services.backup_service import BackupService
+
+        note = await reply_to.reply(V.BACKUP_RUNNING, parse_mode=ParseMode.HTML)
+        stats = await BackupService(container).backup_all()
+        await note.edit_text(
+            V.backup_done(stats.backed_up, stats.posts, stats.images_mirrored),
+            parse_mode=ParseMode.HTML,
+        )
+
+    @client.on_message(filters.command("backup"))
+    async def _backup_cmd(_: Client, message: Message) -> None:
+        await _run_backup(message)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|backup$"))
+    async def _cb_backup(_: Client, q: CallbackQuery) -> None:
+        await q.answer("Backing up…")
+        await _run_backup(q.message)
+
+    # ── Change main channel — restore all posts to a new channel from backup ──
+    @client.on_callback_query(filters.regex(r"^gojo\|change_main$"))
+    async def _cb_change_main(_: Client, q: CallbackQuery) -> None:
+        await q.answer()
+        await fsm.set(q.from_user.id, STATE_CHANGE_MAIN)
+        await q.message.reply(V.CHANGE_MAIN_PROMPT, parse_mode=ParseMode.HTML)
+
     # ── FSM text consumer — caption edit + schedule time ──────────────────────
     @client.on_message(filters.text & filters.private & ~filters.command(["cancel"]))
     async def _fsm_text(_: Client, message: Message) -> None:
@@ -156,6 +184,14 @@ def register(client: Client, container: Container) -> None:
                                  result.bots_bumped),
                 parse_mode=ParseMode.HTML,
             )
+        elif state == STATE_CHANGE_MAIN:
+            raw = (message.text or "").strip()
+            new_id = _parse_channel_id(raw)
+            if new_id is None:
+                await message.reply(V.change_main_bad(raw), parse_mode=ParseMode.HTML)
+                return
+            await fsm.clear(message.from_user.id)
+            await _restore_to_channel(client, container, message, new_id)
 
     @client.on_message(filters.command("cancel"))
     async def _cancel(_: Client, message: Message) -> None:
@@ -435,4 +471,36 @@ async def _schedule_publish(
         Screen(caption=V.scheduled(title, when.strftime("%Y-%m-%d %H:%M")),
                image=pick_artwork("gojo"),
                keyboard=keyboard([(V.BTN_TASKS, cb("gojo", "tasks"))])),
+    )
+
+
+def _parse_channel_id(raw: str) -> int | None:
+    """Parse a channel id like ``-1001234567890`` into an int, or ``None``.
+
+    Only numeric channel ids are accepted (not @usernames): restore uses the
+    id directly with the admin client, and a public channel that got banned
+    won't have a resolvable @handle anymore.
+    """
+    raw = (raw or "").strip()
+    if not raw.lstrip("-").isdigit():
+        return None
+    return int(raw)
+
+
+async def _restore_to_channel(
+    client: Client, container: Container, message: Message, new_id: int,
+) -> None:
+    """Rebuild every backed-up main-channel post on ``new_id`` from the DB.
+
+    No re-rendering: captions, mirrored images, buttons, and dividers all come
+    from :class:`PublishedPostBackup`. Repoints the main-channel config + each
+    ``ChannelPost`` at the new channel on success.
+    """
+    from nekofetch.services.backup_service import BackupService
+
+    note = await message.reply(V.RESTORE_RUNNING, parse_mode=ParseMode.HTML)
+    stats = await BackupService(container).restore_to_channel(new_id)
+    await note.edit_text(
+        V.restore_done(stats.restored, stats.total, stats.failed),
+        parse_mode=ParseMode.HTML,
     )

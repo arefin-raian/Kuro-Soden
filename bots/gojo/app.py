@@ -95,6 +95,8 @@ def build_gojo(container: Container, token: str) -> Client:
                  InlineKeyboardButton("🔮 Publish", callback_data=cb(bot, "publish"))],
                 [InlineKeyboardButton("📅 Schedule", callback_data=cb(bot, "schedule")),
                  InlineKeyboardButton("🛡 Recover", callback_data=cb(bot, "recover"))],
+                [InlineKeyboardButton("💾 Backup", callback_data=cb(bot, "backup")),
+                 InlineKeyboardButton("📡 Change Main", callback_data=cb(bot, "change_main"))],
                 [InlineKeyboardButton("✏️ Edit Footer", callback_data=cb(bot, "edit_footer"))],
                 [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
             ])
@@ -195,6 +197,8 @@ def build_gojo(container: Container, token: str) -> Client:
              ("🔮 Publish", cb("gojo", "publish"))],
             [("📅 Schedule", cb("gojo", "schedule")),
              ("🛡 Recover", cb("gojo", "recover"))],
+            [("💾 Backup", cb("gojo", "backup")),
+             ("📡 Change Main", cb("gojo", "change_main"))],
             [("✏️ Edit Footer", cb("gojo", "edit_footer"))],
             [("⚙️ Settings", cb("gojo", "settings")),
              ("❓ Help", cb("gojo", "help"))],
