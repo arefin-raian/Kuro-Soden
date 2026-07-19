@@ -344,14 +344,17 @@ class UpdateCheckService:
         copies the source chain from the original request for this anime.
         Skips entries that already have a request for the same anime + season.
         """
+        from nekofetch.services.auth_service import AuthService
         from nekofetch.services.request_service import RequestService
 
-        # Find the owner's telegram_id.
-        owner_ids = self._c.config.security.owner_ids
+        # Find the owner's telegram_id. ``AuthService.owner_ids`` resolves the
+        # authoritative ``security.owner_id`` (falling back to the first env
+        # admin), so a fresh install still has a requester.
+        owner_ids = AuthService(self._c).owner_ids()
         if not owner_ids:
             log.warning("update_check.no_owner", anime=anime_doc_id)
             return
-        owner_telegram_id = owner_ids[0]
+        owner_telegram_id = next(iter(owner_ids))
 
         # Find the original request's source chain.
         original_source = await self._get_original_source(anime_doc_id)
