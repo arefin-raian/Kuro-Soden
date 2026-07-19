@@ -181,7 +181,7 @@ def build_levi(container: Container, token: str) -> Client:
             image=pick_artwork("levi"),
             keyboard=keyboard(*rows),
         )
-        await send_rich_welcome(client, container, message, screen)
+        await send_rich_welcome(client, container, message, screen, bot_name="levi")
 
     # ── /settings ─────────────────────────────────────────────────────────────
     # Opens the real, config-driven panel (handlers/settings.py). It introspects

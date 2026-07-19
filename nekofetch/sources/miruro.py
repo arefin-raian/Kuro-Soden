@@ -207,14 +207,12 @@ class MiruroSource(AnimeSource):
         self,
         base_url: str | dict | None = None,
         api_base_url: str | None = None,
-        preferred_quality: str = "1080p",
         provider_order: list[str] | None = None,
         stream_referer: str | None = None,
     ) -> None:
         if isinstance(base_url, dict):
             config = base_url
             base_url = config.get("api_base_url") or config.get("base_url")
-            preferred_quality = str(config.get("preferred_quality") or preferred_quality)
             provider_order = config.get("provider_order") or provider_order
             stream_referer = config.get("stream_referer") or stream_referer
         elif api_base_url:
@@ -228,7 +226,6 @@ class MiruroSource(AnimeSource):
         self.stream_referer = (
             stream_referer or os.getenv("MIRURO_STREAM_REFERER") or self.base_url
         ).rstrip("/") + "/"
-        self.preferred_quality = preferred_quality
         self.provider_order = provider_order or ["kiwi", "arc", "zoro", "hop", "pahe"]
         self._http: httpx.AsyncClient | None = None
 

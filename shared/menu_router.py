@@ -107,10 +107,12 @@ def settings_hub(
     button whose ``callback_data`` is ``{bot}|set|{key}``. Lines are emitted
     pairwise (2 buttons per row) so the keyboard never stretches vertically.
     """
+    # ``body`` is developer-authored HTML (it carries <i>/<b> emphasis), so it is
+    # emitted verbatim — escaping it would turn the tags into literal text.
     icon = _icon_for(bot)
     caption = (
         f"{icon}  <b>{_esc(title)}</b>\n\n"
-        f"{_esc(body)}"
+        f"{body}"
     )
     buttons: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
@@ -163,22 +165,28 @@ def settings_onboarding(
     Modeled after NekoFetch's :func:`nekofetch.bots.admin.handlers.settings
     ._edit_prompt`, so admins already familiar with that UI feel at home.
     """
+    # Escaping rule (mirrors NekoFetch's ``_edit_prompt``): prose fields
+    # (about / when_to_use / option & placeholder *descriptions* / danger / hint)
+    # are authored WITH HTML by the caller, so they pass through verbatim. Only
+    # literal *values* the user might type — option keys, placeholder tokens, the
+    # example template, the current value — are escaped, so a template such as
+    # ``<b>{title}</b>`` shows as literal text rather than rendering.
     icon = _icon_for(bot)
     parts: list[str] = [f"{icon}  <b>{_esc(title)}</b>", ""]
-    parts.append(f"<blockquote expandable><i>About:</i> {_esc(about)}</blockquote>")
+    parts.append(f"<blockquote expandable><i>About:</i> {about}</blockquote>")
     if when_to_use:
-        parts += ["", f"<b>When to change:</b> {_esc(when_to_use)}"]
+        parts += ["", f"<b>When to change:</b> {when_to_use}"]
     if options:
         parts += ["", "<b>Options :</b>"]
         for val, desc in options:
             parts.append(
-                f"  <code>{_esc(val)}</code> — {_esc(desc)}"
+                f"  <code>{_esc(val)}</code> — {desc}"
             )
     if placeholders:
         parts += ["", "<b>Placeholders you can use :</b>"]
         for var, desc in placeholders:
             parts.append(
-                f"  <code>${_esc(var)}</code> — {_esc(desc)}"
+                f"  <code>{_esc(var)}</code> — {desc}"
             )
     if supports_html:
         parts += ["", "🏷  <i>HTML (bold/italic/code/blockquote) is allowed in this field.</i>"]
@@ -190,8 +198,8 @@ def settings_onboarding(
         parts += ["", f"📌 <b>Current :</b> <code>{_esc(current)}</code>"]
     if danger:
         parts += ["",
-                  f"⚠️ <i>Danger :</i> {_esc(danger)}"]
-    parts += ["", f"<i>{_esc(hint)}</i>"]
+                  f"⚠️ <i>Danger :</i> {danger}"]
+    parts += ["", f"<i>{hint}</i>"]
 
     # Tiny correlation header — confirms the user pressed the right key.
     parts += ["", f"<i>key :</i> <code>{_esc(key)}</code>"]

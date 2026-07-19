@@ -1,167 +1,177 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# NekoFetch — application configuration
+# NekoFetch / Kuro Sōden — application configuration
+#
 # Feature toggles & behaviour. Editable here or, at runtime, via the admin panel
 # (runtime overrides are stored in MongoDB and take precedence over this file).
-# Secrets belong in .env, not here.
+# Secrets (tokens, DB URLs, API keys) belong in .env, NOT here.
+#
+# Every key below is actually READ by the code. Sections are optional — anything
+# omitted falls back to the typed default in nekofetch/core/config.py. If you add
+# a key that the code doesn't consume, it silently does nothing, so this file is
+# kept lean on purpose.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Master feature switches — turn whole subsystems on/off instantly.
 features:
-  request_system: true
-  download_queue: true
-  distribution_bots: true
-  watermarking: false
-  metadata_editing: true
-  thumbnail_generation: true
-  auto_delete: false
-  temporary_links: true
-  analytics: true
-  audit_logs: true
-  # When true (default), distribution bots cache their card posters on
-  # catbox.moe so Telegram doesn't refetch from TMDB/AniList CDNs on every
-  # /start. Set false if your network blocks catbox or you don't want the
-  # small dependency on a third-party file host.
+  request_system: true          # Lelouch: accept user requests
+  download_queue: true          # Levi: run the download queue
+  distribution_bots: true       # Senku/Gojo: auto-create & run delivery bots
+  metadata_editing: true        # rewrite container metadata during processing
+  thumbnail_generation: true    # generate/attach video thumbnails
+  temporary_links: true         # expiring delivery deep-links
+  analytics: true               # usage analytics collection
+  audit_logs: true              # staff action audit trail
+  # When true, distribution bots cache their card posters on catbox.moe so
+  # Telegram doesn't refetch from TMDB/AniList CDNs on every /start. Turn off
+  # if your network blocks catbox.
   catbox_image_cache: true
 
 downloads:
   concurrent_downloads: 5
   retry_attempts: 3
-  retry_backoff_seconds: 10
-  resume_interrupted: true
-  chunk_size_kb: 1024
+  retry_backoff_seconds: 10       # base wait; grows per attempt
+  resume_interrupted: true        # resume partial files instead of restarting
   progress_update_interval_seconds: 3
 
 processing:
-  # Pipeline stages, each independently toggleable.
-  verify_files: true
-  rename: true
-  metadata: true
-  branding: true
-  thumbnail: true
-  # Set to true to gate post-storage-upload publishing behind an admin
-  # approval card; false (default) auto-publishes to the main channel +
-  # index channel and brings up the distribution bot right after storage
-  # upload completes — no admin click required.
+  verify_files: true              # integrity-check each file after download
+  branding: true                  # apply branding (metadata author/comment/footer)
+  # false (default): auto-publish to main + index channels and bring up the
+  # distribution bot right after storage upload — no admin click.
+  # true: gate publishing behind an admin approval card.
   require_approval_before_publish: false
 
+# File naming. Movies/specials have no meaningful S/E pair, so they get their
+# own templates instead of being forced into "S90E01".
+# Variables: {title} {short_title} {season} {episode} {resolution} {audio}
+#            {source} {group} {content_type}
 rename:
   enabled: true
-  # Variables: {title} {season} {episode} {resolution} {audio} {source} {group}
-  template: "{title} S{season}E{episode} [{resolution}] [{audio}] {group}"
+  template: "{title} S{season}E{episode} [{resolution}] [{audio}] - {group}"
+  movie_template: "{short_title} - Movie [{resolution}] [{audio}] - {group}"
+  special_template: "{short_title} - {content_type} E{episode} [{resolution}] [{audio}] - {group}"
 
+# Container metadata rewriting during processing.
 metadata:
   enabled: true
   update_title: true
   update_author: true
   update_comment: true
-  update_tags: true
   update_description: true
   supported_containers: [mkv, mp4, avi, mov]
 
+# Video thumbnail generation/attachment. (Only the master switch is honoured;
+# the pipeline attaches the generated poster to every video it can.)
 thumbnail:
   enabled: true
-  attach_to_video: true
-  attach_to_document: true
-  generate_previews: true
 
+# Optional watermark stage (off by default). type: text | image.
 watermark:
   enabled: false
-  type: text            # text | image
+  type: text
   text: "Anime Weebs"
   image_path: ""
-  corner: bottom_right  # top_left | top_right | bottom_left | bottom_right
+  corner: bottom_right          # top_left | top_right | bottom_left | bottom_right
   opacity: 0.6
   scale: 0.12
 
+# Branding applied to files & footers.
 branding:
   enabled: true
   channel_name: "Anime Weebs"
   footer_text: "Anime Weebs"
   website: ""
-  telegram_channel: ""
-  community_link: ""
-  watermark_text: "Anime Weebs"
   metadata_author: "Anime Weebs"
   metadata_comment: "Provided by Anime Weebs"
 
+# Delivery behaviour for the distribution bots.
 distribution:
-  # Season-centric delivery by default.
-  mode: season_package           # season_package | individual
-  protect_content: true
-  temporary_links: true
+  protect_content: true           # forbid forwarding/saving of delivered files
+  temporary_links: true           # deep-links expire
   link_expiry_minutes: 60         # 15 | 30 | 60 | 360 | 1440
-  auto_delete: false
-  auto_delete_after_minutes: 60
 
 queue:
-  max_visible: 10
-  position_recalc_seconds: 5
+  max_visible: 10                 # queue entries shown at once
 
 security:
   rate_limit_per_minute: 20
-  anti_spam_cooldown_seconds: 2
+  owner_id: 0                     # Telegram user id of the owner (0 = use ADMIN_IDS[0])
+  # NekoFetch (admin) bot force-subscription.
   force_subscribe: false
   force_subscribe_channels: []
-  # Distribution bots have their own independent force-subscription settings.
+  # Distribution bots force-subscription (independent of the admin bot).
   dist_force_subscribe: false
   dist_force_subscribe_channels: []
 
-# Database channel: content is stored as ordered packs (header -> files -> end sticker),
-# one pack per (anime, season, resolution, language). Delivery copies the recorded range.
+# Database channel: content is stored as ordered packs (header → files → end
+# sticker), one pack per (anime, season, resolution, language). Delivery copies
+# the recorded range. Movies/specials use their own header templates so they
+# don't read "Season —".
+# Variables: {title} {season} {resolution} {language} {content_type}
+#            {episode_from} {episode_to} {group}
 storage_channel:
   enabled: true
-  channel_id: -1002383780897                 # -100... id of your database channel
+  channel_id: -1002383780897
   header_template: "<b>{title} — {content_type} {season} [{resolution}] [{language}]</b>"
-  end_sticker_id: "CAACAgUAAxkBAAIxQGo4UAizFl3C4Y_aIz86iuNbyJHLAAJOFwACoa8gVlT9gR8Fr550PAQ"            # file_id of the sticker that marks end of a pack
-  copy_mode: copy              # copy | forward
+  movie_header_template: "<b>{title} — {content_type} [{resolution}] [{language}]</b>"
+  special_header_template: "<b>{title} — {content_type} [{resolution}] [{language}]</b>"
+  end_sticker_id: "CAACAgUAAxkBAAIxQGo4UAizFl3C4Y_aIz86iuNbyJHLAAJOFwACoa8gVlT9gR8Fr550PAQ"
   include_header_in_delivery: true
   include_sticker_in_delivery: false
 
-# Log channel: every event goes here, plus two auto-updated pinned messages.
+# Log channel: the operational control center. One channel of persistent,
+# edited-in-place section messages (dashboard, pending, active, completed,
+# notices, catalog) plus a divider sticker and a cover image.
 log_channel:
   enabled: true
   channel_id: -1004429939823
-  pinned_dashboard: true        # live stats summary (edited in place)
-  pinned_catalog: true          # published catalog index (edited in place)
-  refresh_seconds: 60
-  events: [all]                 # 'all' = everything; or a subset of categories
-  cover_image: "https://files.catbox.moe/how89x.jpg"   # cover photo atop the control center
-  # When true (default), the rebuild also wipes every message newer than the
-  # cover/intro — including admin-typed notes, failure-card echoes, and
-  # anything posted by other users — so the layout always lands on a true
-  # clean slate. Set false if you draft notes in the channel between
-  # rebuilds and want them preserved.
+  sections: true                  # full sectioned control center
+  reserved_slots: 2               # reserved msgs per growth-prone section
+  notices_lines: 12               # rolling event-stream length
+  refresh_seconds: 60             # full rebuild interval
+  active_refresh_seconds: 5        # fast lane for the live active-tasks panel
+  events: [all]                   # 'all' = everything; or a subset of categories
+  cover_image: "https://files.catbox.moe/how89x.jpg"
+  divider_sticker_id: "CAACAgUAAxkBAAI0vGpAOaZ7gJ6Yk9MtJ63jm0sYmDysAAIYAANDc8kSzixbXL29lfc8BA"
+  # true (default): each rebuild wipes any message newer than the cover/intro
+  # (incl. admin notes and other users' chatter). false preserves them.
   wipe_all_on_rebuild: true
-  # Safety cap on the sweep count. Telegram caps single history fetches at
-  # 200 anyway; this just makes the limit explicit.
-  wipe_max_history: 200
+  wipe_max_history: 200           # safety cap (matches Telegram's single-fetch limit)
 
-# Access: free trial, then renew via a shortlink token.
+# Access gating: free trial, then renew via a shortlink token.
 access:
   enabled: false
   free_trial: true
   trial_days: 3
   token_days: 3
   token_link_ttl_hours: 24
-  forward_to_saved_hint: true
 
-# Shortener used to gate token generation (AroLinks / VPLinks).
+# Shortener used to gate token generation. provider: arolinks | vplinks.
+# API keys live in .env, not here.
 shortlink:
   enabled: false
-  provider: vplinks            # arolinks | vplinks
-  arolinks_api_key: ""          # AroLinks API token (get yours at https://arolinks.com/member/tools/api)
-  vplinks_api_key: ""           # VPLinks API token (get yours at https://vplink.in/member/tools/api)
-  api_token: ""
-  base_url: ""
+  provider: vplinks
+  arolinks_api_key: ""
+  vplinks_api_key: ""
 
-# Acquisition matrix: when a request doesn't pin a quality/language, fetch all of these.
-# languages map to audio: english = Dub, japanese = Sub (always with English subtitles).
+# Acquisition: what to fetch when a request doesn't pin a quality/language.
+# languages map to audio: english = Dub, japanese = Sub (always w/ English subs).
+#
+# Quality model — we DON'T pick one "preferred" quality; we grab every tier the
+# source offers, driven by a best-first ladder:
+#   • target_resolutions are fetched whenever the source has them.
+#   • if a target is missing, the FIRST available alternate in resolution_fallbacks
+#     is taken instead (so the SD tier never ships nothing).
+# Anything the source exposes above the top target (2K/4K) is still collected.
 acquisition:
-  resolutions: [360p, 540p, 720p, 1080p]
   languages: [english, japanese]
   require_english_subs: true
+  target_resolutions: [1080p, 720p, 480p]
+  resolution_fallbacks:
+    "480p": [540p, 360p]
 
 # Main channel: each published anime is posted here with poster + [Index][Download].
+# Variables: {title} {tag} {episodes} {qualities} {languages} {genres} {overview}
 main_channel:
   enabled: true
   channel_id: -1004230173919
@@ -177,11 +187,18 @@ main_channel:
   index_button_text: "Iɴᴅᴇx"
   download_button_text: "Dᴏᴡɴʟᴏᴀᴅ"
 
-# Thumbnail channel: custom banner generation via asset selection in a dedicated channel.
-# When enabled, published anime are queued here for admins to select logos, posters,
-# and backdrops (fetched from TMDB, displayed via Telegraph galleries) before the
-# Playwright-based renderer generates custom thumbnail images for each entry.
-# Requires a Telegraph API access token (get one at https://api.telegra.ph/createAccount).
+# Index channel: stylized per-letter index posts the bot maintains.
+# Variables: {letter} (header) and {title} (entry).
+index_channel:
+  enabled: true
+  channel_id: -1002760647238
+  letter_header_template: "•──────────•°• {letter} •°•──────────•"
+  entry_template: "⦿ {title}"
+
+# Thumbnail channel: custom banner generation via asset selection. Published
+# anime are queued here for admins to pick logos/posters/backdrops (TMDB via
+# Telegraph galleries) before the Playwright renderer builds each thumbnail.
+# Requires a Telegraph token (https://api.telegra.ph/createAccount).
 thumbnail_channel:
   enabled: true
   channel_id: -1004417091364
@@ -189,74 +206,103 @@ thumbnail_channel:
   divider_sticker_id: "CAACAgUAAxkBAAI0vGpAOaZ7gJ6Yk9MtJ63jm0sYmDysAAIYAANDc8kSzixbXL29lfc8BA"
   telegraph_access_token: "99c2fbf9fe90b54f94b4a3d8ac4e0a12a594b126dea5b1bcd8773a898b9a"
   max_queue_size: 20
-  # When true (default), the rebuild wipes every message newer than the
-  # cover/intro — including thumbnail-picker detail cards, admin notes,
-  # and any other user's chatter. Set false to preserve staff notes.
   wipe_all_on_rebuild: true
-  # Safety cap on the sweep count (matches Telegram's single-fetch limit).
   wipe_max_history: 200
 
-# Index channel: stylized per-letter index posts the bot maintains.
-
-index_channel:
-  enabled: true
-  channel_id: -1002760647238
-  letter_header_template: "•──────────•°• {letter} •°•──────────•"
-  entry_template: "⦿ {title}"
-
+# Content sources. Only authorized sources are enabled; pirate-site plugins are
+# not shipped. Miruro talks to a self-hosted Miruro-API instance.
 sources:
-  # Only authorized sources are enabled. Pirate-site plugins are not shipped.
   enabled: [local, telegram, anikoto, kickassanime, anizone, miruro, nyaa]
   default: telegram
   miruro:
-    # Self-hosted Miruro-API endpoint. The bot talks to this API, not the UI site.
-    api_base_url: http://localhost:8000
-    # Referer sent while probing/downloading HLS streams returned by the API.
-    stream_referer: http://localhost:8000
-    preferred_quality: 1080p
-    # Provider priority when Miruro exposes multiple stream servers.
-    provider_order: [kiwi, arc, zoro, hop, pahe]
+    api_base_url: http://localhost:8000     # self-hosted Miruro-API endpoint (the API, not the UI site)
+    stream_referer: http://localhost:8000   # Referer sent while probing/downloading HLS streams
+    provider_order: [kiwi, arc, zoro, hop, pahe]   # server priority; first available wins
 
 localization:
   default_language: en
   directory: resources/language
 
+# Distribution-bot creation & profile.
 bot:
   auto_create_on_publish: true
   health_check_interval_minutes: 60
   delivery_retention_days: 7
-  avatar_source: tmdb
-  # Operator overrides for the bot's Telegram /setdescription (long, 512 chars)
-  # and /setabouttext (short, 120 chars). Empty = use the built-in
-  # AniXWeebs branding block (Main/Index/Ongoing/Movies/Network).
-  description_text: ""
-  about_text: ""
-  # Footer image shown on the last post of every distribution bot.
-  # Leave empty for no image; set to a URL or a Telegram file_id.
-  footer_image_url: "https://files.catbox.moe/31zgzq.jpg"
-  # Override the default footer text (empty = use the built-in en.json template).
-  # Unicode small-caps and special characters are supported.
-  footer_text: ""
+  avatar_source: tmdb             # tmdb | anilist
+  # Telegram profile text overrides (empty = built-in AniXWeebs branding block).
+  description_text: ""            # /setdescription (512-char cap)
+  about_text: ""                  # /setabouttext   (120-char cap)
+  # Footer shown on the last post of every distribution bot.
+  footer_image_url: "https://files.catbox.moe/31zgzq.jpg"   # URL or file_id; empty = none
+  footer_text: ""                 # override built-in footer (empty = en.json template)
   # Divider sticker sent between content sections (info → seasons → guide → footer).
-  # Set to an empty string to skip divider stickers.
   divider_sticker_id: "CAACAgUAAxkBAAI5pmpE1uh9_sD-z2tYJ3wlado6vS29AAIYAANDc8kSzixbXL29lfc8BA"
-  # Per-account limits for distribution entities. When the bot limit is exhausted
-  # for a userbot session, the orchestrator falls back to creating public channels.
+  # Per-account entity limits. When the bot limit is exhausted for a userbot
+  # session, the orchestrator falls back to creating public channels.
   max_bots_per_account: 20
   max_channels_per_account: 10
-  # Days between comprehensive entity health checks (bots + channels).
-  # Set to 0 to disable the scheduled full sweep (periodic bot checks still run).
-  entity_full_check_days: 30
-  # Username suffix formatting. Both bots and channels use the same base suffix;
-  # ``format_bot_username`` appends "_bot" for bot entities (Telegram requirement)
-  # and leaves the suffix unchanged for channels.
-  bot_username_suffix: "axw"
+  entity_full_check_days: 30      # days between full entity health sweeps (0 = disable)
+  bot_username_suffix: "axw"      # bots get this + "_bot"; channels get it as-is
   channel_username_suffix: "axw"
 
+# UI / onboarding — the theatrical /start (sticker → loading beat → welcome card).
 ui:
+  # Shared /start sticker: the admin (NekoFetch) bot and delivery bots use it,
+  # and it's the fallback for any pipeline bot without its own sticker below.
   start_sticker_id: "CAACAgUAAyEFAASAgUwqAAJh_mckw2STkeY1WMOHJGY4Hs9_1-2fAAIPFAACYLShVon-N6AFLnIiHgQ"
+  # Per-bot /start stickers for the four pipeline personas. Empty = fall back to
+  # start_sticker_id. Paste a Telegram sticker file_id to give a bot its own.
+  start_sticker_lelouch: ""
+  start_sticker_levi: ""
+  start_sticker_senku: ""
+  start_sticker_gojo: ""
   start_image_url: "https://envs.sh/odE.png"
   start_image_has_spoiler: true
   sticker_delete_delay: 1.5
   loading_dot_delay: 0.32
   loading_steps: 3
+
+# Post format — the single home for how every published channel card LOOKS:
+# info / season / movie / extras cards, watch guide, footer, resolution buttons,
+# language labels, pinning, duration formatting, and (forward-compat) premium
+# emoji. Every *_template that's left empty falls back to the matching en.json
+# string, so the shipped look is unchanged until you override a field. Full
+# placeholder docs live in the admin Settings panel (owner-only section).
+post_format:
+  # Card templates (empty = use the en.json default).
+  info_card_template: ""
+  season_card_template: ""
+  movie_card_template: ""
+  extras_card_template: ""
+  watch_guide_template: ""
+  watch_guide_season_line: ""
+  watch_guide_extra_line: ""
+
+  # Footer (mirrors bot.footer_*; empty = fall back to bot.footer_* then en.json).
+  footer_template: ""
+  footer_image_url: ""
+
+  # Resolution buttons.
+  resolution_label: "{res}"       # wrap the label, e.g. "「 {res} 」" or "⬢ {res}"
+  buttons_per_row: 2              # 2 → [2], [2,1], [2,2]; 1 = single column
+  max_quality_buttons: 3          # cap on distinct quality buttons
+
+  # Language section labels (shown for sub-only / separate-audio titles).
+  language_label_japanese: ""     # empty = en.json bot_lang_japanese
+  language_label_english: ""      # empty = en.json bot_lang_english
+  japanese_first: true            # original audio leads (mirrors the reference channels)
+
+  # Pinning / dividers.
+  pin_info_card: true
+  pin_watch_guide: true
+  divider_sticker_id: ""          # empty = fall back to bot.divider_sticker_id
+
+  # Duration formatting for movies / single-episode extras. A single-episode
+  # entry shows DURATION (AniList minutes); a multi-episode extra shows EPISODES.
+  duration_format_hm: "{h}h {m}m" # hours ≥ 1
+  duration_format_m: "{m}m"        # under an hour
+
+  # Premium (custom) emoji — forward-compat. Maps a :name: token to a custom
+  # emoji id; resolve_premium_emoji expands :name: in any caption. Empty = plain
+  # unicode (safe to ignore until a premium account is wired up).
+  premium_emoji: {}

@@ -274,7 +274,7 @@ def build_lelouch(container: Container, token: str) -> Client:
             is_staff=role in (Role.STAFF, Role.ADMIN),
             is_admin=role is Role.ADMIN,
         )
-        await send_rich_welcome(client, container, message, screen)
+        await send_rich_welcome(client, container, message, screen, bot_name="lelouch")
 
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))

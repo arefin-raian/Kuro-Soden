@@ -459,6 +459,7 @@
   "bot_health_failed": "⚠️ <b>Bot health check failed:</b>\n\n<b>Bot:</b> {name}\n<b>Error:</b> {error}",
   "bot_health_recreated": "🔄 <b>Bot auto-recreated after ban</b>\n\n<b>Previous:</b> {old_name}\n<b>New:</b> {name}\n<b>Username:</b> @{username}",
   "settings_sec_bot": "🤖 Distribution Bots",
+  "settings_sec_post_format": "🎨 Post Format",
   "cc_reserved_title": "⌘ Reserved For Future Expansion",
   "cc_convo_line": "[<b>{name}</b>]: {text}",
   "cc_failure_title": "🛑 <b>Job failed</b>  ·  #{code}",

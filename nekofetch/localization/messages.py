@@ -636,6 +636,7 @@ class M:
         **SETTINGS_SECTIONS,
         "thumbnail_channel": "settings_sec_thumbnail_channel",
         "bot": "settings_sec_bot",
+        "post_format": "settings_sec_post_format",
         "localization": "settings_sec_localization",
     }
 

@@ -42,6 +42,8 @@ async def send_rich_welcome(
     container: Container,
     message: Message,
     screen: Screen,
+    *,
+    bot_name: str | None = None,
 ) -> None:
     """Theatrical /start: sticker → loading animation → welcome screen.
 
@@ -53,6 +55,9 @@ async def send_rich_welcome(
         screen: Pre-built :class:`nekofetch.ui.screens.Screen` holding the
             caption, bot-specific image (``pick_artwork(bot_name)``), and
             inline keyboard. The helper does NOT modify it; caller owns it.
+        bot_name: Persona name (lelouch/levi/senku/gojo). Selects that bot's
+            own /start sticker via ``UIConfig.sticker_for``; falls back to the
+            shared ``start_sticker_id`` when the bot has none configured.
     """
     from pyrogram.enums import ParseMode
 
@@ -61,7 +66,7 @@ async def send_rich_welcome(
 
     # ── 1. Sticker (best-effort; some deployments lack a sticker id) ──
     sticker = None
-    sticker_id = ui_cfg.start_sticker_id
+    sticker_id = ui_cfg.sticker_for(bot_name)
     if sticker_id:
         try:
             sticker = await client.send_sticker(chat_id, sticker_id)

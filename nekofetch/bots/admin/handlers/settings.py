@@ -79,8 +79,8 @@ _SETTINGS_ORDER = (
     "features", "sources", "downloads", "acquisition", "processing",
     "rename", "metadata", "thumbnail", "watermark", "branding",
     "distribution", "queue", "security", "access", "shortlink", "bot",
-    "storage_channel", "log_channel", "main_channel", "index_channel",
-    "thumbnail_channel", "ui", "localization",
+    "post_format", "storage_channel", "log_channel", "main_channel",
+    "index_channel", "thumbnail_channel", "ui", "localization",
 )
 
 

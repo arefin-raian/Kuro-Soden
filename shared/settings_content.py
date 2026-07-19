@@ -147,83 +147,71 @@ SENKU = {
     "branding": {
         "title": "Channel Branding",
         "about": (
-            "Naming templates for new distribution channels, the footer text "
-            "appended to every shared post, and the default sticker pack "
-            "attached to each franchise's welcome message."
+            "The footer post appended to every distribution channel, the "
+            "divider sticker between sections, and the suffix used when new "
+            "bot usernames are minted. These live in the NekoFetch admin "
+            "Settings panel under <b>post_format</b> and <b>bot</b>; leaving "
+            "a footer field empty falls back to the built-in default."
         ),
         "when_to_use": (
-            "Whenever a new visual identity drops, or when an admin wants a "
-            "footer that links the brand account."
+            "When a new visual identity drops, or when you want the footer to "
+            "link the brand account."
         ),
         "options": [
-            (
-                "channelNameTemplate={title} ({year})",
-                "Default — clean, year-prefixed for S1 indexing.",
-            ),
-            (
-                "channelNameTemplate={title} ▸ {studio}",
-                "Studio-aware variant for collaborations.",
-            ),
-            ("footerText=", "Disabled — no footer."),
-            (
-                "footerText=Join @KuroSoden for more!",
-                "Default — drives follows at the bottom of every share.",
-            ),
+            ("post_format.footer_template", "Footer card text (empty = default)."),
+            ("post_format.footer_image_url", "Footer image — URL or file_id."),
+            ("post_format.divider_sticker_id",
+             "Sticker between sections (empty = bot.divider_sticker_id)."),
+            ("bot.bot_username_suffix", "Suffix for generated bot usernames."),
         ],
         "supports_html": True,
-        "example": "/brand footerText=\"Sourced from Kuro Sōden ✦ kurosoden.example\"",
+        "example": "post_format.footer_template = Join @KuroSoden for more ✦",
         "hint": (
-            "Send one <code>key=\"value\"</code> pair at a time. Quoted values "
-            "may include emoji and HTML tags if <code>supports_html</code> is on."
+            "Open the <b>NekoFetch admin bot → Settings → post_format</b> to "
+            "change these; every field there carries its own help panel."
         ),
     },
 
     "layout": {
         "title": "Content Layout",
         "about": (
-            "Visual style of every auto-generated artifact: info card, "
-            "season separators, watch guide position, and footer emphasis. "
-            "Tune so the channel feel matches the show's tone (e.g. SoL "
-            "gets a softer separator, action shows get a banner)."
+            "Templates and layout for every auto-generated card — info, "
+            "season, movie, watch guide — plus the quality-button rows, the "
+            "resolution label, the language-section order, and which cards "
+            "are pinned. All configured under <b>post_format</b> in the "
+            "NekoFetch admin Settings panel; empty template = built-in look."
         ),
         "when_to_use": (
             "Before launching a new show, or after feedback that the channel "
             "feels too dense / too sparse."
         ),
         "options": [
-            (
-                "seasonSeparatorStyle=banner",
-                "Default — wide banner with cover art.",
-            ),
-            (
-                "seasonSeparatorStyle=card",
-                "Square card — fits 1:1 thumbnails better.",
-            ),
-            (
-                "seasonSeparatorStyle=line",
-                "Minimal — single horizontal divider with the season name.",
-            ),
-            (
-                "infoCardLayout=expanded",
-                "Default — synopsis + metadata on the card.",
-            ),
-            (
-                "infoCardLayout=compact",
-                "Title + cover only; details in the comments.",
-            ),
-            (
-                "watchGuidePosition=top",
-                "Default — pinned at the top of the channel.",
-            ),
-            (
-                "watchGuidePosition=sidebar",
-                "Inline button in the info card.",
-            ),
+            ("post_format.info_card_template", "Franchise info/overview card."),
+            ("post_format.season_card_template", "Per-season (multi-episode) card."),
+            ("post_format.movie_card_template",
+             "Movie/single-episode card — shows runtime, not episode count."),
+            ("post_format.watch_guide_template", "Watch-guide wrapper + lines."),
+            ("post_format.buttons_per_row",
+             "Quality buttons per row (2 = reference: 3→[2,1])."),
+            ("post_format.resolution_label", "Button label wrapper, e.g. 「 {res} 」."),
+            ("post_format.japanese_first",
+             "Show the original-audio section first (sub-only titles)."),
+            ("post_format.pin_info_card / pin_watch_guide", "Which cards pin."),
         ],
-        "example": "/layout seasonSeparatorStyle=banner",
+        "placeholders": [
+            ("{title}", "Anime / entry title."),
+            ("{episodes}", "Episode count."),
+            ("{duration}", "Runtime from AniList minutes (movie card only)."),
+            ("{rating}", "AniList score."),
+            ("{genres}", "Genre list."),
+            ("{synopsis}", "Trimmed synopsis."),
+            ("{seasons}", "Assembled watch-guide lines (guide wrapper only)."),
+        ],
+        "supports_html": True,
+        "example": "post_format.movie_card_template = <b>{title}</b>\\n⏱ {duration}",
         "hint": (
-            "Send one <code>key=value</code> at a time; the next artifact "
-            "generated after this message uses the new layout."
+            "Open the <b>NekoFetch admin bot → Settings → post_format</b>. Each "
+            "template lists the exact variables it supports in its help panel."
         ),
     },
 }
@@ -235,102 +223,99 @@ GOJO = {
     "caption": {
         "title": "Caption Template",
         "about": (
-            "The Markdown/HTML template that wraps every Main Channel post. "
-            "Use the placeholders listed below — they expand to the right "
-            "value at publish time."
+            "The HTML template that wraps every public main-channel post. "
+            "Configured under <b>main_channel.caption_template</b> in the "
+            "NekoFetch admin Settings panel. Use the <code>{placeholder}</code> "
+            "tokens below — they expand at publish time."
         ),
         "when_to_use": (
             "Whenever you want a consistent voice across all posts, or "
             "before a special event (e.g. anniversary caption)."
         ),
         "placeholders": [
-            ("title", "Anime title (English when available, else original)."),
-            ("code", "Request code — <code>REQ-XXXX</code>."),
-            ("year", "Release year, e.g. <code>2024</code>."),
-            ("genres", "Comma-joined list of genres."),
-            ("score", "AniList score, e.g. <code>8.31</code>."),
-            ("episodes", "Total episodes count."),
-            ("studio", "Production studio."),
-            ("duration", "Per-episode minutes."),
+            ("{title}", "Anime title (English when available, else original)."),
+            ("{tag}", "Hashtag-safe title."),
+            ("{episodes}", "Episode count."),
+            ("{qualities}", "Available resolutions."),
+            ("{languages}", "Available audio tracks."),
+            ("{genres}", "Comma-joined genre list."),
+            ("{overview}", "Synopsis / overview."),
         ],
         "supports_html": True,
         "example": (
-            "🎬 <b>${title}</b>  ·  <i>${year}</i>\n"
-            "Genres: ${genres}\n"
-            "AniList: ${score}  ·  ${episodes} episodes"
+            "{title}『 #{tag} 』\n"
+            "⌬ EPISODES : {episodes}\n"
+            "⌬ QUALITY : {qualities}"
         ),
         "hint": (
-            "Send the full Markdown/HTML template as a single message; "
-            "$placeholders expand at publish time."
+            "Open the <b>NekoFetch admin bot → Settings → main_channel → "
+            "caption_template</b> and send the full HTML template as one message."
         ),
         "danger": (
-            "Unknown placeholders will prevent automatic publishing — they "
-            "land in the <b>log channel</b> as a failed job."
+            "Only the placeholders listed above are substituted; an unknown "
+            "<code>{token}</code> is left in the caption verbatim."
         ),
     },
 
     "main": {
         "title": "Main Channel",
         "about": (
-            "Where approved releases land and how franchise entries are "
-            "posted (single post vs. one per season)."
+            "Whether releases post to the public main channel and which "
+            "channel receives them. Configured under <b>main_channel</b> in "
+            "the NekoFetch admin Settings panel, alongside the Index and "
+            "Download button labels."
         ),
         "when_to_use": (
-            "Every time the staff team adds a new main channel or wants to "
-            "schedule posts for later."
+            "When you set up (or move) the public main channel, or want to "
+            "toggle main-channel posting off."
         ),
         "options": [
-            (
-                "franchisePosting=per_season",
-                "Default — one post per season, grouped under the same tag.",
-            ),
-            (
-                "franchisePosting=per_anime",
-                "Single franchise post linking every season.",
-            ),
-            (
-                "scheduleWindow=immediate",
-                "Default — publish as soon as approved.",
-            ),
-            (
-                "scheduleWindow=4h",
-                "Stagger posts every four hours.",
-            ),
-            (
-                "scheduleWindow=daily_18:00",
-                "Daily drop at 18:00 UTC.",
-            ),
+            ("main_channel.enabled", "Turn public main-channel posting on/off."),
+            ("main_channel.channel_id", "Telegram id (-100…) of the channel."),
+            ("main_channel.index_button_text", "Label of the Index button."),
+            ("main_channel.download_button_text", "Label of the Download button."),
         ],
-        "example": "/main routing_id=-1001234567890 scheduleWindow=4h",
+        "example": "main_channel.channel_id = -1001234567890",
         "hint": (
-            "Send <code>/main routing_id=&lt;channel_id&gt; "
-            "scheduleWindow=&lt;rule&gt;</code> with the new values."
+            "Open the <b>NekoFetch admin bot → Settings → main_channel</b> to "
+            "change these; each field carries its own help panel."
         ),
         "danger": (
-            "<b>routing_id</b> must reference a channel the publisher bot "
-            "is a member of, otherwise publishes silently fail."
+            "<b>channel_id</b> must reference a channel the userbot is an admin "
+            "of, otherwise publishes silently fail."
         ),
     },
 
     "index": {
         "title": "Index Settings",
         "about": (
-            "How the A-Z index group is named, whether it refreshes on "
-            "every publish, and the sort direction."
+            "The stylized A-Z catalog index channel — whether it's enabled, "
+            "which channel it posts to, and the templates for each letter "
+            "header and catalog line. Configured under <b>index_channel</b> "
+            "in the NekoFetch admin Settings panel."
         ),
         "when_to_use": (
-            "When the index gets crowded (switch to update_on_publish), "
-            "or when you want a different letter-boundary style."
+            "When you set up the index channel, or want a different "
+            "letter-header or per-title line style."
         ),
         "options": [
-            ("updateOnPublish=true", "Default — keep the index live."),
-            ("updateOnPublish=false", "Re-generate only on demand."),
-            ("sortBy=title_asc", "Default — clean A-Z."),
-            ("sortBy=date_desc", "Newest first; good for trending channels."),
-            ("sortBy=score_desc", "Highest-rated first."),
+            ("index_channel.enabled", "Turn the index channel on/off."),
+            ("index_channel.channel_id", "Telegram id (-100…) of the index channel."),
+            ("index_channel.letter_header_template",
+             "Header above each first-letter section ({letter}, {entries})."),
+            ("index_channel.entry_template", "One catalog line per title ({title})."),
         ],
-        "example": "/index updateOnPublish=true sortBy=title_asc",
-        "hint": "Send <code>/index key=value key=value ...</code>.",
+        "placeholders": [
+            ("{letter}", "First-letter bucket (A, B, C …)."),
+            ("{entries}", "Titles filed under that letter."),
+            ("{title}", "Anime title (entry_template only)."),
+        ],
+        "supports_html": True,
+        "example": "index_channel.entry_template = ⦿ {title}",
+        "hint": (
+            "Open the <b>NekoFetch admin bot → Settings → index_channel</b> to "
+            "change these."
+        ),
     },
 }
 

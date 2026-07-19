@@ -152,6 +152,7 @@ query ($ids: [Int]) {
       id
       format
       episodes
+      duration
       status
       bannerImage
       description(asHtml: false)
@@ -222,6 +223,7 @@ class FranchiseEntry:
     banner_url: str | None = None
     cover_url: str | None = None
     episodes: int | None = None
+    duration: int | None = None      # minutes per episode (drives movie/OVA runtime)
     season_part: int | None = None   # detected part number (e.g. 1 for "Season 3 Part 1")
     start_date: dict | None = None  # {"year": 2013, "month": 4, "day": 7}
     relation: str = ""              # how this entry connects to its parent
@@ -634,6 +636,7 @@ class AnilistClient:
             cover_url=(root_media.get("coverImage") or {}).get("extraLarge")
                        or (root_media.get("coverImage") or {}).get("large"),
             episodes=_aired_episodes(root_media),
+            duration=root_media.get("duration"),
             season_part=root_part_num,
             start_date=root_media.get("startDate"),
             relation="ROOT",
@@ -693,6 +696,7 @@ class AnilistClient:
                     cover_url=(m.get("coverImage") or {}).get("extraLarge")
                                or (m.get("coverImage") or {}).get("large"),
                     episodes=m.get("episodes"),
+                    duration=m.get("duration"),
                     season_part=part_num,
                     start_date=m.get("startDate"),
                     relation=relation_map.get(mid, ""),

@@ -227,7 +227,7 @@ def build_senku(container: Container, token: str) -> Client:
             image=pick_artwork("senku"),
             keyboard=keyboard(*rows),
         )
-        await send_rich_welcome(client, container, message, screen)
+        await send_rich_welcome(client, container, message, screen, bot_name="senku")
 
     # ── /settings ─────────────────────────────────────────────────────────────
     @client.on_message(filters.command("settings"))

@@ -33,10 +33,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from pyrogram.enums import ParseMode
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
+from nekofetch.services.bot_render import build_audio_keyboard, resolve_premium_emoji
 
 from kurosoden.shared.distribution_cache import DistributionCache, EntryData
 
@@ -300,7 +300,8 @@ class SenkuPublisher:
         """
         import re
 
-        divider_id = self._c.config.bot.divider_sticker_id
+        fmt = self._c.config.post_format
+        divider_id = fmt.divider_sticker_id or self._c.config.bot.divider_sticker_id
         posted = 0
         pinned_ids: list[int] = []
 
@@ -329,8 +330,9 @@ class SenkuPublisher:
                     )
                 else:
                     caption = re.sub(r"\{BOT_QUAL:([^}]+)\}", r"\1", caption)
+                caption = resolve_premium_emoji(caption, fmt)
 
-            markup = self._build_buttons(post.get("button_data"))
+            markup = build_audio_keyboard(post.get("button_data"), fmt)
             image = post.get("image")
             try:
                 if image:
@@ -354,42 +356,6 @@ class SenkuPublisher:
                 pinned_ids.append(msg.id)
 
         return posted, pinned_ids
-
-    @staticmethod
-    def _build_buttons(bd: dict | None) -> InlineKeyboardMarkup | None:
-        """URL-button keyboard from ``button_data`` — mirrors the distribution app.
-
-        Uses the pre-generated Fstore links in ``button_data.links``; without
-        them there's nothing for the buttons to point at, so returns ``None``.
-        """
-        if not bd:
-            return None
-        links: dict[str, str] = bd.get("links", {})
-        if not links:
-            return None
-
-        rows: list[list[InlineKeyboardButton]] = []
-        if bd.get("type") == "flat":
-            row = [
-                InlineKeyboardButton(q, url=links.get(q, ""))
-                for q in bd.get("qualities", [])
-                if links.get(q)
-            ]
-            if row:
-                rows.append(row)
-        elif bd.get("type") == "separate_audio":
-            for sec in bd.get("sections", []):
-                lang = sec.get("language", "")
-                qrow = [
-                    InlineKeyboardButton(q, url=links.get(f"{lang}_{q}", ""))
-                    for q in sec.get("qualities", [])
-                    if links.get(f"{lang}_{q}")
-                ]
-                if qrow:
-                    # Language label row (URL buttons can't be visual-only, so the
-                    # label rides above its quality row as plain text in the card).
-                    rows.append(qrow)
-        return InlineKeyboardMarkup(rows) if rows else None
 
     @staticmethod
     async def _pin_silently(client, chat_id: int, message_id: int) -> None:

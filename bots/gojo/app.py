@@ -245,7 +245,7 @@ def build_gojo(container: Container, token: str) -> Client:
             image=pick_artwork("gojo"),
             keyboard=keyboard(*rows),
         )
-        await send_rich_welcome(client, container, message, screen)
+        await send_rich_welcome(client, container, message, screen, bot_name="gojo")
 
     # ── /settings ─────────────────────────────────────────────────────────────
     @client.on_message(filters.command("settings"))

@@ -439,7 +439,6 @@ class IndexChannelConfig(BaseModel):
 class MiruroConfig(BaseModel):
     api_base_url: str = "http://localhost:8000"
     stream_referer: str = "http://localhost:8000"
-    preferred_quality: str = "1080p"
     provider_order: list[str] = Field(
         default_factory=lambda: ["kiwi", "arc", "zoro", "hop", "pahe"]
     )
@@ -456,19 +455,111 @@ class SourcesConfig(BaseModel):
 
 
 class UIConfig(BaseModel):
+    # Shared /start sticker — the admin (NekoFetch) bot and delivery bots use it,
+    # and it's the fallback for any pipeline bot without its own sticker below.
     start_sticker_id: str = (
         "CAACAgUAAyEFAASAgUwqAAJh_mckw2STkeY1WMOHJGY4Hs9_1-2fAAIPFAACYLShVon-N6AFLnIiHgQ"
     )
+    # Per-bot /start stickers for the four pipeline personas. Empty = fall back to
+    # ``start_sticker_id`` above. Set a Telegram sticker file_id to give a bot its
+    # own opening sticker.
+    start_sticker_lelouch: str = ""
+    start_sticker_levi: str = ""
+    start_sticker_senku: str = ""
+    start_sticker_gojo: str = ""
     start_image_url: str = "https://envs.sh/odE.png"
     start_image_has_spoiler: bool = True
     sticker_delete_delay: float = 1.5
     loading_dot_delay: float = 0.32
     loading_steps: int = 3
 
+    def sticker_for(self, bot_name: str | None) -> str:
+        """Return the /start sticker for ``bot_name`` (lelouch/levi/senku/gojo),
+        falling back to the shared ``start_sticker_id`` when the bot has none set."""
+        if bot_name:
+            specific = getattr(self, f"start_sticker_{bot_name.lower()}", "")
+            if specific:
+                return specific
+        return self.start_sticker_id
+
 
 class LocalizationConfig(BaseModel):
     default_language: str = "en"
     directory: str = "resources/language"
+
+
+class PostFormatConfig(BaseModel):
+    """How every published channel card is rendered.
+
+    This is the single home for the *look* of distribution-channel posts: the
+    info / season / movie / extras cards, the watch guide, the footer, the
+    resolution buttons, and the language labels. Each template mirrors the
+    matching ``bot_*`` string in ``en.json`` — the defaults here reproduce the
+    shipped layout exactly, so an operator who never touches Settings sees no
+    change, while one who wants a different voice can override any single field
+    without editing source or the language catalog.
+
+    Empty string means "fall back to the ``en.json`` default" for the template
+    fields, so clearing a field in the panel restores the built-in look rather
+    than blanking the card.
+
+    Premium (custom) emoji: every template is rendered with Telegram HTML, so a
+    ``<tg-emoji emoji-id="123">🎬</tg-emoji>`` span passes straight through to
+    the channel. ``premium_emoji`` maps a short ``:name:`` token to a custom
+    emoji id; :func:`resolve_premium_emoji` expands ``:name:`` tokens in any
+    rendered caption so operators can reuse the same premium glyph across every
+    template without pasting the raw span each time. Left empty, nothing is
+    substituted and the plain unicode emoji shows — so this is safe to ignore
+    until a premium account is wired up.
+    """
+
+    # ── card templates (empty = use the en.json default) ──────────────────────
+    info_card_template: str = ""       # bot_info_card
+    season_card_template: str = ""     # bot_season_card
+    movie_card_template: str = ""      # bot_movie_card
+    extras_card_template: str = ""     # extras reuse the season/movie card by rule
+    watch_guide_template: str = ""     # bot_watch_guide (wraps {seasons})
+    watch_guide_season_line: str = ""  # bot_watch_guide_season
+    watch_guide_extra_line: str = ""   # bot_watch_guide_extra
+
+    # ── footer ────────────────────────────────────────────────────────────────
+    # (footer_text / footer_image_url also live on BotConfig for backwards compat;
+    #  these mirror them so the whole post look sits in one section. When empty,
+    #  BotConfig.footer_* — then bot_footer in en.json — wins.)
+    footer_template: str = ""
+    footer_image_url: str = ""
+
+    # ── resolution buttons ─────────────────────────────────────────────────────
+    # Label wrapper for a quality button. {res} is the resolution (e.g. 1080p).
+    # Use to add symbols front/back, e.g. "「 {res} 」" or "⬢ {res}".
+    resolution_label: str = "{res}"
+    # Buttons per keyboard row. 2 gives the reference layout: 2->[2], 3->[2,1],
+    # 4->[2,2]. Set 1 for a single column, 3 for three-wide.
+    buttons_per_row: int = 2
+    # Cap on how many distinct qualities become buttons (reference shows 3).
+    max_quality_buttons: int = 3
+
+    # ── language section labels (separate-audio / sub-only layout) ─────────────
+    # Header rows shown above each language's quality buttons when a title has
+    # separate sub & dub packs (no dual-audio file). {lang} is the language name.
+    language_label_japanese: str = ""  # bot_lang_japanese
+    language_label_english: str = ""   # bot_lang_english
+    # Japanese first mirrors the reference channels (original audio leads).
+    japanese_first: bool = True
+
+    # ── pinning / dividers ──────────────────────────────────────────────────────
+    pin_info_card: bool = True
+    pin_watch_guide: bool = True
+    divider_sticker_id: str = ""       # empty = fall back to BotConfig.divider_sticker_id
+
+    # ── duration formatting for movies / single-episode extras ─────────────────
+    # A single-episode entry shows DURATION (from AniList minutes) instead of an
+    # episode count; a multi-episode extra shows EPISODES. {h}=hours {m}=minutes.
+    duration_format_hm: str = "{h}h {m}m"   # used when hours >= 1
+    duration_format_m: str = "{m}m"          # used when under an hour
+
+    # ── premium emoji (forward-compat; empty = plain unicode) ──────────────────
+    premium_emoji: dict[str, str] = Field(default_factory=dict)  # :name: -> custom_emoji_id
 
 
 class BotConfig(BaseModel):
@@ -540,6 +631,7 @@ class AppConfig(BaseModel):
     localization: LocalizationConfig = Field(default_factory=LocalizationConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     bot: BotConfig = Field(default_factory=BotConfig)
+    post_format: PostFormatConfig = Field(default_factory=PostFormatConfig)
 
     @classmethod
     def load(cls, path: str | Path = "config.yaml") -> AppConfig:

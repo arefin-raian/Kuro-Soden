@@ -75,6 +75,47 @@ _INDEX_LETTER = {
     "{letter}": "the first-letter bucket (A, B, C …)",
     "{entries}": "the titles filed under that letter",
 }
+# ── distribution-bot card templates (post_format.*) ───────────────────────────
+_CARD_INFO = {
+    "{title}": "anime title",
+    "{romaji}": "romaji title",
+    "{genres}": "genre list",
+    "{format}": "format — TV / Movie / OVA …",
+    "{rating}": "AniList score",
+    "{status}": "airing status",
+    "{first_aired}": "first air date",
+    "{last_aired}": "last air date",
+    "{runtime}": "per-episode runtime",
+    "{episodes}": "episode count",
+    "{synopsis}": "synopsis (trimmed)",
+}
+_CARD_SEASON = {
+    "{title}": "anime title",
+    "{season}": "season number",
+    "{episodes}": "episode count",
+    "{S}": "'S' when plural (EPISODE vs EPISODES), else blank",
+    "{rating}": "AniList score",
+    "{language}": "audio label — Sub / Dub / Dual",
+    "{genres}": "genre list",
+    "{synopsis}": "synopsis (trimmed)",
+}
+_CARD_MOVIE = {
+    "{title}": "movie title",
+    "{duration}": "runtime from AniList minutes (e.g. 1h 35m)",
+    "{language}": "audio label — Sub / Dub / Dual",
+    "{synopsis}": "synopsis (trimmed)",
+}
+_CARD_GUIDE = {"{seasons}": "the assembled per-season lines block"}
+_CARD_GUIDE_SEASON = {
+    "{season_label}": "season heading (e.g. Season 2)",
+    "{episodes}": "episode count",
+    "{qualities}": "available resolutions",
+}
+_CARD_GUIDE_EXTRA = {
+    "{label}": "extra heading (e.g. Movie / OVA)",
+    "{episodes}": "episode count",
+    "{qualities}": "available resolutions",
+}
 
 
 FIELD_DOCS: dict[str, FieldDoc] = {
@@ -118,9 +159,6 @@ FIELD_DOCS: dict[str, FieldDoc] = {
     "sources.miruro.stream_referer": FieldDoc(
         desc="Referer used for HLS playlist and segment requests returned by Miruro-API.",
         example="http://localhost:8000"),
-    "sources.miruro.preferred_quality": FieldDoc(
-        desc="Default Miruro quality preference when a request does not pin a resolution.",
-        example="1080p"),
     "sources.miruro.provider_order": FieldDoc(
         desc="Miruro server priority, comma-separated; the first available provider wins.",
         example="kiwi, arc, zoro, hop, pahe"),
@@ -422,7 +460,21 @@ FIELD_DOCS: dict[str, FieldDoc] = {
 
     # ── UI / onboarding ───────────────────────────────────────────────────────
     "ui.start_sticker_id": FieldDoc(
-        desc="Sticker shown on /start (empty = none). Telegram file_id.",
+        desc="Shared /start sticker for the admin + delivery bots, and the fallback "
+             "for any pipeline bot without its own sticker below. Telegram file_id "
+             "(empty = none).",
+        example="CAACAgUAAyEFAASAgUwqAAJh_mck..."),
+    "ui.start_sticker_lelouch": FieldDoc(
+        desc="Lelouch's own /start sticker (empty = use start_sticker_id). Telegram file_id.",
+        example="CAACAgUAAyEFAASAgUwqAAJh_mck..."),
+    "ui.start_sticker_levi": FieldDoc(
+        desc="Levi's own /start sticker (empty = use start_sticker_id). Telegram file_id.",
+        example="CAACAgUAAyEFAASAgUwqAAJh_mck..."),
+    "ui.start_sticker_senku": FieldDoc(
+        desc="Senku's own /start sticker (empty = use start_sticker_id). Telegram file_id.",
+        example="CAACAgUAAyEFAASAgUwqAAJh_mck..."),
+    "ui.start_sticker_gojo": FieldDoc(
+        desc="Gojo's own /start sticker (empty = use start_sticker_id). Telegram file_id.",
         example="CAACAgUAAyEFAASAgUwqAAJh_mck..."),
     "ui.start_image_url": FieldDoc(
         desc="Welcome image shown on /start — URL or file_id (empty = none).",
@@ -490,6 +542,77 @@ FIELD_DOCS: dict[str, FieldDoc] = {
     "thumbnail_channel.max_queue_size": FieldDoc(
         desc="Maximum entries allowed in the thumbnail queue at once.", example="20"),
 
+    # ── post format (distribution-bot card look) ───────────────────────────────
+    "post_format.info_card_template": FieldDoc(
+        desc="Franchise info/overview card. Empty = built-in default.",
+        placeholders=_CARD_INFO, html=True,
+        example="<b>{title}</b>\\n⭐ {rating}  •  {episodes} eps"),
+    "post_format.season_card_template": FieldDoc(
+        desc="Per-season card (multi-episode entries). Empty = built-in default.",
+        placeholders=_CARD_SEASON, html=True,
+        example="<b>{title}</b> — Season {season}\\n{episodes} EPISODE{S}"),
+    "post_format.movie_card_template": FieldDoc(
+        desc="Movie / single-episode card — shows runtime, not episode count. Empty = default.",
+        placeholders=_CARD_MOVIE, html=True,
+        example="<b>{title}</b>\\n⏱ {duration}  •  {language}"),
+    "post_format.extras_card_template": FieldDoc(
+        desc="Reserved for a distinct extras card; extras currently reuse the season/movie "
+             "card by episode-count rule. Empty = that rule.",
+        placeholders=_CARD_MOVIE),
+    "post_format.watch_guide_template": FieldDoc(
+        desc="Wrapper around the assembled watch-guide lines. Empty = built-in default.",
+        placeholders=_CARD_GUIDE, html=True,
+        example="<b>WATCH ORDER</b>\\n{seasons}"),
+    "post_format.watch_guide_season_line": FieldDoc(
+        desc="One watch-guide line per season. Empty = built-in default.",
+        placeholders=_CARD_GUIDE_SEASON, html=True,
+        example="{season_label} — {episodes} eps [{qualities}]"),
+    "post_format.watch_guide_extra_line": FieldDoc(
+        desc="One watch-guide line per extra (movie/OVA). Empty = built-in default.",
+        placeholders=_CARD_GUIDE_EXTRA, html=True,
+        example="{label} [{qualities}]"),
+    "post_format.footer_template": FieldDoc(
+        desc="Footer card text. Empty = BotConfig.footer_text, then the built-in default.",
+        html=True, example="ANIME WEEBS — feel the story, live the art"),
+    "post_format.footer_image_url": FieldDoc(
+        desc="Footer image — URL or file_id. Empty = BotConfig.footer_image_url.",
+        example="https://files.catbox.moe/example.png"),
+    "post_format.resolution_label": FieldDoc(
+        desc="Quality-button label wrapper. Must contain {res} or it falls back to bare "
+             "resolution.",
+        placeholders={"{res}": "resolution, e.g. 1080p"}, example="「 {res} 」"),
+    "post_format.buttons_per_row": FieldDoc(
+        desc="Quality buttons per keyboard row. 2 = reference layout (2→[2], 3→[2,1], 4→[2,2]).",
+        example="2"),
+    "post_format.max_quality_buttons": FieldDoc(
+        desc="Cap on how many distinct qualities become buttons (reference shows 3).",
+        example="3"),
+    "post_format.language_label_japanese": FieldDoc(
+        desc="Header above Japanese/sub quality buttons (separate-audio layout). Empty = default.",
+        example="🇯🇵 Japanese"),
+    "post_format.language_label_english": FieldDoc(
+        desc="Header above English/dub quality buttons (separate-audio layout). Empty = default.",
+        example="🇬🇧 English"),
+    "post_format.japanese_first": FieldDoc(
+        desc="Show the Japanese (original audio) section first, matching the reference channels."),
+    "post_format.pin_info_card": FieldDoc(
+        desc="Pin the info/overview card in the distribution channel."),
+    "post_format.pin_watch_guide": FieldDoc(
+        desc="Pin the watch guide in the distribution channel."),
+    "post_format.divider_sticker_id": FieldDoc(
+        desc="Divider sticker between sections. Empty = fall back to bot.divider_sticker_id.",
+        example="CAACAgUAAxkBAAI5pmpE1uh9..."),
+    "post_format.duration_format_hm": FieldDoc(
+        desc="Runtime format when an hour or more. {h}=hours {m}=minutes.",
+        placeholders={"{h}": "hours", "{m}": "minutes"}, example="{h}h {m}m"),
+    "post_format.duration_format_m": FieldDoc(
+        desc="Runtime format when under an hour. {m}=minutes.",
+        placeholders={"{m}": "minutes"}, example="{m}m"),
+    "post_format.premium_emoji": FieldDoc(
+        desc="Map :name: tokens (or raw glyphs) to Telegram custom-emoji ids; expanded in every "
+             "card. Empty = plain unicode.",
+        example="movie=5375464961822695008, sparkle=5471952986970267163"),
+
     # ── localization ──────────────────────────────────────────────────────────
     "localization.default_language": FieldDoc(
         desc="Default UI language code (must match a JSON file in the language directory).",
@@ -504,7 +627,7 @@ FIELD_DOCS: dict[str, FieldDoc] = {
 OWNER_ONLY_SECTIONS = frozenset({
     "security", "sources", "access", "shortlink",
     "storage_channel", "log_channel", "main_channel", "index_channel",
-    "thumbnail_channel", "bot",
+    "thumbnail_channel", "bot", "post_format",
 })
 
 

@@ -19,6 +19,7 @@ from nekofetch.infrastructure.database.postgres.models import (
 )
 from nekofetch.infrastructure.database.postgres.session import session_scope
 from nekofetch.localization.messages import M
+from nekofetch.services.bot_render import build_audio_keyboard
 from nekofetch.services.distribution_service import DistributionService
 from nekofetch.ui.components import cb, keyboard, parse_cb
 from nekofetch.ui.progress import loading_animation, staged_loading
@@ -77,61 +78,13 @@ def build_distribution_bot(
         """Build inline keyboard with **URL buttons** pointing to Fstore deep links.
 
         Download links are pre-generated at ``BotContentService.generate_posts``
-        time and stored in ``button_data.links``. This avoids regenerating them
-        on every user request — the button simply opens the Fstore bot with the
-        correct payload.
-
-        Movie cards no longer get a separate "Download Now" button; they use the
-        same quality-button layout as season cards.
+        time and stored in ``button_data.links``. The visual layout — two
+        quality buttons per row, configurable resolution labels, Japanese-first
+        language sections for sub-only titles — comes from the shared
+        :mod:`nekofetch.services.bot_render` builder so this path and Senku's
+        manual publisher stay byte-identical.
         """
-        bd = post.button_data
-        if not bd:
-            return None
-
-        links: dict[str, str] = bd.get("links", {})
-        # Without pre-generated links there's nothing for the buttons to do.
-        # The admin should configure FileStore bots in Settings → FileStore Bots.
-        if not links:
-            return None
-
-        rows: list[list[InlineKeyboardButton]] = []
-
-        if bd.get("type") == "flat":
-            quals = bd.get("qualities", [])
-            row = [
-                InlineKeyboardButton(
-                    q,
-                    url=links.get(q, ""),
-                )
-                for q in quals
-            ]
-            if row:
-                rows.append(row)
-
-        elif bd.get("type") == "separate_audio":
-            sections = bd.get("sections", [])
-            for sec in sections:
-                # Language label (visual only, not a real button)
-                rows.append([
-                    InlineKeyboardButton(
-                        sec.get("label", "English"),
-                        callback_data=cb("d", "nolink"),
-                    )
-                ])
-                # Quality URL buttons under this language
-                lang = sec.get("language", "")
-                qrow = [
-                    InlineKeyboardButton(
-                        q,
-                        url=links.get(f"{lang}_{q}", ""),
-                    )
-                    for q in sec.get("qualities", [])
-                ]
-                if qrow:
-                    rows.append(qrow)
-
-        # Movie cards use the same quality-button layout — no special case.
-        return InlineKeyboardMarkup(rows) if rows else None
+        return build_audio_keyboard(post.button_data, container.config.post_format)
 
     async def _send_posts(chat_id: int) -> tuple[list[int], int | None]:
         """Send all content posts for this bot, with divider stickers between sections.

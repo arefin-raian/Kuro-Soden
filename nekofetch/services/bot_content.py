@@ -38,6 +38,7 @@ from nekofetch.infrastructure.database.postgres.session import session_scope
 from nekofetch.localization.messages import M, t
 from nekofetch.providers.catbox import upload_from_url as catbox_upload_from_url
 from nekofetch.providers.filestore import build_fstore_link, pick_fstore_bot_rr
+from nekofetch.services.bot_render import format_duration, resolve_premium_emoji
 from nekofetch.ui import templates
 
 log = get_logger(__name__)
@@ -113,6 +114,7 @@ class BotContentService:
                 caption=info_caption,
                 image_url=str(info_image) if info_image else None,
                 image_cached_url=cached_info_url,
+                is_pinned=self._c.config.post_format.pin_info_card,
             ))
             order += 1
 
@@ -187,13 +189,21 @@ class BotContentService:
         if guide:
             posts.append(BotContentPost(
                 bot_id=bot_id, post_type="watch_guide", order=order,
-                caption=guide, is_pinned=True,
+                caption=guide,
+                is_pinned=self._c.config.post_format.pin_watch_guide,
             ))
             order += 1
 
         # ── 5. Footer ──
-        footer_text = self._c.config.bot.footer_text or t(M.BOT_FOOTER)
-        footer_image = self._c.config.bot.footer_image_url or None
+        # Priority: post_format template → BotConfig.footer_text → en.json.
+        fmt = self._c.config.post_format
+        footer_text = self._render(
+            fmt.footer_template or self._c.config.bot.footer_text or "",
+            M.BOT_FOOTER,
+        )
+        footer_image = (
+            fmt.footer_image_url or self._c.config.bot.footer_image_url or None
+        )
         footer_image_str = str(footer_image) if footer_image else None
         cached_footer_url: str | None = None
         if footer_image_str and self._c.config.features.catbox_image_cache:
@@ -577,6 +587,13 @@ class BotContentService:
             merged["banner_url"] = entry.banner_url
         if entry.cover_url:
             merged["poster_url"] = entry.cover_url
+        # Per-episode runtime + episode count drive the movie-vs-season card
+        # choice and the DURATION field (a single-episode entry shows runtime,
+        # a multi-episode one shows episode count).
+        if getattr(entry, "duration", None):
+            merged["duration_min"] = entry.duration
+        if getattr(entry, "episodes", None) is not None:
+            merged["entry_episodes"] = entry.episodes
         return merged
 
     # ── content builders ─────────────────────────────────────────────────────────
@@ -629,7 +646,8 @@ class BotContentService:
                 # replace them with t.me/{username} links at serving time
                 # (deep-linking to messages doesn't work in private chats).
                 qual_str = f"{{BOT_QUAL:{qual_str}}}"
-                season_lines = t(
+                season_lines = self._render(
+                    self._c.config.post_format.watch_guide_season_line,
                     M.BOT_WATCH_GUIDE_SEASON,
                     season_label=label,
                     episodes=ep_count or "—",
@@ -651,7 +669,8 @@ class BotContentService:
                 qual_str = "  ".join(quals) if quals else "480p  720p  1080p"
                 qual_str = f"{{BOT_QUAL:{qual_str}}}"
                 label = extra_labels.get(entry.anilist_id, entry.format)
-                season_lines = t(
+                season_lines = self._render(
+                    self._c.config.post_format.watch_guide_extra_line,
                     M.BOT_WATCH_GUIDE_EXTRA,
                     label=label,
                     episodes=ep_count or "—",
@@ -659,7 +678,10 @@ class BotContentService:
                 )
             all_lines.append(season_lines)
 
-        return t(M.BOT_WATCH_GUIDE, seasons="\n\n".join(all_lines))
+        return self._render(
+            self._c.config.post_format.watch_guide_template,
+            M.BOT_WATCH_GUIDE, seasons="\n\n".join(all_lines),
+        )
 
     def _build_watch_guide_fallback(
         self, meta: dict, packs: list[StoragePack],
@@ -679,13 +701,17 @@ class BotContentService:
             qual_str = "  ".join(quals) if quals else "480p  720p  1080p"
             qual_str = f"{{BOT_QUAL:{qual_str}}}"
             season_label = self._season_label(s, meta)
-            season_lines.append(t(
+            season_lines.append(self._render(
+                self._c.config.post_format.watch_guide_season_line,
                 M.BOT_WATCH_GUIDE_SEASON,
                 season_label=season_label,
                 episodes=ep_max or "—",
                 qualities=qual_str,
             ))
-        return t(M.BOT_WATCH_GUIDE, seasons="\n\n".join(season_lines))
+        return self._render(
+            self._c.config.post_format.watch_guide_template,
+            M.BOT_WATCH_GUIDE, seasons="\n\n".join(season_lines),
+        )
 
     def _build_watch_guide(self, meta: dict, packs: list[StoragePack]) -> str | None:
         """Legacy compat — delegates to the fallback pack-based builder."""
@@ -703,8 +729,8 @@ class BotContentService:
         # Use the TMDB or AniList poster as the card image.
         image = meta.get("banner_url") or meta.get("poster_url")
 
-        caption = t(
-            M.BOT_INFO_CARD,
+        caption = self._render(
+            self._c.config.post_format.info_card_template, M.BOT_INFO_CARD,
             title=meta.get("title", "—"),
             romaji=meta.get("romaji") or "",
             genres=", ".join(meta.get("genres", []) or []) or "—",
@@ -799,8 +825,35 @@ class BotContentService:
             return f"[{langs_label}]"
         return "—"
 
+    def _render(self, override: str, key: str, **kwargs) -> str:
+        """Render a card from a config override (if set) else the ``en.json`` key.
+
+        A non-empty ``override`` (set in Settings → Post Format) wins over the
+        shipped ``en.json`` template; an empty one falls back to the catalog so
+        clearing a field restores the built-in look. Premium ``:name:`` emoji
+        tokens are expanded last via the ``post_format`` map.
+        """
+        if override:
+            try:
+                text = override.format(**kwargs)
+            except (KeyError, IndexError, ValueError):
+                # A malformed operator template must never crash a publish —
+                # fall back to the shipped catalog string instead.
+                text = t(key, **kwargs)
+        else:
+            text = t(key, **kwargs)
+        return resolve_premium_emoji(text, self._c.config.post_format)
+
     def _build_season_card(self, meta: dict, season: int, packs: list[StoragePack]) -> tuple[str, str | None]:
-        """Build a season entry card matching the reference format."""
+        """Build a season entry card matching the reference format.
+
+        Single-episode entries (movies, one-shot OVAs/specials) render the
+        movie card with a real per-episode **runtime** pulled from AniList;
+        multi-episode entries render the season card with an episode count.
+        This replaces the old ``1h {episode_count}m`` bug where an episode
+        count was fed into the duration slot as if it were minutes.
+        """
+        fmt = self._c.config.post_format
         ep_max = max((p.episode_to or p.file_count or 0) for p in packs) if packs else 0
         audios = {p.audio for p in packs}
         # When packs is empty the language field falls back to the most
@@ -819,24 +872,28 @@ class BotContentService:
         score = meta.get("score") or "—"
         title = meta.get("title", "—")
 
-        # Detect if this is a single-entry movie/OVA (1 file, season=None).
-        # Multi-episode OVAs/ONAs must NOT match — they show episode counts.
+        # A single-episode entry (movie / one-shot OVA / special) shows a
+        # runtime; a multi-episode entry shows an episode count. Prefer the
+        # AniList episode count carried on ``meta`` for extras (packs may be a
+        # single bundled file), falling back to the pack-derived ``ep_max``.
+        entry_eps = meta.get("entry_episodes")
+        effective_eps = entry_eps if entry_eps is not None else ep_max
         is_movie = any(
             p.season is None and (p.episode_from == p.episode_to and (p.episode_to or 0) <= 1)
             for p in packs
-        )
+        ) or (packs == [] and (effective_eps or 0) <= 1)
 
         if is_movie:
-            caption = t(
-                M.BOT_MOVIE_CARD,
+            caption = self._render(
+                fmt.movie_card_template, M.BOT_MOVIE_CARD,
                 title=title,
-                duration=f"1h {ep_max or 0}m",
+                duration=format_duration(meta.get("duration_min"), fmt),
                 language=lang_str,
                 synopsis=synopsis,
             )
         else:
-            caption = t(
-                M.BOT_SEASON_CARD,
+            caption = self._render(
+                fmt.season_card_template, M.BOT_SEASON_CARD,
                 title=title, season=season,
                 episodes=ep_max or "—",
                 S="S" if (ep_max or 0) != 1 else "",   # EPISODE vs EPISODES
@@ -905,10 +962,12 @@ class BotContentService:
             key=lambda r: _RES_ORDER.get(r, 9999),
         )
 
-        # Take at most the 3 reference qualities (480p, 720p, 1080p).
-        available = [q for q in _BTN_QUALITIES if q in quals]
+        # Take at most the configured number of reference qualities
+        # (default 3: 480p, 720p, 1080p — matching the reference channels).
+        cap = max(1, self._c.config.post_format.max_quality_buttons)
+        available = [q for q in _BTN_QUALITIES if q in quals][:cap]
         if not available:
-            available = quals[:3]
+            available = quals[:cap]
 
         audios = {p.audio for p in packs}
         has_dual = AudioType.DUAL_AUDIO in audios
