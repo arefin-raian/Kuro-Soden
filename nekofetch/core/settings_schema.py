@@ -18,9 +18,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+# Widgets the settings panel knows how to render. ``toggle``/``text``/``number``/
+# ``list``/``template`` are the type-inferred defaults; the rest are explicit
+# hints that turn a raw free-text prompt into something a non-coder can operate:
+#   ``choice``   — the value is one of a fixed set → tap-to-pick buttons (a typo
+#                  can no longer store garbage into an enum field).
+#   ``channel``  — a Telegram chat id → guided capture (forward a message / paste
+#                  an id), raw still accepted.
+#   ``sticker``  — a sticker file id → "send me the sticker" capture.
+#   ``timezone`` — an IANA zone → the shared timezone picker.
+WIDGETS = frozenset(
+    {"toggle", "text", "number", "list", "template", "choice", "channel",
+     "sticker", "timezone"}
+)
+
+
 @dataclass(frozen=True)
 class FieldDoc:
     desc: str                                   # what the setting does (one line)
+    label: str | None = None                    # friendly name (else derived from slug)
+    widget: str | None = None                   # explicit widget (else inferred from type)
     options: tuple[str, ...] = ()               # valid values (enum-like fields)
     option_notes: dict[str, str] = field(default_factory=dict)  # value -> meaning
     placeholders: dict[str, str] = field(default_factory=dict)  # template vars
@@ -32,6 +49,44 @@ class FieldDoc:
         # derive the value list from them so both render paths have data.
         if self.option_notes and not self.options:
             object.__setattr__(self, "options", tuple(self.option_notes.keys()))
+        # A field with a fixed value set is a choice unless told otherwise.
+        if self.widget is None and self.options:
+            object.__setattr__(self, "widget", "choice")
+        if self.widget is not None and self.widget not in WIDGETS:
+            raise ValueError(f"unknown widget {self.widget!r} (allowed: {sorted(WIDGETS)})")
+
+
+def widget_for(section: str, field_name: str, value: object) -> str:
+    """The widget to render for a field: explicit schema hint wins, else inferred
+    from the field name (raw-id / sticker / timezone conventions) and finally the
+    live value's type. Never returns None — the panel always has a UI.
+
+    Name conventions keep every current *and future* infrastructure field on a
+    guided capture without a per-field schema entry: ``*channel_id`` → channel
+    picker, ``*sticker_id`` / ``start_sticker*`` → sticker capture, ``timezone``
+    → the zone picker. A field can still override any of these with an explicit
+    ``widget=`` in its :class:`FieldDoc`.
+    """
+    doc = FIELD_DOCS.get(f"{section}.{field_name}")
+    if doc and doc.widget:
+        return doc.widget
+    if doc and doc.placeholders:
+        return "template"
+    if isinstance(value, bool):
+        return "toggle"
+    # Name-based guided widgets — only for scalar (non-list) fields.
+    if not isinstance(value, list):
+        if field_name.endswith("channel_id"):
+            return "channel"
+        if field_name.endswith("sticker_id") or field_name.startswith("start_sticker"):
+            return "sticker"
+        if field_name == "timezone":
+            return "timezone"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, list):
+        return "list"
+    return "text"
 
 
 # ── shared placeholder sets ───────────────────────────────────────────────────
@@ -633,6 +688,13 @@ OWNER_ONLY_SECTIONS = frozenset({
 
 def doc_for(section: str, field_name: str) -> FieldDoc | None:
     return FIELD_DOCS.get(f"{section}.{field_name}")
+
+
+def label_for(section: str, field_name: str) -> str | None:
+    """The schema-authored friendly label for a field, if one is set (else None
+    so callers can fall back to their own slug-prettifier)."""
+    doc = FIELD_DOCS.get(f"{section}.{field_name}")
+    return doc.label if doc else None
 
 
 def is_owner_only(section: str) -> bool:

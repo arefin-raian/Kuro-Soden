@@ -38,7 +38,12 @@ from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
 
 from nekofetch.bots.fsm import FSM
 from nekofetch.core.container import Container
-from nekofetch.core.settings_schema import doc_for, is_owner_only
+from nekofetch.core.settings_schema import (
+    doc_for,
+    is_owner_only,
+    label_for,
+    widget_for,
+)
 from nekofetch.domain.enums import Permission
 from nekofetch.services.auth_service import AuthService
 from nekofetch.services.settings_service import SettingsService
@@ -243,6 +248,14 @@ SECTION_LABELS: dict[str, str] = {
     "main_channel": "📢 Main Channel",
     "index_channel": "🔤 Index Channel",
     "thumbnail_channel": "🎬 Thumbnail Channel",
+    # Owner-only / infrastructure sections (admin bot surfaces these too).
+    "sources": "🌐 Sources",
+    "access": "👥 Access & Roles",
+    "shortlink": "🔗 Shortlinks",
+    "storage_channel": "🗄 Storage Channel",
+    "log_channel": "📋 Control Center",
+    "ui": "🎛 Interface",
+    "localization": "🌍 Language",
 }
 
 # A handful of field slugs whose auto-humanised name would still read oddly.
@@ -286,13 +299,35 @@ _FIELD_LABELS: dict[str, str] = {
 }
 
 
-def field_label(field: str) -> str:
-    """Friendly, human label for a config field (never the raw slug)."""
+def field_label(field: str, section: str | None = None) -> str:
+    """Friendly, human label for a config field (never the raw slug).
+
+    Priority: schema-authored ``label`` (needs the section) → the local
+    ``_FIELD_LABELS`` map → a title-cased slug. The section is optional so old
+    call sites that only have the field still work.
+    """
+    if section is not None:
+        schema_label = label_for(section, field)
+        if schema_label:
+            return schema_label
     return _FIELD_LABELS.get(field, field.replace("_", " ").title())
 
 
 def section_label(section: str) -> str:
     return SECTION_LABELS.get(section, section.replace("_", " ").title())
+
+
+def _forwarded_chat_id(message: Message) -> int | None:
+    """Extract the origin chat id from a forwarded message, if present.
+
+    Pyrogram exposes the origin as ``forward_from_chat`` (older) — we read the id
+    off it defensively so a forwarded post from a channel yields ``-100…`` without
+    the operator having to know the id. Returns ``None`` when there's no channel
+    origin to read.
+    """
+    chat = getattr(message, "forward_from_chat", None)
+    cid = getattr(chat, "id", None)
+    return int(cid) if cid is not None else None
 
 
 def _shorten(value: object, limit: int = 22) -> str:
@@ -317,12 +352,22 @@ def _bot_icon(bot: str) -> str:
     return _ICON.get(bot, "🤖")
 
 
-def hub_screen(bot: str, title: str, blurb: str, sections: Sequence[str]) -> Screen:
-    """The settings root: a friendly section list, two buttons per row."""
+def hub_screen(
+    bot: str, title: str, blurb: str, sections: Sequence[str],
+    *, extra_buttons: Sequence[tuple[str, str]] = (),
+) -> Screen:
+    """The settings root: a friendly section list, two buttons per row.
+
+    ``extra_buttons`` (``[(label, callback_data), …]``) are appended above Back —
+    used for per-admin surfaces (e.g. "My Timezone") that live outside the
+    config-backed sections.
+    """
     rows: list[list[tuple[str, str]]] = []
     labelled = [(section_label(s), s) for s in sections]
     for i in range(0, len(labelled), 2):
         rows.append([(lbl, cb(bot, "set", "sec", s)) for lbl, s in labelled[i : i + 2]])
+    for lbl, data in extra_buttons:
+        rows.append([(lbl, data)])
     rows.append([("⇐ Back", cb(bot, "home"))])
     caption = (
         f"{_bot_icon(bot)}  <b>{title}</b>\n\n"
@@ -336,11 +381,18 @@ def hub_screen(bot: str, title: str, blurb: str, sections: Sequence[str]) -> Scr
 def _section_rows(svc: SettingsService, bot: str, section: str) -> list[list[tuple[str, str]]]:
     rows: list[list[tuple[str, str]]] = []
     for field, value, kind in svc.section_fields(section):
-        label = field_label(field)
-        if kind == "bool":
+        label = field_label(field, section)
+        widget = widget_for(section, field, value)
+        if widget == "toggle":
             mark = "🟢" if value else "⚪️"
             rows.append([(f"{mark}  {label}", cb(bot, "set", "tog", f"{section}.{field}"))])
+        elif widget == "choice":
+            # Fixed value set → open the tap-to-pick screen (no free-text typos).
+            rows.append([(f"{label}  ·  {_shorten(value)}",
+                          cb(bot, "set", "pick", f"{section}.{field}"))])
         else:
+            # text / number / list / template / channel / sticker / timezone all
+            # open the edit card, which adapts its capture to the widget.
             rows.append([(f"{label}  ·  {_shorten(value)}",
                           cb(bot, "set", "edit", f"{section}.{field}"))])
     rows.append([("⇐ Back", cb(bot, "set", "home"))])
@@ -357,16 +409,23 @@ def section_screen(svc: SettingsService, bot: str, section: str) -> Screen:
                   keyboard=keyboard(*_section_rows(svc, bot, section)))
 
 
-def field_screen(bot: str, section: str, field: str, current: object, kind: str) -> Screen:
+def field_screen(
+    bot: str, section: str, field: str, current: object, kind: str,
+    *, widget: str | None = None,
+) -> Screen:
     """The human-friendly editor card for one setting.
 
     Shows, in plain language: what it does, (for templates) a LIVE preview of how
     the post will look filled with real sample data, the variables you can drop in
     with plain descriptions, what it's set to now, and how to change it. No raw
     field slugs, no bare tokens, no ``/command`` syntax.
+
+    ``widget`` tailors the closing instruction: ``channel`` invites forwarding a
+    message or pasting an id, ``sticker`` invites sending the sticker itself, and
+    everything else keeps the "send your new value" prompt.
     """
     doc = doc_for(section, field)
-    label = field_label(field)
+    label = field_label(field, section)
     parts: list[str] = [f"{_bot_icon(bot)}  <b>{label}</b>", ""]
 
     desc = doc.desc if doc else f"Sets “{label}”."
@@ -407,11 +466,49 @@ def field_screen(bot: str, section: str, field: str, current: object, kind: str)
     shown = ", ".join(map(str, current)) if isinstance(current, list) else str(current or "—")
     parts += ["", f"<b>Right now:</b> <code>{_html.escape(shown)}</code>"]
 
-    tail = " (separate several with commas)" if kind == "list" else ""
-    parts += ["", f"<i>Send your new value as a message{tail}. Send /cancel to keep it.</i>"]
+    if widget == "channel":
+        parts += ["", "<i>Forward any message from the channel, or paste its id "
+                  "(the long -100… number). Send /cancel to keep it.</i>"]
+    elif widget == "sticker":
+        parts += ["", "<i>Send the sticker itself and I'll grab its id, or paste "
+                  "a file_id. Send /cancel to keep it, or “none” to clear it.</i>"]
+    else:
+        tail = " (separate several with commas)" if kind == "list" else ""
+        parts += ["", f"<i>Send your new value as a message{tail}. Send /cancel to keep it.</i>"]
 
     kb = keyboard([("✗ Cancel", cb(bot, "set", "sec", section))])
     return Screen(caption="\n".join(parts), image=pick_artwork(bot), keyboard=kb)
+
+
+def choice_screen(bot: str, section: str, field: str, current: object) -> Screen:
+    """A tap-to-pick card for an enum-like field. One button per allowed value,
+    the current pick marked, so a typo can never store garbage into the field.
+
+    The schema's ``option_notes`` (value → meaning) are listed in the caption so
+    the operator knows what each choice does before tapping.
+    """
+    doc = doc_for(section, field)
+    label = field_label(field, section)
+    parts: list[str] = [f"{_bot_icon(bot)}  <b>{label}</b>", ""]
+    desc = doc.desc if doc else f"Sets “{label}”."
+    parts.append(f"<blockquote>{desc}</blockquote>")
+
+    options = list(doc.options) if doc else []
+    if doc and doc.option_notes:
+        parts += ["", "<b>Choices:</b>"]
+        parts += [f"  • <code>{_html.escape(val)}</code> — {note}"
+                  for val, note in doc.option_notes.items()]
+
+    cur = str(current) if current not in (None, "") else ""
+    parts += ["", f"<b>Right now:</b> <code>{_html.escape(cur or '—')}</code>",
+              "", "<i>Tap a choice to set it.</i>"]
+
+    rows: list[list[tuple[str, str]]] = []
+    for opt in options:
+        mark = "🔘 " if opt == cur else "▫️ "
+        rows.append([(f"{mark}{opt}", cb(bot, "set", "opt", f"{section}.{field}", opt))])
+    rows.append([("✗ Cancel", cb(bot, "set", "sec", section))])
+    return Screen(caption="\n".join(parts), image=pick_artwork(bot), keyboard=keyboard(*rows))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -428,6 +525,7 @@ def register_settings(
     blurb: str,
     group: int = 0,
     input_group: int = 5,
+    extra_buttons: Sequence[tuple[str, str]] = (),
 ) -> None:
     """Wire ``bot``'s settings hub/section/field/edit flow onto real config.
 
@@ -435,9 +533,11 @@ def register_settings(
     ``AppConfig``; missing ones are dropped). Callback namespace is ``{bot}|set|``
     and the free-text edit capture runs in ``input_group`` so it doesn't fight
     the bot's other message handlers. Permissions and owner-only gating mirror
-    the admin/Levi panels.
+    the admin/Levi panels. ``extra_buttons`` are appended to the hub for per-admin
+    surfaces that live outside config (e.g. the timezone picker).
     """
     sections = list(sections)
+    extra_buttons = list(extra_buttons)
     auth = AuthService(container)
     svc = SettingsService(container)
     fsm = FSM(container.redis, bot=bot)
@@ -460,8 +560,13 @@ def register_settings(
             return True
         return False
 
-    def _hub() -> Screen:
-        return hub_screen(bot, title, blurb, _live_sections())
+    def _hub(user=None) -> Screen:
+        # Owner-only sections are hidden outright from non-owners (not just gated
+        # on tap), so the hub reads the same as the old admin panel did.
+        is_owner = auth.is_owner(user) if user is not None else True
+        sections = [s for s in _live_sections()
+                    if is_owner or not is_owner_only(s)]
+        return hub_screen(bot, title, blurb, sections, extra_buttons=extra_buttons)
 
     # ── hub ──────────────────────────────────────────────────────────────────
     # Both ``{bot}|set|home`` (Back-from-section) and the bare ``{bot}|settings``
@@ -474,7 +579,8 @@ def register_settings(
         if await _deny(q):
             return
         await q.answer()
-        await send_screen(client, q.message.chat.id, _hub(), old_msg=q.message)
+        await send_screen(client, q.message.chat.id,
+                          _hub(getattr(q, "nf_user", None)), old_msg=q.message)
 
     # ── one section ────────────────────────────────────────────────────────────
     @client.on_callback_query(filters.regex(rf"^{bot}\|set\|sec\|"), group=group)
@@ -494,7 +600,7 @@ def register_settings(
         if await _deny(q, section):
             return
         new_val = await svc.toggle(section, field)
-        await q.answer(f"{field_label(field)} → {'on' if new_val else 'off'}")
+        await q.answer(f"{field_label(field, section)} → {'on' if new_val else 'off'}")
         await edit_markup(q, _section_rows(svc, bot, section))
 
     # ── open a field editor ──────────────────────────────────────────────────
@@ -506,15 +612,51 @@ def register_settings(
             return
         current = getattr(svc.section(section), field, "")
         kind = "list" if isinstance(current, list) else "value"
-        await fsm.set(q.from_user.id, state_edit, section=section, field=field)
+        widget = widget_for(section, field, current)
+        # Remember the widget so the message capture knows to read a sticker id or
+        # a forwarded channel id rather than the raw text.
+        await fsm.set(q.from_user.id, state_edit, section=section, field=field,
+                      widget=widget)
         await q.answer()
         await send_screen(client, q.message.chat.id,
-                          field_screen(bot, section, field, current, kind),
+                          field_screen(bot, section, field, current, kind, widget=widget),
                           old_msg=q.message)
 
-    # ── capture the typed value ──────────────────────────────────────────────
+    # ── open a choice picker (enum-like field) ────────────────────────────────
+    @client.on_callback_query(filters.regex(rf"^{bot}\|set\|pick\|"), group=group)
+    async def _on_pick(_: Client, q: CallbackQuery) -> None:
+        key = q.data.split("|", 3)[3]
+        section, field = key.split(".", 1)
+        if await _deny(q, section):
+            return
+        current = getattr(svc.section(section), field, "")
+        await q.answer()
+        await send_screen(client, q.message.chat.id,
+                          choice_screen(bot, section, field, current), old_msg=q.message)
+
+    # ── apply a chosen option ─────────────────────────────────────────────────
+    @client.on_callback_query(filters.regex(rf"^{bot}\|set\|opt\|"), group=group)
+    async def _on_opt(_: Client, q: CallbackQuery) -> None:
+        # data: {bot}|set|opt|{section}.{field}|{value}
+        _, _, _, key, value = q.data.split("|", 4)
+        section, field = key.split(".", 1)
+        if await _deny(q, section):
+            return
+        try:
+            await svc.set_value(section, field, value)
+        except (ValueError, KeyError, TypeError):
+            await q.answer("Couldn't set that choice.", show_alert=True)
+            return
+        await q.answer(f"{field_label(field, section)} → {value}")
+        await send_screen(client, q.message.chat.id,
+                          choice_screen(bot, section, field, value), old_msg=q.message)
+
+    # ── capture the typed / sent value ────────────────────────────────────────
+    # Text covers every widget; stickers and forwarded messages let the guided
+    # ``sticker``/``channel`` widgets capture an id without the user copy-pasting.
     @client.on_message(
-        filters.text & filters.private & ~filters.command(["start", "cancel"]),
+        (filters.text | filters.sticker | filters.forwarded)
+        & filters.private & ~filters.command(["start", "cancel"]),
         group=input_group,
     )
     async def _on_input(_: Client, message: Message) -> None:
@@ -527,19 +669,46 @@ def register_settings(
         if not _allowed(user):
             return
         section, field = data.get("section"), data.get("field")
+        widget = data.get("widget")
         if is_owner_only(section) and not auth.is_owner(user):
             await fsm.clear(message.from_user.id)
             await message.reply("That section is owner-only.", parse_mode=ParseMode.HTML)
             return
+
+        # Guided widgets: pull the id out of the sticker / forwarded message before
+        # falling back to typed text. A wrong message type just re-prompts and
+        # keeps the edit state alive so the next send still lands.
+        raw: str | None = None
+        if widget == "sticker":
+            if message.sticker:
+                raw = message.sticker.file_id
+            elif message.text:
+                t = message.text.strip()
+                raw = "" if t.lower() in ("none", "clear", "-") else t
+        elif widget == "channel":
+            fwd = _forwarded_chat_id(message)
+            if fwd is not None:
+                raw = str(fwd)
+            elif message.text:
+                raw = message.text.strip()
+        if raw is None and message.text is None:
+            # e.g. a sticker sent to a text field — guide, don't crash.
+            await message.reply(
+                "That doesn't fit this setting. Send it as text, or /cancel.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
         await fsm.clear(message.from_user.id)
 
         current = getattr(svc.section(section), field, None)
-        # Templates/text keep their styling; scalars and lists take the plain text
-        # so number/bool/list coercion in set_typed sees clean input.
-        if isinstance(current, (bool, int, float, list)):
-            raw = str(message.text or "").strip()
-        else:
-            raw = parse_user_markup(message)
+        if raw is None:
+            # Templates/text keep their styling; scalars and lists take the plain
+            # text so number/bool/list coercion in set_typed sees clean input.
+            if isinstance(current, (bool, int, float, list)):
+                raw = str(message.text or "").strip()
+            else:
+                raw = parse_user_markup(message)
         try:
             value = await svc.set_typed(section, field, raw)
         except (ValueError, KeyError, TypeError):
@@ -551,7 +720,7 @@ def register_settings(
             return
 
         shown = ", ".join(map(str, value)) if isinstance(value, list) else str(value)
-        confirm = [f"✅ <b>{field_label(field)}</b> saved."]
+        confirm = [f"✅ <b>{field_label(field, section)}</b> saved."]
         doc = doc_for(section, field)
         if isinstance(value, str) and doc and doc.placeholders and value.strip():
             confirm += ["", "<b>Preview:</b>", f"<blockquote>{render_sample(value)}</blockquote>"]
@@ -575,7 +744,7 @@ def register_settings(
                 parse_mode=ParseMode.HTML,
             )
             return
-        await send_screen(client, message.chat.id, _hub())
+        await send_screen(client, message.chat.id, _hub(user))
 
     # ── /cancel bails out of an in-progress edit ─────────────────────────────
     @client.on_message(filters.command("cancel") & filters.private, group=input_group)
