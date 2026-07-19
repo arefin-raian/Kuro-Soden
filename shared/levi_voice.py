@@ -106,7 +106,7 @@ TELEGRAM_NOTE = (
     "screenshot bot to pull MediaInfo and a frame.\n\n"
     "• Watermark <i>burned into the video</i> → discard it. We don't ship "
     "someone else's brand.\n"
-    "• Metadata tags → strip them.\n"
+    "• Metadata tags → We will strip them.\n"
     "Only clean files come through."
 )
 

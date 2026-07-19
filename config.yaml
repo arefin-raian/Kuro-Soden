@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# NekoFetch / Kuro Sōden — application configuration
+# Kuro Sōden — application configuration
 #
 # Feature toggles & behaviour. Editable here or, at runtime, via the admin panel
 # (runtime overrides are stored in MongoDB and take precedence over this file).
@@ -47,9 +47,9 @@ processing:
 #            {source} {group} {content_type}
 rename:
   enabled: true
-  template: "{title} S{season}E{episode} [{resolution}] [{audio}] - {group}"
-  movie_template: "{short_title} - Movie [{resolution}] [{audio}] - {group}"
-  special_template: "{short_title} - {content_type} E{episode} [{resolution}] [{audio}] - {group}"
+  template: "{title} S{season}E{episode} [{resolution}] [{audio}] @AniXWeebs"
+  movie_template: "{short_title} - Movie [{resolution}] [{audio}] @AniXWeebs"
+  special_template: "{short_title} - {content_type} E{episode} [{resolution}] [{audio}] @AniXWeebs"
 
 # Container metadata rewriting during processing.
 metadata:
