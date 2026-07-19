@@ -224,6 +224,22 @@ class SenkuThumbnailAdapter:
         sel = await self.cache.set_selection(code, index, asset=asset_type, value=url)
         return sel, self.next_asset(sel)
 
+    async def store_upload(self, code: str, index: int, asset_type: str,
+                           file_bytes: bytes,
+                           ) -> tuple[Selection, str | None]:
+        """Persist an admin-uploaded asset image; return (selection, next asset).
+
+        The bytes are uploaded to catbox so the render step (and later backup)
+        sees a stable public URL — identical downstream to a numbered pick.
+        Raises on upload failure so the caller can voice a retry; a successful
+        upload stores the URL in the same field ``store_pick`` uses.
+        """
+        from nekofetch.providers.catbox import upload_bytes
+
+        url = await upload_bytes(file_bytes, filename=f"{asset_type}.jpg")
+        sel = await self.cache.set_selection(code, index, asset=asset_type, value=url)
+        return sel, self.next_asset(sel)
+
     async def render_entry(self, code: str, entry: EntryData) -> "object | None":
         """Render this entry's thumbnail from its picks; mark done on success.
 

@@ -51,6 +51,9 @@ STATE_AWAIT_CHANNEL = "senku:wiz:await_channel"
 # FSM state: waiting for the admin to paste a corrected watch order (Phase 4 edit).
 STATE_AWAIT_ORDER = "senku:wiz:await_order"
 
+# FSM state: waiting for the admin to send their own asset image (logo/poster/bg).
+STATE_AWAIT_UPLOAD = "senku:wiz:await_upload"
+
 # Commands that must never be swallowed by the free-text channel step.
 _RESERVED = ["start", "tasks", "create", "generate", "settings", "help", "cancel"]
 
@@ -302,11 +305,16 @@ def register(client: Client, container: Container) -> None:
         franchise = await cache.get_franchise(code)
         title = await _title_of(code, franchise)
         assets, gallery, rows = await thumbs.asset_step(code, entry, asset)
+        # Manual override: the admin can upload their own image instead of picking
+        # a numbered TMDB asset (senku|wiz|upl|<code>|<index>|<asset>).
+        upload_row = [(V.BTN_UPLOAD_OWN,
+                       cb(BOT, "wiz", "upl", code, str(entry.index), asset))]
         if not assets:
-            # TMDB had nothing for this type — record empty and skip forward so the
-            # loop never dead-ends on a missing asset class.
-            await cache.set_selection(code, entry.index, asset=asset, value="")
-            await _thumb_next(chat_id, code, old_msg=old_msg)
+            # TMDB had nothing for this type — still let the admin upload their own
+            # rather than dead-ending. The loop runs in the admin's private DM, so
+            # chat_id IS their telegram user id (what the FSM keys on).
+            await _ask_upload(chat_id, chat_id, code, entry.index, asset,
+                              old_msg=old_msg)
             return
         body = "\n\n".join([
             V.thumb_entry_header(entry.label, entry.index, len(entries)),
@@ -319,7 +327,22 @@ def register(client: Client, container: Container) -> None:
             client, chat_id,
             card(body, image=await _art(franchise, title), bot_name=BOT,
                  url_buttons=url_buttons,
-                 buttons=rows + [[(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
+                 buttons=rows + [upload_row,
+                                 [(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
+            old_msg=old_msg,
+        )
+
+    async def _ask_upload(chat_id: int, user_id: int, code: str, index: int,
+                          asset: str, *, old_msg: Message | None) -> None:
+        """Arm the manual-upload step: prompt the admin to send their own image."""
+        await fsm.set(user_id, STATE_AWAIT_UPLOAD, code=code, index=index, asset=asset)
+        franchise = await cache.get_franchise(code)
+        title = await _title_of(code, franchise)
+        await send_screen(
+            client, chat_id,
+            card(V.thumb_upload_prompt(asset), image=await _art(franchise, title),
+                 bot_name=BOT,
+                 buttons=[[(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
             old_msg=old_msg,
         )
 
@@ -505,6 +528,16 @@ def register(client: Client, container: Container) -> None:
                 await q.answer("Bad selection.", show_alert=True)
                 return
             await _thumb_pick(q, code, index, asset, number)
+        elif action == "upl":
+            # senku|wiz|upl|<code>|<index>|<asset> — arm the manual-upload step.
+            try:
+                index, asset = int(parts[4]), parts[5]
+            except (IndexError, ValueError):
+                await q.answer("Bad asset.", show_alert=True)
+                return
+            await _ask_upload(chat_id, q.from_user.id, code, index, asset,
+                              old_msg=q.message)
+            await q.answer()
         elif action == "gen":
             # senku|wiz|gen|<code>|<index>
             try:
@@ -571,6 +604,48 @@ def register(client: Client, container: Container) -> None:
             await message.reply(V.channel_missing("the channel @username or ID"))
             return
         await _verify_and_store(message.chat.id, message.from_user.id, code, raw)
+
+    # ── Manual asset upload (group=2, only while awaiting an uploaded image) ────
+    @client.on_message(
+        (filters.photo | filters.document) & filters.private,
+        group=2,
+    )
+    async def _upload_media(_: Client, message: Message) -> None:
+        if not message.from_user:
+            return
+        state, data = await fsm.get(message.from_user.id)
+        if state != STATE_AWAIT_UPLOAD:
+            return  # not our turn
+        if not _staff(message):
+            return
+        code = data.get("code", "")
+        index = int(data.get("index", 0))
+        asset = data.get("asset", "")
+
+        # A document must actually be an image — reject PDFs, archives, etc.
+        if message.document and not (message.document.mime_type or "").startswith("image/"):
+            await message.reply(V.THUMB_UPLOAD_BAD)
+            return
+
+        try:
+            buf = await client.download_media(message, in_memory=True)
+            file_bytes = buf.getvalue()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("senku.wiz.upload_download_failed", code=code, error=str(exc))
+            await message.reply(V.THUMB_UPLOAD_FAILED)
+            return
+
+        try:
+            await thumbs.store_upload(code, index, asset, file_bytes)
+        except Exception as exc:  # noqa: BLE001 — catbox host hiccup
+            log.warning("senku.wiz.upload_store_failed", code=code, error=str(exc))
+            await message.reply(V.THUMB_UPLOAD_FAILED)
+            return
+
+        await fsm.clear(message.from_user.id)
+        await message.reply(V.thumb_uploaded(asset))
+        # Advance to the next asset (or the Generate card) just like a numbered pick.
+        await _thumb_next(message.chat.id, code, old_msg=None)
 
 
 async def _latest_task(container: Container, message: Message) -> str | None:

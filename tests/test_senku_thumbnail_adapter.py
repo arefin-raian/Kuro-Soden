@@ -175,6 +175,48 @@ async def test_store_pick_out_of_range_is_noop(adapter):
     assert nxt == "logo"  # still needs a logo
 
 
+# ── manual upload: catbox URL persists to the same field, advances the loop ──────
+
+@pytest.mark.asyncio
+async def test_store_upload_persists_catbox_url_and_advances(adapter, monkeypatch):
+    await adapter.cache.set_entries("REQ-1", _entries())
+
+    uploaded: dict = {}
+
+    async def fake_upload_bytes(file_bytes, *, filename="card.jpg", **kw):
+        uploaded["bytes"] = file_bytes
+        uploaded["filename"] = filename
+        return "https://files.catbox.moe/abc123.jpg"
+
+    import nekofetch.providers.catbox as catbox
+    monkeypatch.setattr(catbox, "upload_bytes", fake_upload_bytes)
+
+    sel, nxt = await adapter.store_upload("REQ-1", 1, "poster", b"\xff\xd8rawjpeg")
+    # the uploaded URL lands in the SAME field a numbered poster pick would use
+    assert sel.poster_url == "https://files.catbox.moe/abc123.jpg"
+    assert uploaded["bytes"] == b"\xff\xd8rawjpeg"
+    assert uploaded["filename"] == "poster.jpg"
+    # a poster upload still leaves logo + bg to collect
+    assert nxt == "logo"
+
+
+@pytest.mark.asyncio
+async def test_store_upload_propagates_host_failure(adapter, monkeypatch):
+    await adapter.cache.set_entries("REQ-1", _entries())
+
+    async def boom(file_bytes, *, filename="card.jpg", **kw):
+        raise RuntimeError("catbox down")
+
+    import nekofetch.providers.catbox as catbox
+    monkeypatch.setattr(catbox, "upload_bytes", boom)
+
+    with pytest.raises(RuntimeError):
+        await adapter.store_upload("REQ-1", 1, "poster", b"data")
+    # nothing persisted — the field is still empty so the admin can retry
+    sel = await adapter.cache.get_selection("REQ-1", 1)
+    assert sel.poster_url is None
+
+
 # ── next_asset ordering ──────────────────────────────────────────────────────────
 
 def test_next_asset_order():

@@ -206,6 +206,31 @@ def thumb_selected(asset: str, number: int) -> str:
     return f"✅ {words.get(asset, asset.title())} #{number} locked in."
 
 
+def thumb_upload_prompt(asset: str) -> str:
+    words = {"logo": "logo", "poster": "poster", "bg": "backdrop"}
+    a = words.get(asset, asset)
+    return (
+        f"📤 <b>Send your own {a}</b>\n"
+        f"Drop the {a} image right here — as a photo or an image file. "
+        "I'll wire it straight into the render."
+    )
+
+
+def thumb_uploaded(asset: str) -> str:
+    words = {"logo": "Logo", "poster": "Poster", "bg": "Backdrop"}
+    return f"✅ Your {words.get(asset, asset.title())} is locked in."
+
+
+THUMB_UPLOAD_BAD = (
+    "🔬 That's not an image. Send a photo or an image file, "
+    "or tap a number from the gallery instead."
+)
+THUMB_UPLOAD_FAILED = (
+    "⚗️ The upload host choked on that one. Try again, "
+    "or pick a number from the gallery."
+)
+
+
 def thumb_generated(index: int, total: int) -> str:
     if index >= total:
         return (
@@ -303,6 +328,7 @@ BTN_TMDB_POSTER = "🖼 Open TMDB Poster Page"
 BTN_SHOW_LOGOS = "🔬 Show Logos"
 BTN_SHOW_POSTERS = "🖼 Show Posters"
 BTN_SHOW_BACKDROPS = "🌄 Show Backdrops"
+BTN_UPLOAD_OWN = "⬆️ Upload my own"
 BTN_GENERATE = "⚗️ Generate Thumbnail"
 
 BTN_ORDER_CORRECT = "✅ Order is correct"
