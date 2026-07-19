@@ -270,14 +270,6 @@ def admin_panel(mode: str, requests_open: bool, pending: int, work_open: int) ->
     )
 
 
-SETTINGS_BODY = (
-    "Tune how the game is played — request limits, the admin pool, and how "
-    "sharply I enforce the rules.\n\n"
-    "<i>Tap a row to read what it governs, then send the new value as a message. "
-    "A precise hand shapes a precise campaign.</i>"
-)
-
-
 def queue_view(pending: int, work_open: int) -> str:
     return (
         f"{ICON} <b>The Board</b>\n\n"
@@ -477,7 +469,6 @@ BTN_BATCH = "📦 Batch Work"
 BTN_QUEUE = "📋 The Board"
 BTN_HOME = "⇐ Home"
 BTN_BACK_ADMIN = "⇐ Back to Command"
-BTN_BACK_SETTINGS = "⇐ Back to Settings"
 BTN_PAUSE = "🔴 Pause Requests"
 BTN_RESUME = "🟢 Resume Requests"
 BTN_PENDING = "📋 Pending Requests"

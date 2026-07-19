@@ -16,6 +16,21 @@ from nekofetch.core.container import Container
 def register_all(client: Client, container: Container) -> None:
     from nekofetch.bots.middleware import install_auth_middleware
     from kurosoden.bots.gojo.handlers.tasks import register as register_tasks
+    from kurosoden.shared.settings_ui import register_settings
 
     install_auth_middleware(client, container)
     register_tasks(client, container)
+
+    # Human-friendly settings — Gojo owns the public-facing channels: the main
+    # channel caption, the A–Z index, and the thumbnail channel. Registered
+    # before the app.py `gojo|` fallback so every `gojo|set|…` tap lands here.
+    register_settings(
+        client, container, "gojo",
+        ["main_channel", "index_channel", "thumbnail_channel"],
+        title="Gojo — Publishing Settings",
+        blurb=(
+            "How every public post reads — the main-channel caption, the A–Z "
+            "index lines, and the thumbnail channel. Edit a template and you'll "
+            "see a live preview filled with a real example before you save."
+        ),
+    )

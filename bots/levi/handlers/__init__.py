@@ -40,12 +40,22 @@ def register_all(client: Client, container: Container) -> None:
 
     review.register(client, container)
 
-    # ── Levi's native config-driven settings panel (levi|set|…) ────────────
+    # ── Levi's settings panel (levi|set|…) — the shared human-friendly engine ──
     # Registered before the app.py `levi|` fallback so every settings tap is
-    # handled here. Replaces the old static /dlset-style screens.
-    from kurosoden.bots.levi.handlers.settings import register as register_settings
+    # handled here. Levi owns the download/processing side of the config.
+    from kurosoden.shared.settings_ui import register_settings
 
-    register_settings(client, container)
+    register_settings(
+        client, container, "levi",
+        ["downloads", "acquisition", "processing",
+         "rename", "metadata", "thumbnail", "watermark", "branding"],
+        title="Levi — Downloader Settings",
+        blurb=(
+            "How the download detail runs — how many files at once, which "
+            "qualities to grab, how files are named and branded. On/off "
+            "switches flip in place; text fields open an editor with an example."
+        ),
+    )
 
     # ── Levi task handlers (task list → routes into the review flow) ───────
     from kurosoden.bots.levi.handlers.tasks import register as register_tasks

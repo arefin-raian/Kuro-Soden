@@ -50,22 +50,6 @@ def admin_panel(*, mode: str, requests_open: bool, pending: int,
     return card(caption, bot_name=BOT, buttons=rows)
 
 
-def settings_hub() -> Screen:
-    caption = f"{V.ICON} <b>Rules of Engagement</b>\n\n{V.SETTINGS_BODY}"
-    rows = [
-        [("Request Limits", cb(BOT, "set", "limits")),
-         ("Admin Pool", cb(BOT, "set", "admins"))],
-        [(V.BTN_HOME, cb(BOT, "home"))],
-    ]
-    return card(caption, bot_name=BOT, buttons=rows)
-
-
-def settings_key(caption: str) -> Screen:
-    """Render a settings-onboarding caption (built by menu_router) as a card."""
-    return card(caption, bot_name=BOT,
-                buttons=[[(V.BTN_BACK_SETTINGS, cb(BOT, "settings"))]])
-
-
 def queue(*, pending: int, work_open: int, back: str = "home") -> Screen:
     caption = V.queue_view(pending, work_open)
     return card(caption, bot_name=BOT,

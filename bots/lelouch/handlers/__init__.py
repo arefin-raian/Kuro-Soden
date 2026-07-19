@@ -54,3 +54,20 @@ def register_all(client: Client, container: Container) -> None:
     from nekofetch.bots.admin.handlers import review
 
     review.register(client, container)
+
+    # ── Lelouch's settings panel (lelouch|set|…) — shared human-friendly engine ─
+    # Registered before the app.py `lelouch|` dispatcher so every settings tap is
+    # handled here. Lelouch owns the request-intake side of the config: whether
+    # requests are accepted at all, force-join gating, and queue sizing.
+    from kurosoden.shared.settings_ui import register_settings
+
+    register_settings(
+        client, container, "lelouch",
+        ["features", "security", "queue"],
+        title="Lelouch — Request Settings",
+        blurb=(
+            "The request desk — whether new requests are accepted, whether "
+            "users must join your channels first, and how many requests wait "
+            "in line. On/off switches flip in place; numbers open a simple editor."
+        ),
+    )

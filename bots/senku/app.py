@@ -60,8 +60,7 @@ def build_senku(container: Container, token: str) -> Client:
     # maps every action to a real screen — no more "Type /X in chat" toasts.
     from pyrogram.types import (CallbackQuery, InlineKeyboardButton,
                                 InlineKeyboardMarkup)
-    from kurosoden.shared.menu_router import settings_hub, settings_onboarding, tool_screen
-    from kurosoden.shared.settings_content import ALL_BY_BOT
+    from kurosoden.shared.menu_router import tool_screen
     from nekofetch.ui.components import cb
     from nekofetch.ui.screens import Screen, send_screen
 
@@ -138,41 +137,11 @@ def build_senku(container: Container, token: str) -> Client:
             await q.answer()
             return
 
-        # ¬¬ Settings hub ¬¬
-        if action == "settings":
-            caption, keyboard = settings_hub(
-                bot, title="Senku Settings",
-                body=("Configure channel branding, footer text, sticker packs, "
-                      "and the layout of every auto-generated artifact.\n\n"
-                      "<i>Tap a row to open the help panel for that key, then "
-                      "send the new value as a chat message.</i>"),
-                items=[("Branding", "branding"), ("Content Layout", "layout")],
-            )
-            await send_screen(client, q.message.chat.id,
-                              Screen(caption=caption, image=pick_artwork(bot),
-                                     keyboard=keyboard), old_msg=q.message)
-            await q.answer()
-            return
-
-        # ¬¬ set|<key> onboarding ¬¬
-        if action == "set" and arg:
-            info = ALL_BY_BOT.get(bot, {}).get(arg)
-            if info:
-                caption, keyboard = settings_onboarding(
-                    bot, arg, title=info["title"], about=info["about"],
-                    when_to_use=info.get("when_to_use", ""),
-                    options=info.get("options"),
-                    placeholders=info.get("placeholders"),
-                    supports_html=info.get("supports_html", False),
-                    example=info.get("example", ""),
-                    danger=info.get("danger", ""),
-                    hint=info.get("hint", "Send the new value as a chat message."),
-                )
-                await send_screen(client, q.message.chat.id,
-                                  Screen(caption=caption, image=pick_artwork(bot),
-                                         keyboard=keyboard), old_msg=q.message)
-                await q.answer()
-                return
+        # ¬¬ Settings ¬¬
+        # The human-friendly settings surface (hub → section → field → live
+        # edit) lives in the shared engine (shared/settings_ui.py), registered
+        # under `senku|set|…` and `senku|settings` in handlers/register_all
+        # BEFORE this fallback, so it handles every settings tap here.
 
         # ── Help ──
         if action == "help":
@@ -229,22 +198,7 @@ def build_senku(container: Container, token: str) -> Client:
         )
         await send_rich_welcome(client, container, message, screen, bot_name="senku")
 
-    # ── /settings ─────────────────────────────────────────────────────────────
-    @client.on_message(filters.command("settings"))
-    async def _settings(_: Client, message: Message) -> None:
-        from nekofetch.ui.screens import Screen, send_screen
-        from nekofetch.ui.components import cb, keyboard
-
-        screen = Screen(
-            caption="<b>⚙️ Senku Settings</b>\n\n"
-                     "Configure distribution preferences and branding.",
-            keyboard=keyboard(
-                [("Branding", cb("senku", "set", "branding")),
-                 ("Content Layout", cb("senku", "set", "layout"))],
-                [("Back", cb("senku", "home"))],
-            ),
-            image=pick_artwork("senku"),
-        )
-        await send_screen(client, message.chat.id, screen)
+    # /settings is handled by the shared human-friendly settings engine
+    # (kurosoden.shared.settings_ui.register_settings), wired in register_all.
 
     return client

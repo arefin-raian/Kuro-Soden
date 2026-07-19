@@ -1,13 +1,15 @@
-"""Levi native settings panel — Phase 0 coverage.
+"""Levi settings panel — routing + config-mapping coverage.
 
 Levi's old ``/settings`` pointed at ``/dlset`` / ``/procset`` commands that no
-handler ever parsed. This suite guards the replacement:
+handler ever parsed. It was then replaced by a bespoke ``handlers/settings.py``,
+and finally by the shared human-friendly engine in
+:mod:`kurosoden.shared.settings_ui` that all four bots share. This suite guards
+the replacement:
 
   • every Levi settings section maps to a real ``AppConfig`` attribute,
   • every ``levi|set|…`` callback a settings surface emits is actually routed
     (no dead taps), and
-  • the new ``TELEGRAM_USERBOT_SESSION`` env field and the ``edit_markup``
-    live-toggle helper exist and behave.
+  • the ``edit_markup`` live-toggle helper exists and behaves.
 """
 
 from __future__ import annotations
@@ -22,7 +24,11 @@ from pyrogram.types import CallbackQuery
 
 from kurosoden.tests.test_lelouch_routing import FakeContainer
 
-from kurosoden.bots.levi.handlers.settings import LEVI_SECTIONS, _SECTION_LABEL
+# The config sections Levi owns — declared where the bot wires the shared engine.
+LEVI_SECTIONS = (
+    "downloads", "acquisition", "processing",
+    "rename", "metadata", "thumbnail", "watermark", "branding",
+)
 
 
 # ── section → real config field mapping ─────────────────────────────────────────
@@ -39,8 +45,10 @@ def test_every_levi_section_is_a_real_config_attr():
 
 
 def test_every_levi_section_has_a_label():
-    unlabelled = [s for s in LEVI_SECTIONS if s not in _SECTION_LABEL]
-    assert not unlabelled, f"Levi sections missing a panel label: {unlabelled}"
+    from kurosoden.shared.settings_ui import section_label
+    # section_label never raises and never returns the raw slug for a known section.
+    for s in LEVI_SECTIONS:
+        assert section_label(s) and section_label(s) != s
 
 
 def test_section_fields_are_editable_and_documented():
@@ -154,10 +162,11 @@ async def _is_routed(client: Client, handlers, data: str) -> bool:
 
 # Every callback the Levi settings surface can emit, with concrete args.
 _SETTINGS_CALLBACKS = [
+    "levi|settings",
     "levi|set|home",
     "levi|set|sec|downloads",
     "levi|set|sec|rename",
-    "levi|set|tog|processing.rename",
+    "levi|set|tog|processing.verify_files",
     "levi|set|edit|rename.template",
     "levi|set|edit|downloads.concurrent_downloads",
 ]
@@ -173,8 +182,8 @@ class TestSettingsRouting:
         assert not unrouted, f"dead settings taps: {unrouted}"
 
     async def test_home_button_targets_native_panel(self):
-        """The /start Settings button must point at levi|set|home (native panel),
-        not the removed bare levi|settings."""
+        """The /start Settings button points at levi|settings, which the shared
+        engine routes to the hub."""
         client = await _build_registered_client()
         handlers = _callback_handlers(client)
-        assert await _is_routed(client, handlers, "levi|set|home")
+        assert await _is_routed(client, handlers, "levi|settings")

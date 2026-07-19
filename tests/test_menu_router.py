@@ -1,67 +1,18 @@
-"""Tests for kurosoden/shared/menu_router.py — the shared settings/help panels.
+"""Tests for kurosoden/shared/menu_router.py — the shared tool/help panels.
 
-Guards the escaping contract that all four Kuro Sōden bots depend on:
+``menu_router`` now owns only :func:`tool_screen` (the how-it-works panels on
+each bot's inline buttons). The settings UX moved to
+:mod:`kurosoden.shared.settings_ui`; its escaping/preview contract is guarded in
+``tests/test_settings_ui.py``.
 
-  * developer-authored **prose** (about / when_to_use / option & placeholder
-    descriptions / danger / hint / hub body) carries its own HTML emphasis and
-    MUST pass through verbatim, or the tags render as literal ``<b>`` text; while
-  * literal **values** a user might type (option keys, placeholder tokens, the
-    example template, the current value) MUST stay escaped, so a template like
-    ``<b>{title}</b>`` shows as text instead of rendering.
-
-This is the exact bug the panels drifted into: prose was being ``html.escape``d,
-so admins saw raw ``<code>`` tags in every settings screen.
+This guards the escaping contract ``tool_screen`` still depends on: the title and
+kicker are literal text and get escaped, while the body ``lines`` are authored
+HTML and MUST render verbatim (or the tags show as literal ``<b>`` text).
 """
 
 from __future__ import annotations
 
-from kurosoden.shared.menu_router import (
-    settings_hub,
-    settings_onboarding,
-    tool_screen,
-)
-
-
-def test_onboarding_prose_html_renders_verbatim():
-    caption, _kb = settings_onboarding(
-        "senku", "branding",
-        title="Channel Branding",
-        about="Footer under <b>post_format</b>.",
-        when_to_use="When the <i>brand</i> changes.",
-        hint="Open <b>Settings</b>.",
-        danger="<b>channel_id</b> must be valid.",
-    )
-    # Authored tags survive — not turned into &lt;b&gt;.
-    assert "<b>post_format</b>" in caption
-    assert "<i>brand</i>" in caption
-    assert "<b>Settings</b>" in caption
-    assert "<b>channel_id</b>" in caption
-    assert "&lt;b&gt;" not in caption
-
-
-def test_onboarding_values_are_escaped():
-    caption, _kb = settings_onboarding(
-        "gojo", "caption",
-        title="Caption",
-        about="The caption template.",
-        placeholders=[("{title}", "Anime title.")],
-        example="<b>{title}</b>",
-        current="<i>live</i>",
-    )
-    # A user-typeable template shows literally, so its tags don't render.
-    assert "&lt;b&gt;{title}&lt;/b&gt;" in caption
-    assert "&lt;i&gt;live&lt;/i&gt;" in caption
-
-
-def test_hub_body_prose_renders_verbatim():
-    caption, _kb = settings_hub(
-        "levi", title="Levi Settings",
-        body="Tune <i>downloads</i> and <b>processing</b>.",
-        items=[("Downloads", "downloads")],
-    )
-    assert "<i>downloads</i>" in caption
-    assert "<b>processing</b>" in caption
-    assert "&lt;i&gt;" not in caption
+from kurosoden.shared.menu_router import tool_screen
 
 
 def test_tool_screen_lines_render_verbatim():
@@ -72,3 +23,20 @@ def test_tool_screen_lines_render_verbatim():
     assert "<b>bold</b>" in caption
     assert "<code>coded</code>" in caption
     assert "&lt;b&gt;" not in caption
+
+
+def test_tool_screen_title_is_escaped():
+    # The title is a literal label, not authored HTML — a stray angle bracket
+    # must not become a tag.
+    caption, _kb = tool_screen(
+        "levi", "Tasks <beta>", "kicker",
+        ["body line"],
+    )
+    assert "Tasks &lt;beta&gt;" in caption
+
+
+def test_tool_screen_back_button_targets_bot():
+    _caption, kb = tool_screen(
+        "senku", "Create", "kicker", ["line"], back="home",
+    )
+    assert kb.inline_keyboard[-1][0].callback_data == "senku|home"

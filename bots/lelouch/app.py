@@ -62,13 +62,11 @@ def build_lelouch(container: Container, token: str) -> Client:
     from nekofetch.ui.screens import send_screen
     from kurosoden.bots.lelouch import screens as S
     from kurosoden.shared import lelouch_voice as V
-    from kurosoden.shared.menu_router import settings_onboarding
     from kurosoden.shared.request_gate import (
         get_mode,
         requests_open,
         set_requests_open,
     )
-    from kurosoden.shared.settings_content import ALL_BY_BOT
     from kurosoden.shared.work_service import WorkService
 
     # ── Small role/state helpers ──────────────────────────────────────────────
@@ -133,30 +131,8 @@ def build_lelouch(container: Container, token: str) -> Client:
             await q.answer()
             return
 
-        # ¬¬ Settings hub + per-key onboarding (open to all; edits are staff-gated
-        #    by the request handler that consumes the value) ¬¬
-        if action == "settings":
-            await send_screen(client, chat_id, S.settings_hub(), old_msg=q.message)
-            await q.answer()
-            return
-
-        if action == "set" and arg:
-            info = ALL_BY_BOT.get("lelouch", {}).get(arg)
-            if info:
-                caption, _kb = settings_onboarding(
-                    "lelouch", arg, title=info["title"], about=info["about"],
-                    when_to_use=info.get("when_to_use", ""),
-                    options=info.get("options"),
-                    placeholders=info.get("placeholders"),
-                    supports_html=info.get("supports_html", False),
-                    example=info.get("example", ""),
-                    danger=info.get("danger", ""),
-                    hint=info.get("hint", "Send the new value as a chat message."),
-                )
-                await send_screen(client, chat_id, S.settings_key(caption),
-                                  old_msg=q.message)
-            await q.answer()
-            return
+        # ¬¬ Settings ¬¬ — the shared human-friendly engine owns lelouch|settings
+        # and lelouch|set|… (registered first in register_all, so it wins here).
 
         # ── Everything below is staff-only ──
         if not staff:
@@ -351,9 +327,7 @@ def build_lelouch(container: Container, token: str) -> Client:
             return
         await _render_admin(message.chat.id)
 
-    # ── /settings ───────────────────────────────────────────────────────────────
-    @client.on_message(filters.command("settings"))
-    async def _settings(_: Client, message: Message) -> None:
-        await send_screen(client, message.chat.id, S.settings_hub())
+    # ── /settings ── owned by the shared human-friendly settings engine
+    # (register_settings in handlers/__init__.py), under lelouch|set|….
 
     return client

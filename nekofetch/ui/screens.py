@@ -458,24 +458,18 @@ async def send_screen(
 
     if photo:
         photo_arg = str(photo) if isinstance(photo, Path) else photo
-        # Caption fits the photo budget → single photo message (the common path).
-        if visible_len(caption) <= CAPTION_LIMIT:
-            msg = await _send_photo(
-                photo=photo_arg, caption=caption,
-                parse_mode=screen.parse_mode, reply_markup=screen.keyboard,
-            )
-        else:
-            # Overflow: send the image alone, then the full body (and the keyboard)
-            # as a follow-up text message. Telegram never sees an over-budget caption
-            # so MEDIA_CAPTION_TOO_LONG can't happen — and no HTML is broken.
-            try:
-                await _send_photo(photo=photo_arg)
-            except Exception:
-                pass
-            msg = await _send_text(
-                _truncate_html(caption, MESSAGE_LIMIT),
-                parse_mode=screen.parse_mode, reply_markup=screen.keyboard,
-            )
+        # Always a SINGLE photo message: image + caption + keyboard together. When
+        # the caption is over the photo budget we shrink it to fit rather than
+        # splitting into a bare image + follow-up text — a split left an orphan
+        # captionless photo lingering in the chat (the "image with no caption"
+        # bug). Panels are budgeted to fit; this trim is only a last-resort guard.
+        fitted = caption if visible_len(caption) <= CAPTION_LIMIT else _truncate_html(
+            caption, CAPTION_LIMIT
+        )
+        msg = await _send_photo(
+            photo=photo_arg, caption=fitted,
+            parse_mode=screen.parse_mode, reply_markup=screen.keyboard,
+        )
     else:
         msg = await _send_text(
             _truncate_html(caption, MESSAGE_LIMIT),

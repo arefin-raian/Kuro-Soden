@@ -183,16 +183,10 @@ def build_levi(container: Container, token: str) -> Client:
         )
         await send_rich_welcome(client, container, message, screen, bot_name="levi")
 
-    # ── /settings ─────────────────────────────────────────────────────────────
-    # Opens the real, config-driven panel (handlers/settings.py). It introspects
-    # the live AppConfig, so every download/rename/branding field is editable and
-    # self-documenting — no dead `/dlset`-style commands.
-    @client.on_message(filters.command("settings"))
-    async def _settings(_: Client, message: Message) -> None:
-        from nekofetch.ui.screens import send_screen
-        from kurosoden.bots.levi.handlers.settings import build_home_screen
-
-        await send_screen(client, message.chat.id, build_home_screen(container))
+    # ── /settings ──────────────────────────────────────────────────────────────
+    # Owned by the shared settings engine (kurosoden.shared.settings_ui), which
+    # registers the /settings command and the whole `levi|set|…` flow. No local
+    # handler here so the two never double-fire.
 
     # ── /help ─────────────────────────────────────────────────────────────────
     @client.on_message(filters.command("help"))

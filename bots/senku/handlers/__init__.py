@@ -16,7 +16,22 @@ def register_all(client: Client, container: Container) -> None:
     from nekofetch.bots.middleware import install_auth_middleware
     from kurosoden.bots.senku.handlers.tasks import register as register_tasks
     from kurosoden.bots.senku.handlers.wizard import register as register_wizard
+    from kurosoden.shared.settings_ui import register_settings
 
     install_auth_middleware(client, container)
     register_wizard(client, container)
     register_tasks(client, container)
+
+    # Human-friendly settings — Senku owns how posts look (cards, watch guide,
+    # resolution buttons, footer) and the bot/footer branding. Registered before
+    # the app.py `senku|` fallback so every `senku|set|…` tap lands here.
+    register_settings(
+        client, container, "senku",
+        ["post_format", "bot"],
+        title="Senku — Distribution Settings",
+        blurb=(
+            "Everything about how your channel posts <b>look</b> — the info, "
+            "season and movie cards, the watch guide, the quality buttons, and "
+            "the footer. Change any of it and see a live preview before you save."
+        ),
+    )
