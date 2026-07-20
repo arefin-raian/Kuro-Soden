@@ -10,6 +10,73 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nekofetch.infrastructure.database.postgres.base import Base
 
 
+def _default_literal(col) -> str | None:
+    """Render a column's Python-side scalar ``default`` as a SQL literal.
+
+    Used to backfill a NOT NULL column being added to an already-populated
+    table: the model may declare only a Python-side ``default=`` (applied by the
+    ORM on insert, invisible to ``ADD COLUMN``), so we translate that scalar into
+    a server ``DEFAULT`` for the one-off backfill. Returns ``None`` when the
+    default is absent, callable, or a non-scalar we can't safely inline.
+    """
+    default = col.default
+    if default is None or not getattr(default, "is_scalar", False):
+        return None
+    val = default.arg
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, str):
+        return "'" + val.replace("'", "''") + "'"
+    return None
+
+
+def _reconcile_columns(conn) -> None:
+    """Add columns present in the ORM models but missing from existing tables.
+
+    ``Base.metadata.create_all`` only creates whole *tables*; a column added to a
+    table that already exists never lands. Because prod boots with ``python
+    main.py`` and no ``alembic upgrade head``, a release that adds a column to an
+    existing table leaves the live DB drifted, and the first query naming that
+    column crash-loops startup (this is exactly how ``column
+    index_sections.repurposed does not exist`` bit us). This inspects the live
+    schema and issues additive ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` for
+    each drifted column, driven by the models so future columns self-heal too.
+
+    Strictly additive: it never drops, renames, or retypes a column, so it cannot
+    lose data. Postgres-only (relies on ``ADD COLUMN IF NOT EXISTS``).
+    """
+    from sqlalchemy import inspect
+    from sqlalchemy.schema import CreateColumn
+
+    inspector = inspect(conn)
+    existing_tables = set(inspector.get_table_names())
+
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue  # whole table was just created by create_all above
+        have = {c["name"] for c in inspector.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in have:
+                continue
+            coldef = str(CreateColumn(col).compile(dialect=conn.dialect)).strip()
+            # A NOT NULL column with no server default fails on a populated table
+            # (existing rows have no value). If the model carries a Python-side
+            # scalar default, inline it as a server DEFAULT for the backfill;
+            # otherwise fall back to adding it nullable so startup survives — the
+            # ORM still applies its default on subsequent inserts.
+            if not col.nullable and col.server_default is None:
+                literal = _default_literal(col)
+                if literal is not None:
+                    coldef = f"{coldef} DEFAULT {literal}"
+                else:
+                    coldef = coldef.replace(" NOT NULL", "")
+            conn.exec_driver_sql(
+                f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS {coldef}'
+            )
+
+
 @asynccontextmanager
 async def session_scope(
     sessionmaker: async_sessionmaker[AsyncSession],
@@ -47,6 +114,17 @@ async def create_all(engine) -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # ``create_all`` only creates *missing tables*; it never adds a new
+        # column (or index) to a table that already exists. Since prod boots with
+        # ``python main.py`` and no ``alembic upgrade head``, a release that adds a
+        # column to an existing table leaves the live DB drifted, and the first
+        # query naming that column crash-loops startup (e.g. ``column
+        # index_sections.repurposed does not exist``). Reconcile the drift here,
+        # idempotently, so the next boot self-heals — same spirit as the
+        # ``request_code_seq`` block below. Postgres-only (ADD COLUMN IF NOT EXISTS).
+        if conn.dialect.name == "postgresql":
+            await conn.run_sync(_reconcile_columns)
 
         # ``request_code_seq`` is a bare Postgres sequence (see request_repo
         # .next_sequence + migration 0009), not an ORM table, so create_all above
