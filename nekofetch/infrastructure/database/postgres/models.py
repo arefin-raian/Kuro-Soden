@@ -173,6 +173,15 @@ class DistributionBot(Base, PKMixin, TimestampMixin):
     is_channel: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     chat_id: Mapped[int | None] = mapped_column(BigInteger)  # -100… for channels
 
+    # A bot-minted **private** invite link to this channel (t.me/+…), deliberately
+    # NOT the public t.me/<username> link: the main-channel Download button and the
+    # index hyperlink point here so traffic flows through a link we control and can
+    # revoke/replace. Re-minted on recreate (the old channel — and its link — is
+    # gone), then swapped into the main-channel post's button and the index entry.
+    # NULL for bots (they use a ?start deep link) and for channels created before
+    # this column existed (they fall back to the public username link).
+    invite_link: Mapped[str | None] = mapped_column(Text)
+
     # Monotonic counter incremented every time ``BotContentService.generate_posts``
     # rebuilds this bot's content set. The distribution bot compares it against a
     # user's stored ``BotDelivery.delivered_revision`` on /start to decide whether

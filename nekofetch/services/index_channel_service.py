@@ -14,6 +14,7 @@ message IDs (see ``seed_index_sections``).
 from __future__ import annotations
 
 import asyncio
+import html
 from pathlib import Path
 from typing import cast
 
@@ -23,7 +24,9 @@ from sqlalchemy import distinct, select
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
-from nekofetch.infrastructure.database.postgres.models import IndexSection, StoragePack
+from nekofetch.infrastructure.database.postgres.models import (
+    DistributionBot, IndexSection, StoragePack,
+)
 from nekofetch.infrastructure.database.postgres.session import session_scope
 
 log = get_logger(__name__)
@@ -129,7 +132,22 @@ def _strip_bullet(title: str) -> str:
     return title.lstrip().removeprefix("⦿").strip()
 
 
-def _letter_caption(label: str, titles: list[str]) -> str:
+def _entry_html(title: str, links: dict[str, str] | None) -> str:
+    """Render one index line, hyperlinking the title to its distribution link.
+
+    When ``links`` has an entry for the title, the name becomes an ``<a href>``
+    to the channel's (private, bot-minted) invite link — so the index doubles as
+    a clickable directory. Titles with no backing entity render as plain bold text.
+    """
+    clean = _strip_bullet(title)
+    url = (links or {}).get(title)
+    if url:
+        return f"<b>⦿ <a href=\"{html.escape(url, quote=True)}\">{html.escape(clean)}</a></b>"
+    return f"<b>⦿ {clean}</b>"
+
+
+def _letter_caption(label: str, titles: list[str],
+                    links: dict[str, str] | None = None) -> str:
     """Build a bold-HTML caption for a letter section.
 
     Format::
@@ -140,9 +158,11 @@ def _letter_caption(label: str, titles: list[str]) -> str:
         <b>⦿ Title 2</b>
 
         <b>•─────────────────────•</b>
+
+    When ``links`` is provided, each title is hyperlinked to its distribution link.
     """
     header = f"<b>•────────•°• {label} •°•────────•</b>"
-    body = ("\n".join(f"<b>⦿ {_strip_bullet(t)}</b>" for t in titles)
+    body = ("\n".join(_entry_html(t, links) for t in titles)
             if titles else "<b>⦿</b>")
     footer = "<b>•─────────────────────•</b>"
     return f"{header}\n\n{body}\n\n{footer}"
@@ -227,6 +247,51 @@ class IndexChannelService:
             ).scalars().all()
         return sorted(rows)
 
+    async def _links_for_titles(self, titles: list[str]) -> dict[str, str]:
+        """Map each title to the distribution link its index entry should point at.
+
+        Prefers the channel's private bot-minted invite link (the same link the
+        main-channel Download button uses), falling back to the public
+        ``t.me/<username>`` link and, for bots, the ``?start`` deep link. Titles
+        with no enabled distribution entity are omitted (rendered as plain text).
+        """
+        if not titles:
+            return {}
+        links: dict[str, str] = {}
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            rows = (
+                await session.execute(
+                    select(DistributionBot).where(
+                        DistributionBot.enabled.is_(True),
+                        DistributionBot.anime_doc_id.is_not(None),
+                    )
+                )
+            ).scalars().all()
+        # anime_doc_id → the DistributionBot row (last enabled wins, matching the
+        # main-channel service's ``.first()`` on the same enabled filter).
+        by_doc = {r.anime_doc_id: r for r in rows}
+        # StoragePack.anime_title is what appears in the index; map it back to a
+        # doc id to find the backing entity. Build title→doc once.
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            pack_rows = (
+                await session.execute(
+                    select(StoragePack.anime_title, StoragePack.anime_doc_id)
+                    .where(StoragePack.anime_title.in_(titles))
+                    .distinct()
+                )
+            ).all()
+        for title, doc_id in pack_rows:
+            row = by_doc.get(doc_id)
+            if row is None or not (row.username or row.invite_link):
+                continue
+            if row.is_channel and row.invite_link:
+                links[title] = row.invite_link
+            elif row.is_channel and row.username:
+                links[title] = f"https://t.me/{row.username}"
+            elif row.username:
+                links[title] = f"https://t.me/{row.username}?start=anime_{doc_id}"
+        return links
+
     async def _all_active_sections(self) -> list[IndexSection]:
         """Return all sections with a label, ordered by sort_order."""
         async with session_scope(self._c.pg_sessionmaker) as session:
@@ -276,6 +341,7 @@ class IndexChannelService:
             return None
 
         chunks = _chunk_titles(titles, base_letter)
+        links = await self._links_for_titles(titles)
         client = self._c.admin_client
         first_mid: int | None = None
 
@@ -334,7 +400,7 @@ class IndexChannelService:
                     chunk = chunks[idx]
                     section = existing[idx]
                     label = base_letter if idx == 0 else f"{base_letter}({idx + 1})"
-                    caption = _letter_caption(label, chunk)
+                    caption = _letter_caption(label, chunk, links)
 
                     # Check if image needs changing
                     old_label = section.label or ""

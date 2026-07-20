@@ -151,8 +151,38 @@ class BotOrchestratorService:
                 # title (which also refreshes the main-channel post) instead of
                 # re-publishing the channel from scratch.
                 await self._bind_title(info.id, anime_doc_id)
+            # A recreated channel gets a fresh private invite link (the row is new,
+            # so gather_facts mints one on the main-channel refresh above). Refresh
+            # this title's index letter too so its hyperlink points at the new link.
+            await self._refresh_index_for(anime_doc_id)
 
         return info
+
+    async def _refresh_index_for(self, anime_doc_id: str) -> None:
+        """Rebuild the index letter section for this title (best-effort).
+
+        The index caption hyperlinks each title to its channel's private invite
+        link; after a recreate mints a new link, the letter must be rebuilt so the
+        hyperlink follows. Resolved from the title's storage packs."""
+        try:
+            from nekofetch.infrastructure.database.postgres.models import StoragePack
+            from nekofetch.services.index_channel_service import IndexChannelService
+
+            async with session_scope(self._c.pg_sessionmaker) as session:
+                pack = (
+                    await session.execute(
+                        select(StoragePack)
+                        .where(StoragePack.anime_doc_id == anime_doc_id)
+                        .limit(1)
+                    )
+                ).scalars().first()
+            if pack is None:
+                return
+            svc = IndexChannelService(self._c)
+            await svc.refresh_letter(svc.letter_of(pack.anime_title))
+        except Exception as exc:  # noqa: BLE001 — index refresh is best-effort
+            log.warning("bot.orchestrator.index_refresh.failed",
+                        anime=anime_doc_id, error=str(exc))
 
     async def _restore_channel(self, anime_doc_id: str, new_chat_id: int) -> bool:
         """Re-post a banned channel verbatim from backup. True if anything posted."""

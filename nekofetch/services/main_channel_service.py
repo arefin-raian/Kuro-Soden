@@ -71,6 +71,13 @@ class PublicationFacts:
     backdrop_url: str | None = None   # TMDB English 16:9 backdrop for the post photo
     bot_username: str | None = None
     is_channel: bool = False            # True when distribution target is a channel, not a bot
+    invite_link: str | None = None      # private invite link we minted for the channel
+    anime_doc_id_bot: int | None = None  # DistributionBot.id backing this title, if any
+    # Private, bot-minted invite link to the distribution channel. Preferred over
+    # the public t.me/<username> link for the Download button so traffic flows
+    # through a link we control (and can revoke/replace on a recreate).
+    invite_link: str | None = None
+    anime_doc_id_bot: int | None = None  # DistributionBot.id (for lazy link minting)
     _audios: set = field(default_factory=set)
 
 
@@ -116,6 +123,18 @@ class MainChannelService:
         if bot and bot.username:
             facts.bot_username = bot.username
             facts.is_channel = bot.is_channel
+        if bot:
+            facts.anime_doc_id_bot = bot.id
+            facts.invite_link = bot.invite_link
+            # A channel target should route through a private invite link we own.
+            # Mint one lazily the first time we publish if it's missing, so older
+            # channels (created before invite links existed) get one on next post.
+            if bot.is_channel and not bot.invite_link and bot.chat_id:
+                from nekofetch.services.invite_link_service import InviteLinkService
+
+                minted = await InviteLinkService(self._c).ensure_for_bot(bot.id)
+                if minted:
+                    facts.invite_link = minted
 
         # Enrich with metadata when the provider is implemented (else graceful blanks).
         from nekofetch.services.enrichment_service import EnrichmentService
@@ -231,11 +250,20 @@ class MainChannelService:
         index_url = await IndexChannelService(self._c).entry_link(f.title)
         if index_url:
             row.append(InlineKeyboardButton(self.cfg.index_button_text, url=index_url))
-        if f.bot_username:
+        # Download target preference (per the operator's explicit ask): a private
+        # invite link minted by the channel admin — NOT the public t.me/<username>
+        # link — so joins funnel through the bot-controlled link that we can revoke
+        # and re-mint on a ban. Falls back to the public username link (channels)
+        # or the bot deep-link (bots) when no invite link was minted.
+        dl: str | None = None
+        if f.is_channel and f.invite_link:
+            dl = f.invite_link
+        elif f.bot_username:
             if f.is_channel:
                 dl = f"https://t.me/{f.bot_username}"
             else:
                 dl = f"https://t.me/{f.bot_username}?start=anime_{f.anime_doc_id}"
+        if dl:
             row.append(InlineKeyboardButton(self.cfg.download_button_text, url=dl))
         return InlineKeyboardMarkup([row]) if row else None
 
