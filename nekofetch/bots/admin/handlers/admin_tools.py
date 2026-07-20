@@ -99,12 +99,13 @@ def register(client: Client, container: Container) -> None:
         kb = keyboard([(L(M.BTN_CANCEL), cb("admin", "home"))])
         await show(client, q.message, L(M.CH_BROADCAST_PROMPT), kb)
 
-    # group=3 is unused elsewhere on the admin client — a broad private filter
-    # (any media, not just text) must not share a group with another handler, as
-    # Pyrogram runs only the first matching handler per group. It's gated on the
-    # FSM state so it stays inert unless a channel broadcast is being composed.
+    # group=13 is unused elsewhere on the admin client. A broad private filter
+    # (any media, not just text) MUST NOT share a group with another handler:
+    # Pyrogram runs only the first matching handler per group, so sharing group 3
+    # (batch.py's title-capture) would let batch swallow text broadcasts. Gated on
+    # the FSM state so it stays inert unless a channel broadcast is being composed.
     @client.on_message(
-        filters.private & ~filters.command(["start"]), group=3
+        filters.private & ~filters.command(["start"]), group=13
     )
     async def _ch_capture(_: Client, message: Message) -> None:
         """Capture the message to broadcast, then ask for a retention window.

@@ -229,14 +229,18 @@ class SenkuThumbnailAdapter:
                            ) -> tuple[Selection, str | None]:
         """Persist an admin-uploaded asset image; return (selection, next asset).
 
-        The bytes are uploaded to catbox so the render step (and later backup)
-        sees a stable public URL — identical downstream to a numbered pick.
-        Raises on upload failure so the caller can voice a retry; a successful
-        upload stores the URL in the same field ``store_pick`` uses.
+        The bytes are mirrored through :func:`image_backup.backup_bytes` (catbox
+        primary, telegraph fallback) so the render step (and a later channel
+        rebuild) sees a stable public URL that outlives a single host — identical
+        downstream to a numbered pick. Raises on total upload failure so the
+        caller can voice a retry; a success stores the URL ``store_pick`` uses.
         """
-        from nekofetch.providers.catbox import upload_bytes
+        from kurosoden.shared.image_backup import backup_bytes
 
-        url = await upload_bytes(file_bytes, filename=f"{asset_type}.jpg")
+        backup = await backup_bytes(self._c, file_bytes, mime="image/jpeg")
+        url = backup.primary
+        if not url:
+            raise RuntimeError(f"every image host rejected the {asset_type} upload")
         sel = await self.cache.set_selection(code, index, asset=asset_type, value=url)
         return sel, self.next_asset(sel)
 

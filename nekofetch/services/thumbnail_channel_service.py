@@ -65,6 +65,11 @@ _K_PINNED_QUEUE = "nf:thumbcc:pinned_queue"
 _K_INTRO = "nf:thumbcc:intro_id"
 _K_DUTY_BOARD = "nf:thumbcc:duty_board"
 _K_TRACKED = "nf:thumbcc:tracked_ids"
+# Armed when an admin taps "Upload my own": the next image posted to the channel
+# becomes this entry's asset. Single-worker shift channel, so one pending arm at
+# a time keyed on the channel is enough; TTL clears a forgotten arm.
+_K_UPLOAD_WAIT = "nf:thumbcc:upload_wait"
+_UPLOAD_WAIT_TTL = 900  # 15 min — plenty to find and send an image
 
 
 @dataclass
@@ -927,10 +932,29 @@ class ThumbnailChannelService:
         queue = await self._get_queue()
         title = next((q.anime_title for q in queue if q.anime_doc_id == anime_doc_id), "—")
 
+        queue_for_title = await self._get_queue()
+        title_early = next((q.anime_title for q in queue_for_title
+                            if q.anime_doc_id == anime_doc_id), "—")
+
         # Fetch assets to know how many we have
         assets = await self._fetch_assets_for_type(asset_type, tmdb_id, media_type)
         if not assets:
-            await query.answer(f"No {asset_type}s found on TMDB for this title.", show_alert=True)
+            # TMDB had nothing for this type — still let the admin upload their own.
+            type_label = {"logo": "🎨 Logo", "poster": "📰 Poster",
+                          "backdrop": "🌄 Background"}.get(asset_type, asset_type)
+            entry.status = f"select_{asset_type}"
+            await self._save_workflow(anime_doc_id, workflow)
+            await query.message.reply(
+                f"<b>{title_early}</b> — <i>{entry.label}</i>\n\n"
+                f"No {type_label}s found on TMDB. Tap ⬆️ to send your own image:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                    "⬆️ Upload my own",
+                    callback_data=cb("thumb", "upload", anime_doc_id,
+                                     entry_index, asset_type),
+                )]]),
+                parse_mode=ParseMode.HTML,
+            )
+            await query.answer()
             return
 
         # Create Telegraph gallery (pass pre-fetched assets to avoid a second TMDB API call)
@@ -966,10 +990,17 @@ class ThumbnailChannelService:
         if num_rows:
             keyboard_rows.append(num_rows)
 
+        # Manual override: skip TMDB entirely and send your own image.
+        keyboard_rows.append([InlineKeyboardButton(
+            "⬆️ Upload my own",
+            callback_data=cb("thumb", "upload", anime_doc_id, entry_index, asset_type),
+        )])
+
         await query.message.reply(
             f"<b>{title}</b> — <i>{entry.label}</i>\n\n"
             f"{type_label}s  ·  {len(assets)} available\n"
-            f"Browse the gallery, then tap the number of the one you want:",
+            f"Browse the gallery, then tap the number of the one you want — "
+            f"or tap ⬆️ to send your own image:",
             reply_markup=InlineKeyboardMarkup(keyboard_rows),
             parse_mode=ParseMode.HTML,
         )
@@ -1026,6 +1057,124 @@ class ThumbnailChannelService:
             parse_mode=ParseMode.HTML,
         )
         await query.answer(f"{type_label} #{number} selected!")
+
+    # ── manual upload ───────────────────────────────────────────────────────
+
+    async def handle_upload_arm(
+        self, query, anime_doc_id: str, entry_index: str, asset_type: str,
+    ) -> None:
+        """Arm the channel so the next posted image becomes this asset.
+
+        The workflow is single-worker (shift-gated), so one pending arm keyed on
+        the channel is enough. :meth:`handle_uploaded_image` consumes it.
+        """
+        arm = {"anime_doc_id": anime_doc_id, "entry_index": str(entry_index),
+               "asset_type": asset_type}
+        await safe_redis_set(self._c.redis, _K_UPLOAD_WAIT, json.dumps(arm),
+                             ex=_UPLOAD_WAIT_TTL, label="thumbcc.upload.arm")
+        type_label = {"logo": "🎨 Logo", "poster": "📰 Poster",
+                      "backdrop": "🌄 Background"}.get(asset_type, asset_type)
+        await query.message.reply(
+            f"⬆️ <b>Send your own {type_label}</b> now — post the image (photo or "
+            f"image file) here in the next 15 minutes and it becomes this entry's "
+            f"asset. Tapping another button cancels the upload.",
+            parse_mode=ParseMode.HTML,
+        )
+        await query.answer("Waiting for your image…")
+
+    async def handle_uploaded_image(self, message) -> bool:
+        """If an upload is armed, store this posted image as the target asset.
+
+        Returns True if the image was consumed (armed + stored), False if no
+        upload was pending (the caller ignores the message). Never raises out.
+        """
+        raw = await safe_redis_get(self._c.redis, _K_UPLOAD_WAIT,
+                                   label="thumbcc.upload.wait.get")
+        if not raw:
+            return False
+        try:
+            arm = json.loads(raw)
+        except (ValueError, TypeError):
+            await safe_redis_delete(self._c.redis, _K_UPLOAD_WAIT,
+                                    label="thumbcc.upload.wait.bad")
+            return False
+
+        anime_doc_id = arm.get("anime_doc_id", "")
+        entry_index = arm.get("entry_index", "1")
+        asset_type = arm.get("asset_type", "logo")
+
+        # A document must actually be an image — reject PDFs, archives, etc.
+        doc = getattr(message, "document", None)
+        if doc and not (getattr(doc, "mime_type", "") or "").startswith("image/"):
+            await message.reply("⚠️ That's not an image. Send a photo or an image file.")
+            return True  # consumed the arm's turn; admin can re-tap upload
+
+        try:
+            buf = await self._client.download_media(message, in_memory=True)
+            file_bytes = buf.getvalue()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("thumbcc.upload.download_failed",
+                        anime=anime_doc_id, error=str(exc))
+            await message.reply("⚠️ Could not download that image. Try again.")
+            return True
+
+        try:
+            stored = await self.store_upload(anime_doc_id, entry_index,
+                                             asset_type, file_bytes)
+        except Exception as exc:  # noqa: BLE001 — every host rejected it
+            log.warning("thumbcc.upload.store_failed",
+                        anime=anime_doc_id, error=str(exc))
+            await message.reply("⚠️ Every image host rejected that upload. Try again.")
+            return True
+
+        await safe_redis_delete(self._c.redis, _K_UPLOAD_WAIT,
+                                label="thumbcc.upload.wait.done")
+        if not stored:
+            await message.reply("⚠️ Workflow expired — refresh and pick again.")
+            return True
+
+        type_label = {"logo": "Logo", "poster": "Poster",
+                      "backdrop": "Background"}.get(asset_type, asset_type)
+        await message.reply(f"✅ Your {type_label} was uploaded and selected.")
+        return True
+
+    async def store_upload(
+        self, anime_doc_id: str, entry_index: str, asset_type: str,
+        file_bytes: bytes,
+    ) -> bool:
+        """Mirror uploaded bytes and store the URL as the entry's asset.
+
+        Routes through :func:`image_backup.backup_bytes` (catbox → telegraph →
+        envs.sh) so an admin upload gets the same durable mirror as a numbered
+        pick, then updates the workflow message. Returns False if the workflow
+        vanished; raises if every host rejected the bytes.
+        """
+        from kurosoden.shared.image_backup import backup_bytes
+
+        backup = await backup_bytes(self._c, file_bytes, mime="image/jpeg")
+        url = backup.primary
+        if not url:
+            raise RuntimeError("every image host rejected the upload")
+
+        workflow = await self._get_workflow(anime_doc_id)
+        if not workflow:
+            return False
+        entry = next((e for e in workflow if e.index == int(entry_index)), None)
+        if not entry:
+            return False
+
+        if asset_type == "logo":
+            entry.logo_url = url
+        elif asset_type == "poster":
+            entry.poster_url = url
+        elif asset_type == "backdrop":
+            entry.bg_url = url
+
+        entry.status = ("ready" if (entry.logo_url and entry.poster_url
+                                    and entry.bg_url) else "pending")
+        await self._save_workflow(anime_doc_id, workflow)
+        await self._post_or_update_workflow(anime_doc_id, workflow)
+        return True
 
     # ── thumbnail generation ───────────────────────────────────────────────
 
@@ -1155,6 +1304,11 @@ class ThumbnailChannelService:
             return False
 
         sub_action = args[0] if args else ""
+        # Any button other than arming an upload cancels a pending upload wait,
+        # matching the "tapping another button cancels" promise in the prompt.
+        if sub_action != "upload":
+            await safe_redis_delete(self._c.redis, _K_UPLOAD_WAIT,
+                                    label="thumbcc.upload.wait.cancel")
         if sub_action == "open":
             anime_doc_id = args[1] if len(args) > 1 else ""
             workflow = await self._get_workflow(anime_doc_id)
@@ -1185,6 +1339,13 @@ class ThumbnailChannelService:
             asset_type = args[3] if len(args) > 3 else "logo"
             number = int(args[4]) if len(args) > 4 else 0
             await self.handle_select_num(query, anime_doc_id, entry_index, asset_type, number)
+            return True
+
+        if sub_action == "upload":
+            anime_doc_id = args[1] if len(args) > 1 else ""
+            entry_index = args[2] if len(args) > 2 else "1"
+            asset_type = args[3] if len(args) > 3 else "logo"
+            await self.handle_upload_arm(query, anime_doc_id, entry_index, asset_type)
             return True
 
         if sub_action == "generate":

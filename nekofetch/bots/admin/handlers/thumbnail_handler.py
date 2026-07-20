@@ -11,7 +11,7 @@ numbered buttons (1, 2, 3, ...) generated alongside the Telegraph gallery link.
 from __future__ import annotations
 
 from pyrogram import Client, filters
-from pyrogram.types import CallbackQuery
+from pyrogram.types import CallbackQuery, Message
 
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
@@ -53,3 +53,23 @@ def register(client: Client, container: Container) -> None:
         except Exception as exc:
             log.warning("thumb.handler.failed", error=str(exc))
             await q.answer("Something went wrong.", show_alert=True)
+
+    async def _in_thumbnail_channel(_flt, _cli, message: Message) -> bool:
+        """Match only images posted to the configured Asset Forge channel.
+
+        Read dynamically (not bound at register time) so a channel id set or
+        changed via settings after startup is still honoured."""
+        cid = container.config.thumbnail_channel.channel_id
+        return bool(cid) and message.chat is not None and message.chat.id == cid
+
+    @client.on_message(
+        (filters.photo | filters.document) & filters.create(_in_thumbnail_channel),
+        group=2,
+    )
+    async def _thumbnail_upload(_c: Client, message: Message) -> None:
+        """Consume an image posted to the Asset Forge channel when an upload is
+        armed (the on-duty worker tapped "⬆️ Upload my own"). No-op otherwise."""
+        try:
+            await thumb_svc.handle_uploaded_image(message)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("thumb.upload.failed", error=str(exc))

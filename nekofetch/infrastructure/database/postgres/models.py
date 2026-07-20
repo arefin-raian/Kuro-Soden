@@ -289,6 +289,51 @@ class PublishedPostBackup(Base, PKMixin, TimestampMixin):
     source_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
+class ChannelContentBackup(Base, PKMixin, TimestampMixin):
+    """Wipe-proof snapshot of a distribution / index channel's content pack.
+
+    :class:`PublishedPostBackup` covers the *main* channel. This is its sibling
+    for the other two scopes:
+
+    * **distribution** — a per-title channel's ordered card list (info card,
+      season/movie cards, watch guide, footer) with each card's finished caption
+      HTML, its image mirrored to a durable host, its structured Download
+      buttons, and its pin flag. Distinct from the live ``BotContentPost`` rows
+      (which :meth:`BotOrchestratorService.recreate_bot` *deletes* before it
+      regenerates) and from ``ChannelLayout`` (message ids only, no content) —
+      so a banned channel can be re-posted **verbatim** on a fresh chat with no
+      re-render and no re-fetch.
+    * **index** — the letter-section posts (caption HTML + poster image) so the
+      index channel can be rebuilt the same way.
+
+    One row per channel, keyed by ``(scope, channel_key)`` — ``channel_key`` is
+    the bound ``anime_doc_id`` for a distribution channel and the fixed literal
+    ``"index"`` for the single index channel — so a re-capture upserts in place.
+    ``footer_message_id`` is the live footer's message id (Phase 4 universal
+    footer edits target it); ``cards`` is the ordered send-list JSON.
+    """
+
+    __tablename__ = "channel_content_backups"
+
+    # "distribution" | "index"
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    # anime_doc_id for a distribution channel; "index" for the index channel.
+    channel_key: Mapped[str] = mapped_column(String(48), nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    # The live chat this snapshot came from (informational / re-capture match).
+    source_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Ordered card list — one dict per posted message, in send order:
+    #   {"kind", "caption", "image_url", "button_data", "is_pinned",
+    #    "anilist_id", "divider_before"}.
+    cards: Mapped[list | None] = mapped_column(JSONB)
+    # Live footer message id (target of Phase-4 universal footer edits).
+    footer_message_id: Mapped[int | None] = mapped_column(BigInteger)
+
+    __table_args__ = (
+        UniqueConstraint("scope", "channel_key", name="uq_channel_backup_scope_key"),
+    )
+
+
 class ChannelLayout(Base, PKMixin, TimestampMixin):
     """The ordered message layout of a distribution channel's content pack.
 
@@ -337,6 +382,36 @@ class ChannelBroadcast(Base, PKMixin, TimestampMixin):
         DateTime(timezone=True), index=True
     )  # None = permanent
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class ScheduledPost(Base, PKMixin, TimestampMixin):
+    """A main-channel publish deferred to a future time.
+
+    APScheduler jobs are in-memory and their callables aren't serializable, so a
+    restart would silently forget every pending scheduled publish. This row is
+    the durable source of truth: :meth:`ScheduleService.sweep_due` (a 60s
+    scheduler job, same pattern as the broadcast/link sweeps) publishes every
+    past-due ``pending`` row and marks it ``published``/``failed``, so a schedule
+    survives restarts and is never double-fired.
+
+    ``scheduled_at`` is stored in UTC (tz-aware) like everything else; each admin
+    enters and reads it in their own timezone (``AdminAvailability.timezone``).
+    """
+
+    __tablename__ = "scheduled_posts"
+
+    request_code: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    anime_title: Mapped[str | None] = mapped_column(Text)
+    admin_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    silent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    caption_override: Mapped[str | None] = mapped_column(Text)
+    # "pending" | "published" | "failed" | "cancelled"
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True, nullable=False)
+    fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
 
 
 class IndexSection(Base, PKMixin, TimestampMixin):

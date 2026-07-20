@@ -434,6 +434,15 @@ class IndexChannelConfig(BaseModel):
     # Rendered per first-letter. Variables: {letter} {entries}
     letter_header_template: str = "•──────────•°• {letter} •°•──────────•"
     entry_template: str = "⦿ {title}"
+    # Public username of the index channel (no @). Drives the t.me/<username>/<mid>
+    # links on the poster and letter buttons. Made config-driven so a restore onto
+    # a fresh channel (after a ban) rewrites every link to the new channel.
+    username: str = "AniXWeebs_Index"
+    # Message id of the pinned poster (the letter-grid navigation post). Updated by
+    # a restore so "Go to Top" and the poster grid point at the rebuilt poster.
+    poster_message_id: int = 171
+    # Link the letter buttons' "Main Channel" button targets.
+    main_channel_link: str = "https://t.me/AniXWeebs"
 
 
 class MiruroConfig(BaseModel):

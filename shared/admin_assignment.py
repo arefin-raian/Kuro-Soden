@@ -63,6 +63,10 @@ class AdminAvailability(Base, PKMixin, TimestampMixin):
     # Wraps past midnight when start > end (e.g. 22→6). Honoured by assignment +
     # the idle nudge so no one is roused off the clock.
     working_hours: Mapped[dict | None] = mapped_column(JSONB)
+    # IANA timezone name (e.g. "Asia/Dhaka") for THIS admin. Drives how they
+    # enter and read scheduled-post times; NULL → the global display timezone.
+    # Deliberately does NOT affect ``working_hours`` (which stays UTC).
+    timezone: Mapped[str | None] = mapped_column(String(64))
 
 
 # ── Assignment Engine ─────────────────────────────────────────────────────────
@@ -311,3 +315,44 @@ class AdminAssignmentEngine:
                 ).order_by(AdminAssignment.created_at.asc())
             )
             return list(result.scalars().all())
+
+    # ── per-admin timezone ─────────────────────────────────────────────────────
+
+    async def get_timezone(self, admin_telegram_id: int, _session=None) -> str | None:
+        """The admin's IANA timezone name, or ``None`` (→ global default)."""
+        async with self._maybe_session(_session) as session:
+            row = (
+                await session.execute(
+                    select(AdminAvailability).where(
+                        AdminAvailability.admin_telegram_id == admin_telegram_id
+                    )
+                )
+            ).scalar_one_or_none()
+            return row.timezone if row else None
+
+    async def set_timezone(
+        self, admin_telegram_id: int, tz_name: str, *,
+        admin_name: str | None = None, _session=None,
+    ) -> None:
+        """Set the admin's IANA timezone, creating their availability row if new."""
+        async with self._maybe_session(_session) as session:
+            row = (
+                await session.execute(
+                    select(AdminAvailability).where(
+                        AdminAvailability.admin_telegram_id == admin_telegram_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = AdminAvailability(
+                    admin_telegram_id=admin_telegram_id,
+                    admin_name=admin_name,
+                    timezone=tz_name,
+                )
+                session.add(row)
+            else:
+                row.timezone = tz_name
+                if admin_name and not row.admin_name:
+                    row.admin_name = admin_name
+            if _session is None:
+                await session.commit()

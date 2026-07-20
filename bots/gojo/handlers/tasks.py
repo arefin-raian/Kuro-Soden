@@ -105,7 +105,13 @@ def register(client: Client, container: Container) -> None:
         _, _, code = q.data.split("|", 2)
         await q.answer()
         await fsm.set(q.from_user.id, STATE_SCHEDULE, request_code=code)
-        await q.message.reply(V.SCHEDULE_PROMPT, parse_mode=ParseMode.HTML)
+        tz_name = await _admin_tz(container, q.from_user.id)
+        # Prompt in the admin's own timezone, then show the combined queue so they
+        # don't stack a post on top of someone else's.
+        await q.message.reply(
+            V.schedule_prompt(_tz_label(tz_name)), parse_mode=ParseMode.HTML,
+        )
+        await _show_schedule_queue(container, q.message, tz_name)
 
     # ── Universal footer edit — /footer or the gojo|edit_footer button ────────
     async def _arm_footer(user_id: int, reply_to: Message) -> None:
@@ -319,12 +325,28 @@ def register(client: Client, container: Container) -> None:
             )
         elif state == STATE_SCHEDULE and code:
             raw = (message.text or "").strip()
-            when = _parse_schedule(raw)
-            if when is None:
+            tz_name = await _admin_tz(container, message.from_user.id)
+            when_utc = _parse_schedule(raw, tz_name)
+            if when_utc is None:
                 await message.reply(V.schedule_bad_time(raw), parse_mode=ParseMode.HTML)
                 return
+            # Warn (but don't block) if the slot is crowded — the admin stays in
+            # the schedule state so their next message is another time attempt.
+            from nekofetch.services.schedule_service import ScheduleService
+
+            clashes = await ScheduleService(container).collision_window(
+                when_utc, exclude_code=code,
+            )
+            if clashes:
+                rows = [(_to_tz(c.scheduled_at, tz_name), c.anime_title or c.request_code)
+                        for c in clashes]
+                await message.reply(
+                    V.schedule_collision(rows, _tz_label(tz_name)),
+                    parse_mode=ParseMode.HTML,
+                )
+                return
             await fsm.clear(message.from_user.id)
-            await _schedule_publish(client, container, message, code, when)
+            await _schedule_publish(client, container, message, code, when_utc, tz_name)
         elif state == STATE_EDIT_FOOTER:
             from kurosoden.shared.settings_ui import parse_user_markup
             from nekofetch.services.footer_service import FooterService
@@ -562,50 +584,73 @@ async def _recover_channel(
 # ── Scheduling ─────────────────────────────────────────────────────────────────
 
 
-def _parse_schedule(raw: str) -> datetime | None:
-    """Parse ``YYYY-MM-DD HH:MM`` into a future ``datetime``, or ``None``.
+async def _admin_tz(container: Container, admin_id: int) -> str | None:
+    """The scheduling admin's IANA timezone (None → global display default)."""
+    try:
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
 
-    Server-local time. Anything unparseable or already in the past returns
-    ``None`` so the caller can show the "bad time" prompt.
+        return await AdminAssignmentEngine(container.pg_sessionmaker).get_timezone(admin_id)
+    except Exception:  # noqa: BLE001 — a lookup miss just falls back to global tz
+        return None
+
+
+def _tz_label(tz_name: str | None) -> str:
+    from nekofetch.core.timefmt import tz_offset_label
+
+    base = tz_name or "Asia/Dhaka"
+    return f"{base} ({tz_offset_label(tz_name)})"
+
+
+def _to_tz(dt: datetime, tz_name: str | None) -> str:
+    from nekofetch.core.timefmt import to_tz
+
+    return to_tz(dt, tz_name, with_label=False)
+
+
+async def _show_schedule_queue(
+    container: Container, message: Message, tz_name: str | None,
+) -> None:
+    """Reply with the combined pending-schedule table in the admin's timezone."""
+    from nekofetch.services.schedule_service import ScheduleService
+
+    pending = await ScheduleService(container).list_pending()
+    rows = [(_to_tz(p.scheduled_at, tz_name), p.anime_title or p.request_code)
+            for p in pending]
+    await message.reply(
+        V.schedule_table(rows, _tz_label(tz_name)), parse_mode=ParseMode.HTML,
+    )
+
+
+def _parse_schedule(raw: str, tz_name: str | None) -> datetime | None:
+    """Parse ``YYYY-MM-DD HH:MM`` entered in the admin's timezone → aware UTC.
+
+    Returns ``None`` if unparseable or already in the past (compared in UTC), so
+    the caller can show the "bad time" prompt.
     """
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
-        try:
-            when = datetime.strptime(raw.strip(), fmt)
-            break
-        except ValueError:
-            when = None
-    if when is None:
+    from datetime import timezone as _tz
+
+    from nekofetch.core.timefmt import parse_local
+
+    when_utc = parse_local(raw, tz_name)
+    if when_utc is None:
         return None
-    if when <= datetime.now():
+    if when_utc <= datetime.now(_tz.utc):
         return None
-    return when
+    return when_utc
 
 
 async def _schedule_publish(
     client: Client, container: Container, message: Message,
-    request_code: str, when: datetime,
+    request_code: str, when_utc: datetime, tz_name: str | None,
 ) -> None:
-    """Register an APScheduler one-shot that publishes ``request_code`` at ``when``.
+    """Persist a durable scheduled publish that survives restarts.
 
-    Reuses the same ``_execute_publish`` path the buttons use, so a scheduled
-    publish is byte-identical to an immediate one — just deferred.
+    The row is the source of truth: ``ScheduleService.sweep_due`` (a 60s job in
+    ``manager.py``) fires it via the same ``PublishingService`` path the buttons
+    use, so a scheduled publish is byte-identical to an immediate one — just
+    deferred, and never lost to a restart.
     """
-    scheduler = getattr(container, "scheduler", None)
-    if scheduler is None:
-        await message.reply(V.fail("scheduler unavailable"), parse_mode=ParseMode.HTML)
-        return
-
-    chat_id = message.chat.id
-
-    async def _fire() -> None:
-        # Build a minimal stand-in so _execute_publish can reply into the chat.
-        try:
-            await _execute_publish(
-                client, container,
-                await client.get_chat(chat_id), request_code, silent=False,
-            )
-        except Exception as exc:  # noqa: BLE001 — a scheduled fire must never crash the loop
-            log.warning("gojo.schedule.fire_failed", code=request_code, error=str(exc))
+    from nekofetch.services.schedule_service import ScheduleService
 
     title = request_code
     try:
@@ -618,13 +663,19 @@ async def _schedule_publish(
     except Exception:  # noqa: BLE001
         pass
 
-    scheduler.at(when, _fire, id=f"gojo-publish-{request_code}")
+    from nekofetch.core.timefmt import to_tz
+
+    await ScheduleService(container).schedule(
+        request_code, message.from_user.id, when_utc, anime_title=title,
+    )
+    when_text = to_tz(when_utc, tz_name)  # includes the "UTC+N" label
     await send_screen(
         client, message.chat.id,
-        Screen(caption=V.scheduled(title, when.strftime("%Y-%m-%d %H:%M")),
+        Screen(caption=V.scheduled(title, when_text),
                image=pick_artwork("gojo"),
                keyboard=keyboard([(V.BTN_TASKS, cb("gojo", "tasks"))])),
     )
+    await _show_schedule_queue(container, message, tz_name)
 
 
 def _parse_channel_id(raw: str) -> int | None:

@@ -102,19 +102,24 @@ class TestSchemaTables:
         assert "admin_availability" in table_names
 
     def test_total_table_count(self):
-        """Sanity check: should have 20 tables (17 NekoFetch + 3 Kage:
+        """Sanity check: should have 22 tables (19 NekoFetch + 3 Kage:
         admin_assignments, admin_availability, work_items).
 
         NekoFetch side includes ``channel_layout`` — the per-channel message
-        map that lets a franchise update append cards in place — and
-        ``channel_broadcasts``, the durable record of operator broadcasts posted
-        to every distribution channel (so a timed auto-delete survives restarts)."""
+        map that lets a franchise update append cards in place — ``channel_broadcasts``,
+        the durable record of operator broadcasts posted to every distribution
+        channel (so a timed auto-delete survives restarts) — ``scheduled_posts``,
+        the durable record of deferred main-channel publishes (so a schedule
+        survives a restart and is never double-fired) — and
+        ``channel_content_backups``, the wipe-proof snapshot of a distribution /
+        index channel's content pack (so a banned channel is re-posted verbatim
+        rather than re-rendered)."""
         import kurosoden.shared.models  # noqa: F401
         import nekofetch.infrastructure.database.postgres.models  # noqa: F401
         from nekofetch.infrastructure.database.postgres.base import Base
 
         table_names = list(Base.metadata.tables.keys())
-        assert len(table_names) == 20
+        assert len(table_names) == 22
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -151,7 +156,7 @@ class TestAdminAvailabilityColumns:
         expected = {"id", "created_at", "updated_at", "admin_telegram_id",
                      "admin_name", "is_available", "assigned_bots",
                      "scheduled_breaks", "total_tasks_completed",
-                     "weight", "working_hours"}
+                     "weight", "working_hours", "timezone"}
         assert cols == expected
 
     def test_is_available_is_boolean(self):

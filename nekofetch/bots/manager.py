@@ -586,6 +586,18 @@ class BotManager:
         )
         log.info("bots.broadcast_sweep.scheduled", interval_seconds=60)
 
+        # Scheduled-post sweep: durable backstop for deferred main-channel
+        # publishes. APScheduler jobs are in-memory with non-serializable
+        # callables, so a restart would forget every pending schedule. The
+        # ScheduledPost rows are the source of truth; this fires any past-due
+        # pending row via the normal PublishingService path.
+        from nekofetch.services.schedule_service import ScheduleService
+
+        self._scheduler.every(
+            60, ScheduleService(self._c).sweep_due, id="scheduled-post-sweep",
+        )
+        log.info("bots.schedule_sweep.scheduled", interval_seconds=60)
+
         # Stats: refresh the pinned database stats message in the storage channel.
         if self._c.config.storage_channel.enabled:
             try:

@@ -187,6 +187,21 @@ class IndexChannelService:
         client = getattr(self._c, "admin_client", None)
         return bool(self.cfg.enabled and self.cfg.channel_id != 0 and client is not None)
 
+    # ── config-driven channel identity (was hardcoded to AniXWeebs_Index) ───────
+    # These let the index survive a move to a fresh channel: on restore we rewrite
+    # ``channel_username`` / ``poster_message_id`` in config and every t.me link,
+    # poster button, and "go to top" target follows automatically.
+
+    def _username(self) -> str:
+        """Public username used to build t.me/<user>/<mid> deep links."""
+        return (getattr(self.cfg, "username", "") or "AniXWeebs_Index").lstrip("@")
+
+    def _poster_id(self) -> int:
+        return int(getattr(self.cfg, "poster_message_id", 0) or _POSTER_MSG_ID)
+
+    def _main_link(self) -> str:
+        return getattr(self.cfg, "main_channel_link", "") or _MAIN_LINK
+
     @staticmethod
     def letter_of(title: str) -> str:
         for ch in title:
@@ -233,8 +248,8 @@ class IndexChannelService:
         return len(list(result.scalars().all()))
 
     async def _get_poster_id(self) -> int:
-        """Return the poster message ID (hardcoded from rebuild)."""
-        return _POSTER_MSG_ID
+        """Return the poster message ID (config-driven; falls back to seed default)."""
+        return self._poster_id()
 
     # ── Refresh ─────────────────────────────────────────────────────────
 
@@ -516,7 +531,7 @@ class IndexChannelService:
 
         client = self._c.admin_client
         poster_id = await self._get_poster_id()
-        username = "AniXWeebs_Index"
+        username = self._username()
 
         rows = []
         row = []
@@ -545,11 +560,11 @@ class IndexChannelService:
     # ── Buttons / links ──────────────────────────────────────────────────
 
     def _letter_buttons(self) -> InlineKeyboardMarkup:
-        poster_id = _POSTER_MSG_ID
-        username = "AniXWeebs_Index"
+        poster_id = self._poster_id()
+        username = self._username()
         return InlineKeyboardMarkup([[
             InlineKeyboardButton(
-                _MAIN_BTN, url=_MAIN_LINK,
+                _MAIN_BTN, url=self._main_link(),
             ),
             InlineKeyboardButton(
                 _TOP_BTN, url=f"https://t.me/{username}/{poster_id}",
@@ -577,14 +592,13 @@ class IndexChannelService:
             ).scalars().all()
             sections = list(sections)
 
+        username = self._username()
         for idx, chunk in enumerate(chunks):
             if title in chunk and idx < len(sections) and sections[idx].message_id:
-                username = "AniXWeebs_Index"
                 return f"https://t.me/{username}/{sections[idx].message_id}"
 
         # Fallback: first section
         if sections and sections[0].message_id:
-            username = "AniXWeebs_Index"
             return f"https://t.me/{username}/{sections[0].message_id}"
 
         return None

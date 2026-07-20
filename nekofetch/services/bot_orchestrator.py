@@ -84,6 +84,19 @@ class BotOrchestratorService:
         if not self._c.config.features.distribution_bots:
             return None
 
+        # Snapshot the current pack into the wipe-proof backup *before* we delete
+        # the live BotContentPost rows below — normally publish-time capture has
+        # already stored it, but a channel published before backups existed (or
+        # since re-generated) would otherwise lose its verbatim content. The row
+        # upserts, so a fresh capture just refreshes an existing one. Best-effort.
+        try:
+            from nekofetch.services.backup_service import BackupService
+
+            await BackupService(self._c).record_distribution_channel(anime_doc_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bot.orchestrator.prewipe_backup_failed",
+                        anime=anime_doc_id, error=str(exc))
+
         # Remove the old entity record and its content posts.
         was_channel = False
         async with session_scope(self._c.pg_sessionmaker) as session:
@@ -124,10 +137,49 @@ class BotOrchestratorService:
             return None
 
         if info is not None:
+            # A recreated *channel* is re-posted verbatim from its wipe-proof
+            # backup (no re-render, no re-fetch) when a snapshot exists. Bots
+            # deliver on /start, so they only need their content regenerated.
+            restored = False
+            if was_channel and info.chat_id:
+                restored = await self._restore_channel(anime_doc_id, info.chat_id)
             await self._generate_content(info.id, anime_doc_id)
-            await self._bind_and_publish(info.id, anime_doc_id)
+            if not restored:
+                await self._bind_and_publish(info.id, anime_doc_id)
+            else:
+                # Content is already live on the fresh channel; just re-bind the
+                # title (which also refreshes the main-channel post) instead of
+                # re-publishing the channel from scratch.
+                await self._bind_title(info.id, anime_doc_id)
 
         return info
+
+    async def _restore_channel(self, anime_doc_id: str, new_chat_id: int) -> bool:
+        """Re-post a banned channel verbatim from backup. True if anything posted."""
+        try:
+            from nekofetch.services.backup_service import BackupService
+
+            stats = await BackupService(self._c).restore_distribution_channel(
+                anime_doc_id, new_chat_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — fall back to regeneration
+            log.warning("bot.orchestrator.restore_failed",
+                        anime=anime_doc_id, error=str(exc))
+            return False
+        if stats.restored:
+            log.info("bot.orchestrator.channel_restored", anime=anime_doc_id,
+                     restored=stats.restored, failed=stats.failed)
+            return True
+        return False
+
+    async def _bind_title(self, bot_id: int, anime_doc_id: str) -> None:
+        """Bind the entity to its title (also refreshes the main-channel post)."""
+        from nekofetch.services.bot_management_service import BotManagementService
+
+        try:
+            await BotManagementService(self._c).bind_title(bot_id, anime_doc_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bot.orchestrator.bind.failed", bot_id=bot_id, error=str(exc))
 
     async def _find_existing_bot(self, anime_doc_id: str) -> BotInfo | None:
         """Find an existing enabled bot/channel bound to this anime."""

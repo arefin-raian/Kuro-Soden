@@ -90,6 +90,16 @@ class SenkuPublisher:
             log.warning("senku.publish.persist_failed",
                         code=code, anime=anime_doc_id, error=str(exc))
 
+        # Snapshot the posted pack into a wipe-proof backup so a later ban can
+        # restore it verbatim (no re-render). Best-effort — never fail a publish.
+        try:
+            from nekofetch.services.backup_service import BackupService
+
+            await BackupService(self._c).record_distribution_channel(anime_doc_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("senku.publish.backup_failed",
+                        code=code, anime=anime_doc_id, error=str(exc))
+
         log.info("senku.publish.done", code=code, chat_id=chat_id,
                  posted=posted, pinned=len(pinned))
         return {"title": title, "chat_id": chat_id, "posted": posted,

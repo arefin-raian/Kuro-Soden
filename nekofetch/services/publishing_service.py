@@ -275,6 +275,19 @@ class PublishingService:
                 from nekofetch.services.bot_orchestrator import BotOrchestratorService
 
                 await BotOrchestratorService(self._c).ensure_bot_for_anime(anime_doc_id)
+                # Snapshot the freshly-generated channel pack into a wipe-proof
+                # backup so a later ban can restore it verbatim. Best-effort — a
+                # capture hiccup must never fail an otherwise-successful publish.
+                try:
+                    from nekofetch.services.backup_service import BackupService
+
+                    await BackupService(self._c).record_distribution_channel(anime_doc_id)
+                except Exception as exc:  # noqa: BLE001
+                    from nekofetch.core.logging import get_logger
+                    get_logger(__name__).warning(
+                        "publish.backup.distribution.failed",
+                        anime=anime_doc_id, error=str(exc),
+                    )
 
             # Step 3: Post to main channel (uses first season's generated thumbnail).
             from nekofetch.services.index_channel_service import IndexChannelService
@@ -286,6 +299,19 @@ class PublishingService:
             await IndexChannelService(self._c).refresh_letter(
                 IndexChannelService.letter_of(title)
             )
+            # Snapshot the main-channel post + the index sections (best-effort).
+            try:
+                from nekofetch.services.backup_service import BackupService
+
+                bsvc = BackupService(self._c)
+                await bsvc.backup_one(anime_doc_id)
+                await bsvc.record_index()
+            except Exception as exc:  # noqa: BLE001
+                from nekofetch.core.logging import get_logger
+                get_logger(__name__).warning(
+                    "publish.backup.main_index.failed",
+                    anime=anime_doc_id, error=str(exc),
+                )
 
         from nekofetch.services.log_channel_service import LogChannelService
 

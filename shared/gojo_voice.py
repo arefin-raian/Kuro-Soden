@@ -112,9 +112,20 @@ def scheduled(title: str, when_text: str) -> str:
     )
 
 
+def schedule_prompt(tz_label: str) -> str:
+    """The 'when?' prompt, stamped with the admin's own timezone."""
+    return (
+        f"{ICON} <b>When should it drop?</b>\n\n"
+        f"Send a time as <code>YYYY-MM-DD HH:MM</code> (24-hour) in <b>your</b> "
+        f"timezone (<b>{esc(tz_label)}</b>). <code>/cancel</code> to back out.\n\n"
+        "<i>The current queue is below so you don't land on top of another post.</i>"
+    )
+
+
+# Kept for back-compat; timezone-aware callers use ``schedule_prompt(...)``.
 SCHEDULE_PROMPT = (
     f"{ICON} <b>When should it drop?</b>\n\n"
-    "Send a time as <code>YYYY-MM-DD HH:MM</code> (24-hour, server time). "
+    "Send a time as <code>YYYY-MM-DD HH:MM</code> (24-hour, your timezone). "
     "<code>/cancel</code> to back out."
 )
 
@@ -123,6 +134,41 @@ def schedule_bad_time(raw: str) -> str:
     return (
         f"{ICON} <b>That time doesn't parse.</b> I read <code>{esc(raw)}</code> but "
         "I need <code>YYYY-MM-DD HH:MM</code> — and it has to be in the future."
+    )
+
+
+def schedule_table(rows: list[tuple[str, str]], tz_label: str) -> str:
+    """A friendly list of every pending scheduled post in the admin's timezone.
+
+    ``rows`` is ``[(when_text, title), …]`` already converted + sorted. All times
+    are shown in the reading admin's zone so nobody has to do mental math.
+    """
+    if not rows:
+        return (
+            f"{ICON} <b>Nothing scheduled yet.</b> The queue is clear — "
+            f"times shown in <b>{esc(tz_label)}</b>."
+        )
+    lines = [
+        f"{ICON} <b>Scheduled queue</b>  <i>(all times in {esc(tz_label)})</i>",
+        "",
+    ]
+    for when_text, title in rows:
+        lines.append(f"🕒 <code>{esc(when_text)}</code> — <b>{esc(title)}</b>")
+    lines.append("")
+    lines.append(f"<i>{len(rows)} post{'s' if len(rows) != 1 else ''} queued across all admins.</i>")
+    return "\n".join(lines)
+
+
+def schedule_collision(rows: list[tuple[str, str]], tz_label: str) -> str:
+    """Warn that the chosen time is close to an existing post."""
+    clash = "\n".join(
+        f"🕒 <code>{esc(w)}</code> — <b>{esc(t)}</b>" for w, t in rows
+    )
+    return (
+        f"{ICON} <b>Heads up — that's crowded.</b>\n\n"
+        f"There's already something near that slot (times in <b>{esc(tz_label)}</b>):\n"
+        f"{clash}\n\n"
+        "Send a different time to space them out, or <code>/cancel</code>."
     )
 
 

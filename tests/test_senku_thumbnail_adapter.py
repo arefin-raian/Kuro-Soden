@@ -175,27 +175,32 @@ async def test_store_pick_out_of_range_is_noop(adapter):
     assert nxt == "logo"  # still needs a logo
 
 
-# ── manual upload: catbox URL persists to the same field, advances the loop ──────
+# ── manual upload: mirrored URL persists to the same field, advances the loop ────
+#
+# store_upload now routes bytes through image_backup.backup_bytes (catbox →
+# telegraph → envs.sh) so an admin upload gets the same durable mirror as a
+# numbered pick; these tests mock that shared pipeline, not the raw host.
 
 @pytest.mark.asyncio
-async def test_store_upload_persists_catbox_url_and_advances(adapter, monkeypatch):
+async def test_store_upload_persists_mirror_url_and_advances(adapter, monkeypatch):
     await adapter.cache.set_entries("REQ-1", _entries())
 
     uploaded: dict = {}
 
-    async def fake_upload_bytes(file_bytes, *, filename="card.jpg", **kw):
-        uploaded["bytes"] = file_bytes
-        uploaded["filename"] = filename
-        return "https://files.catbox.moe/abc123.jpg"
+    async def fake_backup_bytes(container, blob, *, mime="image/jpeg", source_url=""):
+        from kurosoden.shared.image_backup import BackupImage
+        uploaded["bytes"] = blob
+        uploaded["mime"] = mime
+        return BackupImage(source_url=source_url,
+                           catbox_url="https://files.catbox.moe/abc123.jpg")
 
-    import nekofetch.providers.catbox as catbox
-    monkeypatch.setattr(catbox, "upload_bytes", fake_upload_bytes)
+    import kurosoden.shared.image_backup as image_backup
+    monkeypatch.setattr(image_backup, "backup_bytes", fake_backup_bytes)
 
     sel, nxt = await adapter.store_upload("REQ-1", 1, "poster", b"\xff\xd8rawjpeg")
-    # the uploaded URL lands in the SAME field a numbered poster pick would use
+    # the mirrored URL lands in the SAME field a numbered poster pick would use
     assert sel.poster_url == "https://files.catbox.moe/abc123.jpg"
     assert uploaded["bytes"] == b"\xff\xd8rawjpeg"
-    assert uploaded["filename"] == "poster.jpg"
     # a poster upload still leaves logo + bg to collect
     assert nxt == "logo"
 
@@ -204,11 +209,13 @@ async def test_store_upload_persists_catbox_url_and_advances(adapter, monkeypatc
 async def test_store_upload_propagates_host_failure(adapter, monkeypatch):
     await adapter.cache.set_entries("REQ-1", _entries())
 
-    async def boom(file_bytes, *, filename="card.jpg", **kw):
-        raise RuntimeError("catbox down")
+    async def all_hosts_down(container, blob, *, mime="image/jpeg", source_url=""):
+        # every host rejected the bytes → primary is None
+        from kurosoden.shared.image_backup import BackupImage
+        return BackupImage(source_url=source_url)
 
-    import nekofetch.providers.catbox as catbox
-    monkeypatch.setattr(catbox, "upload_bytes", boom)
+    import kurosoden.shared.image_backup as image_backup
+    monkeypatch.setattr(image_backup, "backup_bytes", all_hosts_down)
 
     with pytest.raises(RuntimeError):
         await adapter.store_upload("REQ-1", 1, "poster", b"data")

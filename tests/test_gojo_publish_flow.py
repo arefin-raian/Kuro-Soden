@@ -16,9 +16,12 @@ import pytest
 # ── schedule parsing ────────────────────────────────────────────────────────────
 
 class TestParseSchedule:
-    def _parse(self, raw: str):
+    def _parse(self, raw: str, tz_name: str | None = None):
+        # _parse_schedule now interprets the wall-clock string in the admin's
+        # IANA timezone; None falls back to the global display tz. The ±1-day
+        # margins below stay past/future under any zone (offsets are < 24h).
         from kurosoden.bots.gojo.handlers.tasks import _parse_schedule
-        return _parse_schedule(raw)
+        return _parse_schedule(raw, tz_name)
 
     def test_future_time_parses(self):
         future = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
