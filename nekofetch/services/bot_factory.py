@@ -147,6 +147,80 @@ class BotFactory:
             chat_id, name=name, username=username, anime_doc_id=anime_doc_id,
         )
 
+    async def create_channel_via_userbot(self, anime_doc_id: str) -> "BotInfo | None":
+        """Create a fully-configured channel on a quota-picked userbot session.
+
+        The "userbot" scope of the two-scope flow (feature #41): a pooled session
+        creates the channel and sets its title, username **and** description itself
+        (the admin only adds the profile picture + clears the service message). We
+        pick a random account that still has a free channel slot — never revealing
+        which — record the owning account for quota accounting, and mint the private
+        invite link. Returns ``None`` when every session is at capacity so the caller
+        can fall back to the "own" (admin-creates) scope.
+        """
+        if not self._c.config.features.distribution_bots:
+            raise NekoFetchError("distribution_bots feature is disabled")
+
+        from nekofetch.services.channel_quota_service import ChannelQuotaService
+
+        account = await ChannelQuotaService(self._c).pick_available()
+        if account is None:
+            log.warning("botfactory.userbot.no_free_account", anime=anime_doc_id)
+            return None
+
+        meta = await self._gather(anime_doc_id)
+        name = format_bot_name(meta["english"], meta["romaji"],
+                               audios=meta["audios"], languages=meta["languages"],
+                               qualities=meta["qualities"])
+        username = format_bot_username(meta["english"] or meta["romaji"] or "anime",
+                                       anime_doc_id, is_channel=True)
+        description = self._build_description(meta)
+
+        log.info("botfactory.create_channel_userbot", anime=anime_doc_id,
+                 name=name, username=username, account=account)
+
+        # Create + configure entirely on the chosen account so the channel it owns
+        # is the same one we tally against that account's quota.
+        chat_id = await self._userbot().execute_on(
+            account,
+            lambda c: self._create_and_configure_channel(c, name, username, description),
+        )
+
+        from nekofetch.services.bot_management_service import BotManagementService
+
+        info = await BotManagementService(self._c).register_channel(
+            chat_id, name=name, username=username, anime_doc_id=anime_doc_id,
+            creation_scope="userbot", userbot_account=account,
+        )
+        # Mint + store the private invite link now (same account owns the channel).
+        try:
+            from nekofetch.services.invite_link_service import InviteLinkService
+
+            await InviteLinkService(self._c).ensure_for_bot(info.id)
+        except Exception as exc:  # noqa: BLE001 — link is best-effort
+            log.warning("botfactory.userbot.invite_failed",
+                        anime=anime_doc_id, error=str(exc))
+        return info
+
+    async def _create_and_configure_channel(
+        self, client, name: str, username: str, description: str,
+    ) -> int:
+        """Create a channel and set its title/username/description via the userbot.
+
+        Bots can't create channels, but the userbot owns this one, so it sets
+        everything the admin would otherwise paste — leaving only the profile
+        picture (and clearing the service message) to the human."""
+        chat = await client.create_channel(title=name, description=description or "")
+        chat_id = chat.id  # type: ignore[union-attr]
+        # Public username is a separate call (create_channel doesn't take it).
+        try:
+            await client.set_chat_username(chat_id, username)
+        except Exception as exc:  # noqa: BLE001 — username may be taken; admin can fix
+            log.warning("botfactory.userbot.username_failed",
+                        username=username, error=str(exc))
+        log.info("botfactory.userbot.channel_created", name=name, chat_id=chat_id)
+        return chat_id
+
     # ── capacity ────────────────────────────────────────────────────────────────
     async def _count_entities(self) -> dict:
         """Count bots and channels across all userbot accounts."""

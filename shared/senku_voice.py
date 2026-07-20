@@ -100,6 +100,53 @@ def channel_intro(title: str) -> str:
     )
 
 
+def channel_scope_prompt(title: str) -> str:
+    return (
+        f"{ICON} <b>Step 1 — Who creates the channel?</b>\n\n"
+        f"Setting up the distribution channel for <b>{esc(title)}</b>. Two ways:\n\n"
+        "👤 <b>You create it</b> — you make the channel and add our bots as admins. "
+        "I'll hand you the title, description and username to paste.\n\n"
+        "🤖 <b>The bot creates it</b> — a pooled account makes it, sets the title, "
+        "description and username itself. You only add the profile photo.\n\n"
+        "<blockquote>⚠️ Prefer creating it yourself. Only let the bot do it once your "
+        "own account has hit its channel-creation limit — bot accounts have a hard "
+        "cap too, so we save them for when you're out of room.</blockquote>"
+    )
+
+
+CHANNEL_SCOPE_NO_USERBOT = (
+    f"{ICON} <b>No bot slots left.</b>\n\n"
+    "Every pooled account is at its channel cap, so I can't have one create this. "
+    "Create the channel yourself and add our bots as admins — tap the other option."
+)
+
+
+def userbot_creating(title: str) -> str:
+    return (
+        f"{ICON} <b>Creating the channel…</b>\n\n"
+        f"Spinning up the distribution channel for <b>{esc(title)}</b> — setting the "
+        "title, username and description. One moment."
+    )
+
+
+def userbot_created(handle: str, invite_link: str | None) -> str:
+    link = f"\n\n🔗 <a href=\"{esc(invite_link)}\">Open the channel</a>" if invite_link else ""
+    return (
+        f"{ICON} <b>Channel's up.</b> I created <b>{esc(handle)}</b> and set its title, "
+        f"username and description.{link}\n\n"
+        "🖼 <b>Your turn:</b> open it, set a profile photo (pick one you did <b>not</b> "
+        "use as a file thumbnail), and delete the “channel photo changed” service "
+        "message so the feed stays clean. Then tap <b>Done</b>."
+    )
+
+
+CHANNEL_USERBOT_FAILED = (
+    f"{ICON} <b>Couldn't create it.</b>\n\n"
+    "The pooled account hit a snag (flood-wait or a cap we didn't see). Create the "
+    "channel yourself instead and add our bots as admins — tap the other option."
+)
+
+
 def channel_title_block(title_text: str) -> str:
     return (
         "🏷 <b>Channel title</b> — tap to copy:\n"
@@ -324,6 +371,11 @@ BTN_CANCEL = "✗ Cancel"
 
 BTN_CHANNEL_DONE = "✅ I've created it"
 BTN_TMDB_POSTER = "🖼 Open TMDB Poster Page"
+
+# Two-scope channel creation (feature #41).
+BTN_SCOPE_OWN = "👤 I'll create it"
+BTN_SCOPE_USERBOT = "🤖 Let the bot create it"
+BTN_USERBOT_DONE = "✅ Done — I added the photo"
 
 BTN_SHOW_LOGOS = "🔬 Show Logos"
 BTN_SHOW_POSTERS = "🖼 Show Posters"

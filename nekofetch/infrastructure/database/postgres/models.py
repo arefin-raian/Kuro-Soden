@@ -188,6 +188,15 @@ class DistributionBot(Base, PKMixin, TimestampMixin):
     # the user's view is stale and needs a delete-then-redeliver dance.
     content_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # How this channel was created: "own" (an admin made it and added the bots as
+    # admins) or "userbot" (a pooled userbot session created it). NULL for bots and
+    # for channels created before scope tracking. Drives quota accounting below.
+    creation_scope: Mapped[str | None] = mapped_column(String(16))
+    # Name of the userbot account (``Account.name``) that owns a "userbot"-scoped
+    # channel — used to tally each session's channel count against its quota so a
+    # session at capacity is skipped. NULL for "own"-scoped channels and bots.
+    userbot_account: Mapped[str | None] = mapped_column(String(64), index=True)
+
 
 class AccessLink(Base, PKMixin, TimestampMixin):
     """Temporary / protected access tokens for season packages."""

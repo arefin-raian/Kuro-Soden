@@ -54,6 +54,11 @@ STATE_AWAIT_ORDER = "senku:wiz:await_order"
 # FSM state: waiting for the admin to send their own asset image (logo/poster/bg).
 STATE_AWAIT_UPLOAD = "senku:wiz:await_upload"
 
+# FSM state: after a userbot created the channel, waiting for the admin to add the
+# PFP + clear the service message, then mark done (they don't send a handle — we
+# already own the channel, so we advance straight to thumbnails).
+STATE_AWAIT_UBOT_DONE = "senku:wiz:await_ubot_done"
+
 # Commands that must never be swallowed by the free-text channel step.
 _RESERVED = ["start", "tasks", "create", "generate", "settings", "help", "cancel"]
 
@@ -114,7 +119,7 @@ def register(client: Client, container: Container) -> None:
             f"{V.handoff_card(title, code, len(entries))}\n\n{tree}",
             image=await _art(franchise, title), bot_name=BOT,
             buttons=[
-                [(V.BTN_BEGIN, cb(BOT, "wiz", "chan", code))],
+                [(V.BTN_BEGIN, cb(BOT, "wiz", "scope", code))],
                 [(V.BTN_HOME, cb(BOT, "home"))],
             ],
         )
@@ -143,6 +148,86 @@ def register(client: Client, container: Container) -> None:
             card(V.NO_TASK, image=pick_artwork(BOT), bot_name=BOT,
                  buttons=[[(V.BTN_HOME, cb(BOT, "home"))]]),
             old_msg=old_msg,
+        )
+
+    async def _scope_step(chat_id: int, code: str, *, old_msg: Message | None) -> None:
+        """Ask who creates the channel — the admin ("own") or a userbot.
+
+        Both paths converge on the thumbnail loop. The userbot option carries a
+        note: prefer creating your own until you've hit the ~10-channel cap.
+        """
+        ctx = await _channel_ctx(code)
+        if ctx is None:
+            await _no_task(chat_id, old_msg=old_msg)
+            return
+        franchise, title, _ess = ctx
+        screen = card(
+            V.channel_scope_prompt(title), image=await _art(franchise, title),
+            bot_name=BOT,
+            buttons=[
+                [(V.BTN_SCOPE_OWN, cb(BOT, "wiz", "chan", code))],
+                [(V.BTN_SCOPE_USERBOT, cb(BOT, "wiz", "ubot", code))],
+                [(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))],
+            ],
+        )
+        await send_screen(client, chat_id, screen, old_msg=old_msg)
+
+    async def _userbot_create(chat_id: int, user_id: int, code: str,
+                              *, old_msg: Message | None) -> None:
+        """Have a pooled userbot create + configure the channel, then hand off.
+
+        On success we store the channel and drop into the "add the photo + clear
+        the service message" wait; on no-free-account or failure we bounce the
+        admin back to the manual (own) flow rather than dead-ending."""
+        ctx = await _channel_ctx(code)
+        if ctx is None:
+            await _no_task(chat_id, old_msg=old_msg)
+            return
+        franchise, title, _ess = ctx
+        # Immediate feedback — creation can take a few seconds.
+        await send_screen(
+            client, chat_id,
+            card(V.userbot_creating(title), image=await _art(franchise, title),
+                 bot_name=BOT),
+            old_msg=old_msg,
+        )
+
+        anime_doc_id = franchise.get("anime_doc_id")
+        info = None
+        try:
+            from nekofetch.services.bot_factory import BotFactory
+
+            info = await BotFactory(container).create_channel_via_userbot(anime_doc_id)
+        except Exception as exc:  # noqa: BLE001 — surface as a recoverable failure
+            log.warning("senku.wiz.userbot_create_failed", code=code, error=str(exc))
+
+        if info is None:
+            # Either every account is full, or creation errored — go manual.
+            await send_screen(
+                client, chat_id,
+                card(V.CHANNEL_SCOPE_NO_USERBOT, image=await _art(franchise, title),
+                     bot_name=BOT,
+                     buttons=[[(V.BTN_SCOPE_OWN, cb(BOT, "wiz", "chan", code))],
+                              [(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
+            )
+            return
+
+        handle = f"@{info.username}" if info.username else info.name
+        invite = None
+        try:
+            from nekofetch.services.invite_link_service import InviteLinkService
+
+            invite = await InviteLinkService(container).ensure_for_bot(info.id)
+        except Exception as exc:  # noqa: BLE001 — link is best-effort
+            log.warning("senku.wiz.invite_failed", code=code, error=str(exc))
+        await cache.set_channel(code, handle=handle, chat_id=info.chat_id)
+        await fsm.set(user_id, STATE_AWAIT_UBOT_DONE, code=code)
+        await send_screen(
+            client, chat_id,
+            card(V.userbot_created(handle, invite), image=await _art(franchise, title),
+                 bot_name=BOT,
+                 buttons=[[(V.BTN_USERBOT_DONE, cb(BOT, "wiz", "ubotdone", code))],
+                          [(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
         )
 
     async def _channel_step(chat_id: int, code: str, *, old_msg: Message | None) -> None:
@@ -502,6 +587,17 @@ def register(client: Client, container: Container) -> None:
         if action == "open":
             await q.answer()
             await _open(chat_id, code, old_msg=q.message)
+        elif action == "scope":
+            await q.answer()
+            await _scope_step(chat_id, code, old_msg=q.message)
+        elif action == "ubot":
+            await q.answer()
+            await _userbot_create(chat_id, q.from_user.id, code, old_msg=q.message)
+        elif action == "ubotdone":
+            # Userbot made the channel; admin added the photo. Straight to thumbs.
+            await q.answer()
+            await fsm.clear(q.from_user.id)
+            await _enter_thumbnails(chat_id, code, old_msg=q.message)
         elif action == "chan":
             await q.answer()
             await _channel_step(chat_id, code, old_msg=q.message)

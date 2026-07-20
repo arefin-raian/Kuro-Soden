@@ -160,6 +160,26 @@ class UserbotPool:
                 await self._retire(client)
         raise RuntimeError(f"userbot.execute exhausted all accounts: {last}")
 
+    async def execute_on(
+        self, account_name: str, fn: Callable[[Client], Awaitable[T]],
+    ) -> T:
+        """Run ``fn`` on a *specific* account by name (no fallback to others).
+
+        The quota picker chooses which session should own a new channel, so the
+        creation must run on exactly that account — falling back to another would
+        create the channel under the wrong session and corrupt the slot tally.
+        Raises if that account isn't configured or can't start."""
+        acc = next((a for a in self.accounts if a.name == account_name), None)
+        if acc is None:
+            raise RuntimeError(f"userbot account not found: {account_name}")
+        async with self._lock:
+            client = self._clients.get(acc.name) or self._build(acc)
+            self._clients[acc.name] = client
+            if not client.is_connected:
+                await client.start()
+            await client.get_me()
+        return await fn(client)
+
     async def _retire(self, client: Client) -> None:
         if self._active is client:
             self._active = None

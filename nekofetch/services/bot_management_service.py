@@ -103,12 +103,17 @@ class BotManagementService:
     async def register_channel(
         self, chat_id: int, *, name: str, username: str | None = None,
         anime_doc_id: str | None = None,
+        creation_scope: str | None = None, userbot_account: str | None = None,
     ) -> BotInfo:
         """Register a public channel as a distribution entity.
 
         Channels don't have tokens — we store the chat_id instead. No Pyrogram
         client is needed; the orchestrator posts to the channel directly via the
         userbot session.
+
+        ``creation_scope`` records how the channel was made ("own" | "userbot")
+        and ``userbot_account`` the owning session (for a "userbot"-scoped
+        channel) so :class:`ChannelQuotaService` can tally each session's usage.
         """
         if not self._c.config.features.distribution_bots:
             raise NekoFetchError("distribution_bots feature is disabled")
@@ -134,6 +139,8 @@ class BotManagementService:
                 encrypted_token=self._c.cipher.encrypt("channel-no-token"),
                 anime_doc_id=anime_doc_id,
                 enabled=True,
+                creation_scope=creation_scope,
+                userbot_account=userbot_account,
             )
             session.add(record)
             await session.flush()
