@@ -140,9 +140,52 @@ class SettingsService:
             value = float(raw)
         elif isinstance(current, list):
             items = [p.strip() for p in raw.split(",") if p.strip()]
-            int_list = bool(current) and all(isinstance(x, int) for x in current)
-            value = [int(i) for i in items] if int_list else items
+            value = [int(i) for i in items] if self._is_int_list(section, field, current) else items
         else:
             value = raw
         await self.set_value(section, field, value)
         return value
+
+    def _is_int_list(self, section: str, field: str, current: list) -> bool:
+        """Whether a list field holds ints (channel ids), so appended/edited
+        values coerce to int too.
+
+        Relying on the *current* elements fails when the list is empty (a fresh
+        ``force_subscribe_channels`` starts ``[]``), which would silently store
+        the first id as a string. So we also consult the Pydantic field
+        annotation — ``list[int]`` → int — and fall back to the runtime elements.
+        """
+        target = self.section(section)
+        try:
+            annotation = type(target).model_fields[field].annotation
+            args = getattr(annotation, "__args__", ())
+            if args and args[0] is int:
+                return True
+        except Exception:  # noqa: BLE001 — annotation introspection is best-effort
+            pass
+        return bool(current) and all(isinstance(x, int) for x in current)
+
+    async def set_list_add(self, section: str, field: str, raw: str) -> list:
+        """Append one entry to a list field (deduped), preserving element type.
+
+        Unlike :meth:`set_typed` (which replaces the whole list), this adds a
+        single value to what's already there — so a force-sub channel list grows
+        one id at a time instead of the new value wiping the old ones."""
+        current = list(getattr(self.section(section), field, []) or [])
+        raw = raw.strip()
+        if not raw:
+            return current
+        item: object = int(raw) if self._is_int_list(section, field, current) else raw
+        if item not in current:
+            current.append(item)
+        await self.set_value(section, field, current)
+        return current
+
+    async def set_list_remove(self, section: str, field: str, index: int) -> list:
+        """Remove the entry at ``index`` from a list field. Out-of-range is a
+        no-op (the list may have changed since the screen was drawn)."""
+        current = list(getattr(self.section(section), field, []) or [])
+        if 0 <= index < len(current):
+            current.pop(index)
+            await self.set_value(section, field, current)
+        return current

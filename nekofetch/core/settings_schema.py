@@ -385,9 +385,9 @@ FIELD_DOCS: dict[str, FieldDoc] = {
     "security.anti_spam_cooldown_seconds": FieldDoc(
         desc="Minimum seconds between a user's repeated actions.", example="2"),
     "security.force_subscribe": FieldDoc(
-        desc="Require users to join channels before using the NekoFetch admin bot."),
+        desc="Require users to join your channels before they can use this bot."),
     "security.force_subscribe_channels": FieldDoc(
-        desc="Channel IDs users must join for the admin bot, comma-separated (-100… ids).",
+        desc="Channels users must join before using this bot, added one at a time (-100… ids).",
         example="-1001234567890, -1009876543210"),
     "security.dist_force_subscribe": FieldDoc(
         desc=(

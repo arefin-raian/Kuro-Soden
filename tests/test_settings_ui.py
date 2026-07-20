@@ -16,9 +16,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from kurosoden.shared.settings_ui import (
+    _section_rows,
     field_label,
     field_screen,
     hub_screen,
+    list_screen,
     parse_user_markup,
     render_sample,
     section_label,
@@ -161,3 +163,101 @@ def test_field_screen_has_no_raw_slug():
     # The human label shows, never the underscore slug.
     assert "Buttons per Row" in screen.caption
     assert "buttons_per_row" not in screen.caption
+
+
+# ── field allow-list (mount a subset of a shared section) ─────────────────────
+
+class _FakeSvc:
+    """Minimal stand-in for SettingsService.section_fields, driven by a dict of
+    section → [(field, value, kind), …]."""
+
+    def __init__(self, fields):
+        self._fields = fields
+
+    def section_fields(self, name):
+        return self._fields.get(name, [])
+
+
+def _row_datas(rows):
+    return [b for row in rows for (_, b) in row]
+
+
+def test_section_rows_full_shows_every_field():
+    svc = _FakeSvc({"security": [
+        ("force_subscribe", False, "bool"),
+        ("watermarking", False, "bool"),
+        ("owner_id", 0, "value"),
+    ]})
+    rows = _section_rows(svc, "lelouch", "security")
+    datas = _row_datas(rows)
+    assert any("security.force_subscribe" in d for d in datas)
+    assert any("security.watermarking" in d for d in datas)
+    assert any("security.owner_id" in d for d in datas)
+
+
+def test_section_rows_allow_list_hides_unlisted_fields():
+    svc = _FakeSvc({"security": [
+        ("force_subscribe", False, "bool"),
+        ("watermarking", False, "bool"),
+        ("owner_id", 0, "value"),
+    ]})
+    rows = _section_rows(svc, "lelouch", "security", allow=["force_subscribe"])
+    datas = _row_datas(rows)
+    assert any("security.force_subscribe" in d for d in datas)
+    # Unlisted fields must not appear at all.
+    assert not any("security.watermarking" in d for d in datas)
+    assert not any("security.owner_id" in d for d in datas)
+
+
+def test_section_rows_allow_list_preserves_given_order():
+    svc = _FakeSvc({"queue": [
+        ("max_visible", 10, "value"),
+        ("position_recalc_seconds", 5, "value"),
+    ]})
+    rows = _section_rows(svc, "lelouch", "queue",
+                         allow=["position_recalc_seconds", "max_visible"])
+    datas = [d for d in _row_datas(rows) if d.startswith("lelouch|set")]
+    # First data row should be the first allow-list entry.
+    assert "queue.position_recalc_seconds" in datas[0]
+    assert "queue.max_visible" in datas[1]
+
+
+def test_section_rows_list_field_opens_list_manager():
+    svc = _FakeSvc({"security": [
+        ("force_subscribe_channels", [-100123], "list"),
+    ]})
+    rows = _section_rows(svc, "lelouch", "security")
+    datas = _row_datas(rows)
+    # A list-typed field routes to the list manager (set|list), NOT the edit card.
+    assert any(d == "lelouch|set|list|security.force_subscribe_channels" for d in datas)
+    assert not any("set|edit|security.force_subscribe_channels" in d for d in datas)
+
+
+# ── list manager screen (add/remove) ─────────────────────────────────────────
+
+def test_list_screen_has_add_and_per_entry_delete():
+    screen = list_screen("lelouch", "security", "force_subscribe_channels",
+                         [-1001111111111, -1002222222222])
+    flat = [b for row in screen.keyboard.inline_keyboard for b in row]
+    datas = [b.callback_data for b in flat]
+    # One delete per entry, indexed 0..n-1, plus an Add button.
+    assert "lelouch|set|ldel|security.force_subscribe_channels|0" in datas
+    assert "lelouch|set|ldel|security.force_subscribe_channels|1" in datas
+    assert "lelouch|set|ladd|security.force_subscribe_channels" in datas
+
+
+def test_list_screen_empty_shows_hint_and_add():
+    screen = list_screen("lelouch", "security", "force_subscribe_channels", [])
+    datas = [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
+    assert "lelouch|set|ladd|security.force_subscribe_channels" in datas
+    # No delete rows when the list is empty.
+    assert not any("ldel" in d for d in datas)
+
+
+def test_field_screen_append_mode_asks_for_single_value():
+    screen = field_screen("lelouch", "security", "force_subscribe_channels",
+                          [], "list", widget="channel", mode="append")
+    # Append mode must NOT invite a comma-separated list (that was the old
+    # replace-everything behaviour); Cancel returns to the list manager.
+    datas = [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
+    assert any("set|list|security.force_subscribe_channels" in d for d in datas)

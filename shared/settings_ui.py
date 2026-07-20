@@ -378,9 +378,20 @@ def hub_screen(
     return Screen(caption=caption, image=pick_artwork(bot), keyboard=keyboard(*rows))
 
 
-def _section_rows(svc: SettingsService, bot: str, section: str) -> list[list[tuple[str, str]]]:
+def _section_rows(
+    svc: SettingsService, bot: str, section: str,
+    *, allow: Sequence[str] | None = None,
+) -> list[list[tuple[str, str]]]:
+    """Rows for one section. When ``allow`` is given, only those field names are
+    shown (and in that order), so a bot can mount a *subset* of a shared section
+    instead of dumping every field at the operator. ``None`` = the whole section
+    (backward-compatible with bots that mount full sections)."""
     rows: list[list[tuple[str, str]]] = []
-    for field, value, kind in svc.section_fields(section):
+    fields = svc.section_fields(section)
+    if allow is not None:
+        by_name = {f: (f, v, k) for f, v, k in fields}
+        fields = [by_name[name] for name in allow if name in by_name]
+    for field, value, kind in fields:
         label = field_label(field, section)
         widget = widget_for(section, field, value)
         if widget == "toggle":
@@ -390,28 +401,67 @@ def _section_rows(svc: SettingsService, bot: str, section: str) -> list[list[tup
             # Fixed value set → open the tap-to-pick screen (no free-text typos).
             rows.append([(f"{label}  ·  {_shorten(value)}",
                           cb(bot, "set", "pick", f"{section}.{field}"))])
+        elif kind == "list":
+            # Lists get a full add/remove manager, NOT the replace-only text card —
+            # so adding one entry never wipes the rest and each entry is removable.
+            rows.append([(f"{label}  ·  {_shorten(value)}",
+                          cb(bot, "set", "list", f"{section}.{field}"))])
         else:
-            # text / number / list / template / channel / sticker / timezone all
-            # open the edit card, which adapts its capture to the widget.
+            # text / number / template / channel / sticker / timezone all open the
+            # edit card, which adapts its capture to the widget.
             rows.append([(f"{label}  ·  {_shorten(value)}",
                           cb(bot, "set", "edit", f"{section}.{field}"))])
     rows.append([("⇐ Back", cb(bot, "set", "home"))])
     return rows
 
 
-def section_screen(svc: SettingsService, bot: str, section: str) -> Screen:
+def section_screen(
+    svc: SettingsService, bot: str, section: str,
+    *, allow: Sequence[str] | None = None,
+) -> Screen:
     caption = (
         f"{_bot_icon(bot)}  <b>{section_label(section)}</b>\n\n"
         "🟢 = on · ⚪️ = off — tap to flip.\n"
         "Rows with text open an editor that shows an example before you type."
     )
     return Screen(caption=caption, image=pick_artwork(bot),
-                  keyboard=keyboard(*_section_rows(svc, bot, section)))
+                  keyboard=keyboard(*_section_rows(svc, bot, section, allow=allow)))
+
+
+def list_screen(bot: str, section: str, field: str, current: object) -> Screen:
+    """Full add/remove manager for a list-typed field (e.g. force-sub channels).
+
+    Replaces the old replace-only text editor for lists, which wiped the whole
+    list on every edit and offered no way to delete a single entry. Here each
+    current entry gets its own 🗑 row that removes just that entry by index, and
+    a single ➕ Add button appends one new value. Empty lists show a friendly
+    hint instead of a bare screen.
+    """
+    label = field_label(field, section)
+    doc = doc_for(section, field)
+    items = list(current) if isinstance(current, list) else []
+    parts: list[str] = [f"{_bot_icon(bot)}  <b>{label}</b>", ""]
+    parts.append(f"<blockquote>{doc.desc if doc else f'Manages “{label}”.'}</blockquote>")
+    if items:
+        parts += ["", "<b>Current entries</b> — tap 🗑 to remove one:"]
+        parts += [f"  • <code>{_html.escape(str(it))}</code>" for it in items]
+    else:
+        parts += ["", "<i>No entries yet. Tap ➕ Add to add the first one.</i>"]
+    parts += ["", "<i>Add entries one at a time — adding never clears the others.</i>"]
+
+    rows: list[list[tuple[str, str]]] = []
+    for i, it in enumerate(items):
+        rows.append([(f"🗑  {_shorten(it, 28)}",
+                      cb(bot, "set", "ldel", f"{section}.{field}", str(i)))])
+    rows.append([("➕ Add", cb(bot, "set", "ladd", f"{section}.{field}"))])
+    rows.append([("⇐ Back", cb(bot, "set", "sec", section))])
+    return Screen(caption="\n".join(parts), image=pick_artwork(bot),
+                  keyboard=keyboard(*rows))
 
 
 def field_screen(
     bot: str, section: str, field: str, current: object, kind: str,
-    *, widget: str | None = None,
+    *, widget: str | None = None, mode: str | None = None,
 ) -> Screen:
     """The human-friendly editor card for one setting.
 
@@ -423,7 +473,12 @@ def field_screen(
     ``widget`` tailors the closing instruction: ``channel`` invites forwarding a
     message or pasting an id, ``sticker`` invites sending the sticker itself, and
     everything else keeps the "send your new value" prompt.
+
+    ``mode="append"`` renders the *add-one-entry* variant used by the list
+    manager: it asks for a single value to append (never a comma list that would
+    replace), and Cancel returns to the list manager rather than the section.
     """
+    append = mode == "append"
     doc = doc_for(section, field)
     label = field_label(field, section)
     parts: list[str] = [f"{_bot_icon(bot)}  <b>{label}</b>", ""]
@@ -466,7 +521,14 @@ def field_screen(
     shown = ", ".join(map(str, current)) if isinstance(current, list) else str(current or "—")
     parts += ["", f"<b>Right now:</b> <code>{_html.escape(shown)}</code>"]
 
-    if widget == "channel":
+    if append and widget == "channel":
+        parts += ["", "<i>Forward any message from the channel, or paste its id "
+                  "(the long -100… number) to <b>add</b> it. Send /cancel to keep "
+                  "the list as-is.</i>"]
+    elif append:
+        parts += ["", "<i>Send one value to <b>add</b> it to the list. Send "
+                  "/cancel to keep the list as-is.</i>"]
+    elif widget == "channel":
         parts += ["", "<i>Forward any message from the channel, or paste its id "
                   "(the long -100… number). Send /cancel to keep it.</i>"]
     elif widget == "sticker":
@@ -476,7 +538,10 @@ def field_screen(
         tail = " (separate several with commas)" if kind == "list" else ""
         parts += ["", f"<i>Send your new value as a message{tail}. Send /cancel to keep it.</i>"]
 
-    kb = keyboard([("✗ Cancel", cb(bot, "set", "sec", section))])
+    # Cancel returns to the list manager in append mode, else back to the section.
+    cancel_cb = (cb(bot, "set", "list", f"{section}.{field}") if append
+                 else cb(bot, "set", "sec", section))
+    kb = keyboard([("✗ Cancel", cancel_cb)])
     return Screen(caption="\n".join(parts), image=pick_artwork(bot), keyboard=kb)
 
 
@@ -526,6 +591,7 @@ def register_settings(
     group: int = 0,
     input_group: int = 5,
     extra_buttons: Sequence[tuple[str, str]] = (),
+    fields: dict[str, Sequence[str]] | None = None,
 ) -> None:
     """Wire ``bot``'s settings hub/section/field/edit flow onto real config.
 
@@ -535,13 +601,23 @@ def register_settings(
     the bot's other message handlers. Permissions and owner-only gating mirror
     the admin/Levi panels. ``extra_buttons`` are appended to the hub for per-admin
     surfaces that live outside config (e.g. the timezone picker).
+
+    ``fields`` optionally restricts a section to a *subset* of its fields:
+    ``{section: [field, …]}``. A section listed here shows only those fields, in
+    that order — so a bot can mount, say, only the request-relevant slice of the
+    shared ``security`` section instead of dumping watermarking/owner-id/etc. at
+    the operator. Sections absent from ``fields`` render in full (unchanged).
     """
     sections = list(sections)
     extra_buttons = list(extra_buttons)
+    field_allow = {k: list(v) for k, v in (fields or {}).items()}
     auth = AuthService(container)
     svc = SettingsService(container)
     fsm = FSM(container.redis, bot=bot)
     state_edit = f"{bot}_settings:edit"
+
+    def _allow_for(section: str) -> Sequence[str] | None:
+        return field_allow.get(section)
 
     def _live_sections() -> list[str]:
         return [s for s in sections if svc.section(s) is not None]
@@ -590,7 +666,9 @@ def register_settings(
             return
         await q.answer()
         await send_screen(client, q.message.chat.id,
-                          section_screen(svc, bot, section), old_msg=q.message)
+                          section_screen(svc, bot, section,
+                                         allow=_allow_for(section)),
+                          old_msg=q.message)
 
     # ── toggle a boolean in place ────────────────────────────────────────────
     @client.on_callback_query(filters.regex(rf"^{bot}\|set\|tog\|"), group=group)
@@ -601,7 +679,8 @@ def register_settings(
             return
         new_val = await svc.toggle(section, field)
         await q.answer(f"{field_label(field, section)} → {'on' if new_val else 'off'}")
-        await edit_markup(q, _section_rows(svc, bot, section))
+        await edit_markup(q, _section_rows(svc, bot, section,
+                                           allow=_allow_for(section)))
 
     # ── open a field editor ──────────────────────────────────────────────────
     @client.on_callback_query(filters.regex(rf"^{bot}\|set\|edit\|"), group=group)
@@ -620,6 +699,57 @@ def register_settings(
         await q.answer()
         await send_screen(client, q.message.chat.id,
                           field_screen(bot, section, field, current, kind, widget=widget),
+                          old_msg=q.message)
+
+    # ── list manager: show entries with per-entry delete + an Add button ───────
+    @client.on_callback_query(filters.regex(rf"^{bot}\|set\|list\|"), group=group)
+    async def _on_list(_: Client, q: CallbackQuery) -> None:
+        key = q.data.split("|", 3)[3]
+        section, field = key.split(".", 1)
+        if await _deny(q, section):
+            return
+        # Leaving a half-started Add capture (opened the manager again) cancels it.
+        await fsm.clear(q.from_user.id)
+        current = getattr(svc.section(section), field, []) or []
+        await q.answer()
+        await send_screen(client, q.message.chat.id,
+                          list_screen(bot, section, field, list(current)),
+                          old_msg=q.message)
+
+    # ── list manager: prompt to append ONE entry (never replaces the list) ──────
+    @client.on_callback_query(filters.regex(rf"^{bot}\|set\|ladd\|"), group=group)
+    async def _on_list_add(_: Client, q: CallbackQuery) -> None:
+        key = q.data.split("|", 3)[3]
+        section, field = key.split(".", 1)
+        if await _deny(q, section):
+            return
+        current = getattr(svc.section(section), field, [])
+        widget = widget_for(section, field, current)
+        # ``mode=append`` tells the capture handler to append, not overwrite.
+        await fsm.set(q.from_user.id, state_edit, section=section, field=field,
+                      widget=widget, mode="append")
+        await q.answer()
+        await send_screen(client, q.message.chat.id,
+                          list_add_screen(bot, section, field, widget=widget),
+                          old_msg=q.message)
+
+    # ── list manager: delete ONE entry by index ─────────────────────────────────
+    @client.on_callback_query(filters.regex(rf"^{bot}\|set\|ldel\|"), group=group)
+    async def _on_list_del(_: Client, q: CallbackQuery) -> None:
+        # data: {bot}|set|ldel|{section}.{field}|{index}
+        _, _, _, key, idx = q.data.split("|", 4)
+        section, field = key.split(".", 1)
+        if await _deny(q, section):
+            return
+        try:
+            await svc.set_list_remove(section, field, int(idx))
+        except (ValueError, KeyError, IndexError, TypeError):
+            await q.answer("Couldn't remove that entry.", show_alert=True)
+            return
+        await q.answer("Removed.")
+        current = getattr(svc.section(section), field, []) or []
+        await send_screen(client, q.message.chat.id,
+                          list_screen(bot, section, field, list(current)),
                           old_msg=q.message)
 
     # ── open a choice picker (enum-like field) ────────────────────────────────
@@ -670,6 +800,7 @@ def register_settings(
             return
         section, field = data.get("section"), data.get("field")
         widget = data.get("widget")
+        append = data.get("mode") == "append"
         if is_owner_only(section) and not auth.is_owner(user):
             await fsm.clear(message.from_user.id)
             await message.reply("That section is owner-only.", parse_mode=ParseMode.HTML)
@@ -710,11 +841,29 @@ def register_settings(
             else:
                 raw = parse_user_markup(message)
         try:
-            value = await svc.set_typed(section, field, raw)
+            if append:
+                value = await svc.set_list_add(section, field, raw)
+            else:
+                value = await svc.set_typed(section, field, raw)
         except (ValueError, KeyError, TypeError):
             await message.reply(
                 "Hmm, that didn't look right for this setting. "
                 "Check the example on the card and try again.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        if append:
+            # List manager: confirm the append and drop the operator back on the
+            # manager so they can add/remove more without re-navigating.
+            shown = ", ".join(map(str, value)) if isinstance(value, list) else str(value)
+            await message.reply(
+                f"✅ Added. <b>{field_label(field, section)}</b> is now: "
+                f"<code>{_html.escape(shown)}</code>",
+                reply_markup=keyboard(
+                    [("＋ Add another", cb(bot, "set", "ladd", f"{section}.{field}"))],
+                    [("⇐ Back", cb(bot, "set", "list", f"{section}.{field}"))],
+                ),
                 parse_mode=ParseMode.HTML,
             )
             return

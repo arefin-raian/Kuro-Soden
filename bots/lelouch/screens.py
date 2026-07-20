@@ -18,17 +18,24 @@ BOT = "lelouch"
 
 
 def home(name: str, *, is_staff: bool = False, is_admin: bool = False) -> Screen:
+    """The request bot's front door — exactly the buttons the viewer needs.
+
+    Regular users see only the two request actions. Admins get two extra:
+    Batch Work and Command (the admin panel, where settings, the board, ranks,
+    availability and hours all live). Settings and the board are NOT surfaced at
+    the top level — they belong inside Command, so a normal user's home stays a
+    clean two-button request desk and nothing appears twice.
+
+    ``is_admin`` gates the admin row; ``is_staff`` no longer unlocks Batch/Command
+    on its own (those are admin-only, per the pipeline's separation of duties).
+    """
     caption = f"{V.home_title(name)}\n\n{V.HOME_BODY}"
     rows = [[(V.BTN_REQUEST, cb("req", "new")),
              (V.BTN_MY_REQUESTS, cb("req", "mine", 0))]]
-    if is_staff or is_admin:
+    if is_admin:
         caption += f"\n\n{V.HOME_ADMIN_TAG}"
         rows.append([(V.BTN_BATCH, cb("batch", "new")),
-                     (V.BTN_QUEUE, cb(BOT, "queue", 0))])
-    row = [(V.BTN_SETTINGS, cb(BOT, "settings"))]
-    if is_admin:
-        row.append((V.BTN_ADMIN, cb(BOT, "admin")))
-    rows.append(row)
+                     (V.BTN_ADMIN, cb(BOT, "admin"))])
     return card(caption, bot_name=BOT, buttons=rows)
 
 

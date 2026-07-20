@@ -58,7 +58,15 @@ def register_all(client: Client, container: Container) -> None:
     # ── Lelouch's settings panel (lelouch|set|…) — shared human-friendly engine ─
     # Registered before the app.py `lelouch|` dispatcher so every settings tap is
     # handled here. Lelouch owns the request-intake side of the config: whether
-    # requests are accepted at all, force-join gating, and queue sizing.
+    # requests are accepted, the request-bot join gate, request queue sizing, and
+    # request-rate limits.
+    #
+    # `features`, `security` and `queue` are SHARED global sections that also hold
+    # download/distribution/owner fields Lelouch has no business showing. The
+    # `fields` allow-list mounts only the request-relevant slice of each, so the
+    # request bot never leaks watermarking / distribution / owner-id at the
+    # operator. Evicted fields keep living in their sections, edited from the bots
+    # that own them.
     from kurosoden.shared.settings_ui import register_settings
 
     register_settings(
@@ -68,6 +76,17 @@ def register_all(client: Client, container: Container) -> None:
         blurb=(
             "The request desk — whether new requests are accepted, whether "
             "users must join your channels first, and how many requests wait "
-            "in line. On/off switches flip in place; numbers open a simple editor."
+            "in line. On/off switches flip in place; the join-channel list has "
+            "its own add/remove manager; numbers open a simple editor."
         ),
+        fields={
+            "features": ["request_system"],
+            "security": [
+                "force_subscribe",
+                "force_subscribe_channels",
+                "rate_limit_per_minute",
+                "anti_spam_cooldown_seconds",
+            ],
+            "queue": ["max_visible", "position_recalc_seconds"],
+        },
     )
