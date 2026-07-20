@@ -54,9 +54,14 @@ STATE_AWAIT_ORDER = "senku:wiz:await_order"
 # FSM state: waiting for the admin to send their own asset image (logo/poster/bg).
 STATE_AWAIT_UPLOAD = "senku:wiz:await_upload"
 
-# FSM state: after a userbot created the channel, waiting for the admin to add the
-# PFP + clear the service message, then mark done (they don't send a handle — we
-# already own the channel, so we advance straight to thumbnails).
+# FSM state: after a userbot created the channel, waiting for the operator to JOIN
+# it via the invite link — you can only promote an existing member, so they must
+# join before we can grant them the admin rights needed to set the profile picture.
+STATE_AWAIT_UBOT_JOIN = "senku:wiz:await_ubot_join"
+
+# FSM state: operator promoted; waiting for them to add the PFP + clear the service
+# message, then mark done (they don't send a handle — we already own the channel,
+# so we advance straight to thumbnails).
 STATE_AWAIT_UBOT_DONE = "senku:wiz:await_ubot_done"
 
 # Commands that must never be swallowed by the free-text channel step.
@@ -221,13 +226,65 @@ def register(client: Client, container: Container) -> None:
         except Exception as exc:  # noqa: BLE001 — link is best-effort
             log.warning("senku.wiz.invite_failed", code=code, error=str(exc))
         await cache.set_channel(code, handle=handle, chat_id=info.chat_id)
+        # The operator must JOIN before we can promote them (you can only promote an
+        # existing member), and they need admin rights to set the profile picture.
+        # So: join → "I've joined" → promote → set-photo → done. Stash the chat_id
+        # and invite so the join step can promote against the right channel.
+        await fsm.set(user_id, STATE_AWAIT_UBOT_JOIN, code=code,
+                      chat_id=info.chat_id)
+        buttons = []
+        if invite:
+            buttons.append([(V.BTN_USERBOT_JOIN, invite)])
+        await send_screen(
+            client, chat_id,
+            card(V.userbot_join(handle, invite), image=await _art(franchise, title),
+                 bot_name=BOT,
+                 url_buttons=buttons or None,
+                 buttons=[[(V.BTN_USERBOT_JOINED, cb(BOT, "wiz", "ubotjoined", code))],
+                          [(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
+        )
+
+    async def _userbot_joined(chat_id: int, user_id: int, code: str,
+                              *, old_msg: Message | None) -> None:
+        """After the operator joins the invite link, promote them, then ask for the
+        profile picture. Promotion grants change-info rights (needed to set the PFP);
+        if it fails we say so plainly rather than sending them to a dead end."""
+        _state, data = await fsm.get(user_id)
+        channel_id = data.get("chat_id")
+        ctx = await _channel_ctx(code)
+        franchise, title = (ctx[0], ctx[1]) if ctx else (None, await _title_of(code, None))
+
+        promoted = False
+        if channel_id:
+            try:
+                from nekofetch.services.bot_factory import BotFactory
+
+                promoted = await BotFactory(container).promote_operator(
+                    int(channel_id), user_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("senku.wiz.promote_operator_failed", code=code, error=str(exc))
+
+        if not promoted:
+            # Couldn't promote — most often the operator hasn't actually joined yet.
+            await send_screen(
+                client, chat_id,
+                card(V.userbot_promote_failed(), image=await _art(franchise, title),
+                     bot_name=BOT,
+                     buttons=[[(V.BTN_USERBOT_JOINED, cb(BOT, "wiz", "ubotjoined", code))],
+                              [(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
+                old_msg=old_msg,
+            )
+            return
+
         await fsm.set(user_id, STATE_AWAIT_UBOT_DONE, code=code)
         await send_screen(
             client, chat_id,
-            card(V.userbot_created(handle, invite), image=await _art(franchise, title),
+            card(V.userbot_set_photo(), image=await _art(franchise, title),
                  bot_name=BOT,
                  buttons=[[(V.BTN_USERBOT_DONE, cb(BOT, "wiz", "ubotdone", code))],
                           [(V.BTN_CANCEL, cb(BOT, "wiz", "cancel", code))]]),
+            old_msg=old_msg,
         )
 
     async def _channel_step(chat_id: int, code: str, *, old_msg: Message | None) -> None:
@@ -593,6 +650,10 @@ def register(client: Client, container: Container) -> None:
         elif action == "ubot":
             await q.answer()
             await _userbot_create(chat_id, q.from_user.id, code, old_msg=q.message)
+        elif action == "ubotjoined":
+            # Operator joined the invite link; promote them, then ask for the photo.
+            await q.answer("Checking…")
+            await _userbot_joined(chat_id, q.from_user.id, code, old_msg=q.message)
         elif action == "ubotdone":
             # Userbot made the channel; admin added the photo. Straight to thumbs.
             await q.answer()

@@ -192,6 +192,14 @@ class BotFactory:
             chat_id, name=name, username=username, anime_doc_id=anime_doc_id,
             creation_scope="userbot", userbot_account=account,
         )
+        # Add the pipeline bots (Senku + Gojo) as admins now — the userbot owns the
+        # channel so it can promote them directly. Both need admin rights to post
+        # the pack / publish; best-effort so a promote hiccup doesn't lose the channel.
+        try:
+            await self._promote_bots(account, chat_id)
+        except Exception as exc:  # noqa: BLE001 — bots can be re-added manually
+            log.warning("botfactory.userbot.promote_bots_failed",
+                        chat_id=chat_id, error=str(exc))
         # Mint + store the private invite link now (same account owns the channel).
         try:
             from nekofetch.services.invite_link_service import InviteLinkService
@@ -201,6 +209,108 @@ class BotFactory:
             log.warning("botfactory.userbot.invite_failed",
                         anime=anime_doc_id, error=str(exc))
         return info
+
+    def _pipeline_bot_refs(self) -> list[str | int]:
+        """Resolve the Senku + Gojo bot identities to add as channel admins.
+
+        Reads the live user id off each running pipeline client (populated after
+        ``Client.start()``); falls back to the ``@username`` when the id isn't
+        cached yet. Empty when the pipeline manager isn't wired (e.g. tests)."""
+        refs: list[str | int] = []
+        mgr = getattr(self._c, "pipeline_manager", None)
+        if mgr is None:
+            return refs
+        for name in ("senku", "gojo"):
+            client = getattr(mgr, name, None)
+            me = getattr(client, "me", None) if client is not None else None
+            if me is not None and getattr(me, "id", None):
+                refs.append(me.id)
+            elif me is not None and getattr(me, "username", None):
+                refs.append(me.username)
+        return refs
+
+    async def _promote_bots(self, account: str, chat_id: int) -> None:
+        """Add + promote the Senku and Gojo bots as admins on ``chat_id``.
+
+        Runs on the channel-owning ``account`` (the only session that can promote).
+        Each bot is added then given content + info rights; per-bot failures are
+        logged and skipped so one bad promote never blocks the other."""
+        refs = self._pipeline_bot_refs()
+        if not refs:
+            log.warning("botfactory.userbot.no_bot_refs", chat_id=chat_id)
+            return
+
+        async def _do(client) -> None:
+            from pyrogram.types import ChatPrivileges
+
+            privileges = ChatPrivileges(
+                can_change_info=True, can_post_messages=True,
+                can_edit_messages=True, can_delete_messages=True,
+                can_invite_users=True, can_pin_messages=True,
+                can_manage_chat=True,
+            )
+            for ref in refs:
+                try:
+                    await client.add_chat_members(chat_id, ref)
+                except Exception as exc:  # noqa: BLE001 — may already be a member
+                    log.debug("botfactory.userbot.add_bot_skipped",
+                              ref=ref, error=str(exc))
+                try:
+                    await client.promote_chat_member(chat_id, ref, privileges=privileges)
+                    log.info("botfactory.userbot.bot_promoted", chat_id=chat_id, ref=ref)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("botfactory.userbot.promote_failed",
+                                ref=ref, error=str(exc))
+
+        await self._userbot().execute_on(account, _do)
+
+    async def promote_operator(self, chat_id: int, operator_id: int) -> bool:
+        """Promote the requesting operator to admin on a userbot-created channel.
+
+        Called after the operator joins via the invite link (you can only promote
+        an existing member). Grants ``can_change_info`` so they can set the profile
+        picture — the whole reason they need admin rights. Runs on the channel's
+        owning userbot account (looked up from the row). Returns True on success."""
+        from nekofetch.infrastructure.database.postgres.models import DistributionBot
+        from nekofetch.infrastructure.database.postgres.session import session_scope
+
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            row = (
+                await session.execute(
+                    select(DistributionBot).where(
+                        DistributionBot.chat_id == chat_id,
+                        DistributionBot.is_channel.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            account = row.userbot_account if row else None
+
+        if not account:
+            log.warning("botfactory.userbot.promote_operator_no_account", chat_id=chat_id)
+            return False
+
+        async def _do(client) -> bool:
+            from pyrogram.types import ChatPrivileges
+
+            await client.promote_chat_member(
+                chat_id, operator_id,
+                privileges=ChatPrivileges(
+                    can_change_info=True, can_post_messages=True,
+                    can_edit_messages=True, can_delete_messages=True,
+                    can_invite_users=True, can_pin_messages=True,
+                ),
+            )
+            return True
+
+        try:
+            await self._userbot().execute_on(account, _do)
+            log.info("botfactory.userbot.operator_promoted",
+                     chat_id=chat_id, operator=operator_id)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("botfactory.userbot.promote_operator_failed",
+                        chat_id=chat_id, operator=operator_id, error=str(exc))
+            return False
 
     async def _create_and_configure_channel(
         self, client, name: str, username: str, description: str,

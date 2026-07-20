@@ -140,6 +140,33 @@ def userbot_created(handle: str, invite_link: str | None) -> str:
     )
 
 
+def userbot_join(handle: str, invite_link: str | None) -> str:
+    link = f"\n\n🔗 <a href=\"{esc(invite_link)}\">Join the channel</a>" if invite_link else ""
+    return (
+        f"{ICON} <b>Channel's up.</b> I created <b>{esc(handle)}</b> and set its title, "
+        f"username and description. I've also added myself and Gojo as admins.{link}\n\n"
+        "👉 <b>First, join the channel</b> using the link above — I can only hand you "
+        "admin rights once you're in. Then tap <b>I've joined</b>."
+    )
+
+
+def userbot_promote_failed() -> str:
+    return (
+        f"{ICON} <b>I can't see you in the channel yet.</b>\n\n"
+        "Make sure you tapped the join link and actually joined, then hit "
+        "<b>I've joined</b> again. I need you inside before I can give you admin rights."
+    )
+
+
+def userbot_set_photo() -> str:
+    return (
+        f"{ICON} <b>You're an admin now.</b> 🖼\n\n"
+        "Open the channel and set its <b>profile picture</b> (pick one you did "
+        "<b>not</b> use as a file thumbnail), then delete the “channel photo changed” "
+        "service message so the feed stays clean. Tap <b>Done</b> when it's set."
+    )
+
+
 CHANNEL_USERBOT_FAILED = (
     f"{ICON} <b>Couldn't create it.</b>\n\n"
     "The pooled account hit a snag (flood-wait or a cap we didn't see). Create the "
@@ -375,6 +402,8 @@ BTN_TMDB_POSTER = "🖼 Open TMDB Poster Page"
 # Two-scope channel creation (feature #41).
 BTN_SCOPE_OWN = "👤 I'll create it"
 BTN_SCOPE_USERBOT = "🤖 Let the bot create it"
+BTN_USERBOT_JOIN = "🔗 Join the channel"
+BTN_USERBOT_JOINED = "✅ I've joined"
 BTN_USERBOT_DONE = "✅ Done — I added the photo"
 
 BTN_SHOW_LOGOS = "🔬 Show Logos"
