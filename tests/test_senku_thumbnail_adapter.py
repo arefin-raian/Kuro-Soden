@@ -178,7 +178,7 @@ async def test_store_pick_out_of_range_is_noop(adapter):
 # ── manual upload: mirrored URL persists to the same field, advances the loop ────
 #
 # store_upload now routes bytes through image_backup.backup_bytes (catbox →
-# telegraph → envs.sh) so an admin upload gets the same durable mirror as a
+# telegraph → ImgBB) so an admin upload gets the same durable mirror as a
 # numbered pick; these tests mock that shared pipeline, not the raw host.
 
 @pytest.mark.asyncio

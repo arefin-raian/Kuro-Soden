@@ -120,6 +120,11 @@ class EnvSettings(BaseSettings):
     tmdb_read_access_token: str = Field("", alias="TMDB_API_READ_ACCESS_TOKEN")
     tmdb_api_key: str = Field("", alias="TMDB_API_KEY")
 
+    # ImgBB — free public image host used as a durable backup mirror (fallback
+    # after catbox). Get a key at https://api.imgbb.com/. Empty = the imgbb mirror
+    # is skipped (catbox / telegraph still run).
+    imgbb_api_key: str = Field("", alias="IMGBB_API_KEY")
+
     # Logging
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     log_json: bool = Field(False, alias="LOG_JSON")
@@ -629,9 +634,10 @@ class BotConfig(BaseModel):
     restore_batch_delay_seconds: float = 0.0
     # Image-host mirror order for durable backups (image_backup). A comma-free list
     # of host keys tried in order; the first that sticks becomes the primary URL.
-    # Recognized: "catbox", "telegraph", "envs". Unknown keys are ignored.
+    # Recognized: "catbox", "telegraph", "imgbb". Unknown keys are ignored. ImgBB
+    # needs IMGBB_API_KEY set in .env, else that host is skipped.
     image_host_order: list[str] = Field(
-        default_factory=lambda: ["catbox", "telegraph", "envs"]
+        default_factory=lambda: ["catbox", "telegraph", "imgbb"]
     )
     # Username suffix formatting. The base suffix is shared; ``format_bot_username``
     # appends "_bot" for bot entities (Telegram requirement) and leaves it off for

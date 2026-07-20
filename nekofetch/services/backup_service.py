@@ -130,7 +130,7 @@ class BackupService:
             ok = await self.backup_one(post.anime_doc_id)
             if ok:
                 stats.backed_up += 1
-                if ok.image_catbox_url or ok.image_telegraph_url:
+                if ok.image_catbox_url or ok.image_telegraph_url or ok.image_imgbb_url:
                     stats.images_mirrored += 1
         log.info("backup.all.done", posts=stats.posts, backed_up=stats.backed_up)
         return stats
@@ -160,12 +160,14 @@ class BackupService:
         source_url = facts.backdrop_url or facts.poster_url or ""
 
         # Mirror the photo onto independent hosts so it survives the ban.
-        catbox_url = telegraph_url = None
+        catbox_url = telegraph_url = imgbb_url = None
         if source_url:
             from kurosoden.shared.image_backup import backup_image
 
             mirrored = await backup_image(self._c, source_url)
-            catbox_url, telegraph_url = mirrored.catbox_url, mirrored.telegraph_url
+            catbox_url = mirrored.catbox_url
+            telegraph_url = mirrored.telegraph_url
+            imgbb_url = mirrored.imgbb_url
 
         divider = getattr(self.cfg, "divider_sticker_id", None)
 
@@ -185,6 +187,7 @@ class BackupService:
             row.image_source_url = source_url or None
             row.image_catbox_url = catbox_url
             row.image_telegraph_url = telegraph_url
+            row.image_imgbb_url = imgbb_url
             row.button_data = _markup_to_rows(markup)
             row.divider_sticker_id = divider
             row.source_channel_id = post.main_channel_id
@@ -192,7 +195,7 @@ class BackupService:
             await session.commit()
             await session.refresh(row)
             log.info("backup.one.done", anime=anime_doc_id,
-                     mirrored=bool(catbox_url or telegraph_url))
+                     mirrored=bool(catbox_url or telegraph_url or imgbb_url))
             return row
 
     # ── Restore ──────────────────────────────────────────────────────────────
@@ -237,7 +240,8 @@ class BackupService:
                 except Exception as exc:  # noqa: BLE001
                     log.debug("restore.divider.failed", error=str(exc))
 
-            photo = b.image_catbox_url or b.image_telegraph_url or b.image_source_url
+            photo = (b.image_catbox_url or b.image_telegraph_url
+                     or b.image_imgbb_url or b.image_source_url)
             markup = _rows_to_markup(b.button_data)
             try:
                 if photo:

@@ -617,8 +617,8 @@ FIELD_DOCS: dict[str, FieldDoc] = {
     "bot.image_host_order": FieldDoc(
         label="Image Mirror Host Order",
         desc="Durable image-backup hosts tried in order; the first that sticks becomes "
-             "the primary URL. Recognized: catbox, telegraph, envs.",
-        example="catbox, telegraph, envs"),
+             "the primary URL. Recognized: catbox, telegraph, imgbb.",
+        example="catbox, telegraph, imgbb"),
     "bot.bot_username_suffix": FieldDoc(
         desc="Suffix appended when generating new distribution-bot usernames.", example="Bot"),
     "bot.channel_username_suffix": FieldDoc(

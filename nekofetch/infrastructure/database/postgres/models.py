@@ -294,10 +294,13 @@ class PublishedPostBackup(Base, PKMixin, TimestampMixin):
     title: Mapped[str | None] = mapped_column(Text)
     # The exact rendered caption (finished HTML, styling preserved).
     caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    # Image mirrors: original CDN URL + the two durable copies.
+    # Image mirrors: original CDN URL + the durable copies (one column per host).
     image_source_url: Mapped[str | None] = mapped_column(Text)
     image_catbox_url: Mapped[str | None] = mapped_column(Text)
     image_telegraph_url: Mapped[str | None] = mapped_column(Text)
+    # ImgBB full-resolution mirror (data.url — never the thumb/medium size). NULL
+    # for rows backed up before ImgBB replaced the dead envs.sh last-resort host.
+    image_imgbb_url: Mapped[str | None] = mapped_column(Text)
     # Structured button rows: [[{"text","url"|"callback_data"}, …], …].
     button_data: Mapped[list | None] = mapped_column(JSONB)
     # Divider sticker file_id posted before the card (channel layout detail).

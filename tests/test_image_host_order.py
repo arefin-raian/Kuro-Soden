@@ -3,7 +3,7 @@
 ``backup_bytes`` mirrors an image onto every independent host so a restore
 survives a single operator outage. The *order* hosts are tried is config-driven
 (``bot.image_host_order``), but the result always records each host's URL in its
-own field and ``BackupImage.primary`` picks catbox → telegraph → envs → source
+own field and ``BackupImage.primary`` picks catbox → telegraph → imgbb → source
 regardless of the attempt order.
 
 These pin the order resolver (unknown keys dropped, missing hosts appended) and
@@ -22,6 +22,7 @@ from kurosoden.shared.image_backup import _host_order, backup_bytes
 
 def _container(order=None):
     return SimpleNamespace(
+        env=SimpleNamespace(imgbb_api_key="k"),
         config=SimpleNamespace(
             bot=SimpleNamespace(image_host_order=order),
             thumbnail_channel=SimpleNamespace(telegraph_access_token=""),
@@ -30,19 +31,19 @@ def _container(order=None):
 
 
 def test_host_order_defaults_when_unset():
-    assert _host_order(_container(None)) == ("catbox", "telegraph", "envs")
+    assert _host_order(_container(None)) == ("catbox", "telegraph", "imgbb")
 
 
 def test_host_order_respects_config():
-    assert _host_order(_container(["envs", "catbox", "telegraph"])) == (
-        "envs", "catbox", "telegraph",
+    assert _host_order(_container(["imgbb", "catbox", "telegraph"])) == (
+        "imgbb", "catbox", "telegraph",
     )
 
 
 def test_host_order_drops_unknown_and_appends_missing():
-    # "bogus" is dropped; only "envs" named, so catbox/telegraph are appended.
-    assert _host_order(_container(["bogus", "envs"])) == (
-        "envs", "catbox", "telegraph",
+    # "bogus" is dropped; only "imgbb" named, so catbox/telegraph are appended.
+    assert _host_order(_container(["bogus", "imgbb"])) == (
+        "imgbb", "catbox", "telegraph",
     )
 
 
@@ -58,24 +59,24 @@ async def test_backup_bytes_attempts_every_host_in_order(monkeypatch):
         calls.append("telegraph")
         return "tel/url"
 
-    async def fake_envs(blob, mime, ext):
-        calls.append("envs")
-        return "envs/url"
+    async def fake_imgbb(container, blob):
+        calls.append("imgbb")
+        return "imgbb/url"
 
     monkeypatch.setattr(ib, "_upload_catbox", fake_catbox)
     monkeypatch.setattr(ib, "_upload_telegraph", fake_telegraph)
-    monkeypatch.setattr(ib, "_upload_envs", fake_envs)
+    monkeypatch.setattr(ib, "_upload_imgbb", fake_imgbb)
 
     result = await backup_bytes(
-        _container(["envs", "catbox", "telegraph"]), b"\xff\xd8data", mime="image/jpeg",
+        _container(["imgbb", "catbox", "telegraph"]), b"\xff\xd8data", mime="image/jpeg",
     )
 
     # Attempted in the configured order …
-    assert calls == ["envs", "catbox", "telegraph"]
+    assert calls == ["imgbb", "catbox", "telegraph"]
     # … but each URL lands in its own field, and primary still prefers catbox.
     assert result.catbox_url == "cat/url"
     assert result.telegraph_url == "tel/url"
-    assert result.envs_url == "envs/url"
+    assert result.imgbb_url == "imgbb/url"
     assert result.primary == "cat/url"
 
 
@@ -92,3 +93,67 @@ async def test_backup_bytes_empty_blob_is_noop(monkeypatch):
     result = await backup_bytes(_container(), b"", mime="image/jpeg")
     assert result.primary is None
     assert called is False
+
+
+# ── ImgBB: keep ONLY the full-resolution data.url, never thumb/medium ────────────
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeAsyncClient:
+    """Captures the POST and returns a canned ImgBB response."""
+
+    sent: dict = {}
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, params=None, data=None):
+        _FakeAsyncClient.sent = {"url": url, "params": params, "data": data}
+        # A realistic ImgBB body: full url + a downscaled thumb + medium.
+        return _FakeResp({
+            "success": True, "status": 200,
+            "data": {
+                "url": "https://i.ibb.co/full/post.jpg",
+                "thumb": {"url": "https://i.ibb.co/THUMB/post.jpg"},
+                "medium": {"url": "https://i.ibb.co/MED/post.jpg"},
+                "display_url": "https://i.ibb.co/MED/post.jpg",
+            },
+        })
+
+
+@pytest.mark.asyncio
+async def test_imgbb_keeps_full_url_not_thumbnail(monkeypatch):
+    monkeypatch.setattr(ib.httpx, "AsyncClient", _FakeAsyncClient)
+    url = await ib._upload_imgbb(_container(), b"\xff\xd8data")
+    # Only the full-resolution original — never the thumb/medium/display variants.
+    assert url == "https://i.ibb.co/full/post.jpg"
+    # The key went as a query param and the image as a base64 form field.
+    assert _FakeAsyncClient.sent["params"] == {"key": "k"}
+    assert "image" in _FakeAsyncClient.sent["data"]
+
+
+@pytest.mark.asyncio
+async def test_imgbb_no_key_returns_none(monkeypatch):
+    container = SimpleNamespace(env=SimpleNamespace(imgbb_api_key=""),
+                                config=SimpleNamespace(bot=None, thumbnail_channel=None))
+    # Must not even attempt a request without a key.
+    def boom(*a, **k):
+        raise AssertionError("must not call httpx without an API key")
+
+    monkeypatch.setattr(ib.httpx, "AsyncClient", boom)
+    assert await ib._upload_imgbb(container, b"data") is None

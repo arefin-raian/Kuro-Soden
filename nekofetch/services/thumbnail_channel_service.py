@@ -1145,7 +1145,7 @@ class ThumbnailChannelService:
         """Mirror uploaded bytes and store the URL as the entry's asset.
 
         Routes through :func:`image_backup.backup_bytes` (catbox → telegraph →
-        envs.sh) so an admin upload gets the same durable mirror as a numbered
+        ImgBB) so an admin upload gets the same durable mirror as a numbered
         pick, then updates the workflow message. Returns False if the workflow
         vanished; raises if every host rejected the bytes.
         """

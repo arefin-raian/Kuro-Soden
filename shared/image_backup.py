@@ -3,11 +3,11 @@
 When the main channel is banned we rebuild every post byte-for-byte on a fresh
 channel. That rebuild reads image URLs out of the DB, so those URLs must outlive
 the original channel and the original CDN. A single host is a single point of
-failure, so every image is mirrored to a **primary** host with a **fallback**:
+failure, so every image is mirrored to a **primary** host with fallbacks:
 
     catbox.moe  (primary — permanent, anonymous, 200 MB cap)
-      └─ telegra.ph/upload  (fallback — anonymous, smaller, different operator)
-          └─ envs.sh        (last resort — anonymous, yet another operator)
+      └─ telegra.ph/upload  (fallback — anonymous, different operator)
+          └─ ImgBB          (last resort — free public API, needs IMGBB_API_KEY)
 
 :func:`backup_image` downloads the source bytes once, then tries each host in
 order, returning every URL that sticks (and which host produced it). The caller
@@ -16,12 +16,18 @@ gone, fall back to the next. Everything is best-effort: a total failure returns
 a :class:`BackupImage` with all-``None`` mirrors rather than raising, so one dead
 image never aborts a whole-channel backup.
 
+ImgBB note: its upload response carries several sizes — ``data.url`` is the
+full-resolution original, while ``data.thumb.url`` / ``data.medium.url`` are
+downscaled. We deliberately keep **only** ``data.url`` so a restored post never
+degrades to a low-resolution thumbnail.
+
 :func:`backup_bytes` is the same mirror pipeline for bytes already in hand (e.g.
 an admin-uploaded asset) — it skips the download step.
 """
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 
 import httpx
@@ -40,39 +46,52 @@ class BackupImage:
     source_url: str
     catbox_url: str | None = None
     telegraph_url: str | None = None
-    envs_url: str | None = None
+    imgbb_url: str | None = None
 
     @property
     def primary(self) -> str | None:
         """The best URL to rebuild from: mirrors first, then original source."""
-        return (self.catbox_url or self.telegraph_url or self.envs_url
+        return (self.catbox_url or self.telegraph_url or self.imgbb_url
                 or self.source_url or None)
 
 
-_ENVS_ENDPOINT = "https://envs.sh"
+_IMGBB_ENDPOINT = "https://api.imgbb.com/1/upload"
 
 
-async def _upload_envs(blob: bytes, mime: str, ext: str) -> str | None:
-    """Push bytes to envs.sh (last-resort mirror). Returns the URL or None.
+async def _upload_imgbb(container: Container, blob: bytes) -> str | None:
+    """Push bytes to ImgBB (needs ``IMGBB_API_KEY``). Returns the URL or None.
 
-    envs.sh accepts an anonymous multipart ``file=`` POST and replies with the
-    bare URL as plain text. Best-effort — any hiccup returns None.
+    ImgBB takes a base64 ``image`` field with the API key as a query param and
+    replies with JSON. We return **only** ``data.url`` (the full-resolution
+    original) — never ``data.thumb.url`` / ``data.medium.url``, which are
+    downscaled and would degrade a restored post. Best-effort — any hiccup
+    (missing key, network, malformed body) returns None.
     """
+    key = getattr(getattr(container, "env", None), "imgbb_api_key", "") or ""
+    if not key:
+        log.warning("imgbackup.imgbb.no_key",
+                    hint="Set IMGBB_API_KEY in .env to enable the ImgBB mirror")
+        return None
     try:
+        payload = base64.b64encode(blob).decode("ascii")
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as cli:
             r = await cli.post(
-                _ENVS_ENDPOINT,
-                files={"file": (f"post{ext}", blob, mime)},
+                _IMGBB_ENDPOINT,
+                params={"key": key},
+                data={"image": payload},
             )
             r.raise_for_status()
-        url = (r.text or "").strip()
+            body = r.json()
     except Exception as exc:  # noqa: BLE001 — last-resort host, never raises
-        log.warning("imgbackup.envs.failed", error=str(exc))
+        log.warning("imgbackup.imgbb.failed", error=str(exc))
         return None
-    if url.startswith("https://") and "envs.sh" in url:
-        log.info("imgbackup.envs.ok", url=url, bytes=len(blob))
+    # Only the full-resolution URL — deliberately NOT thumb/medium/display_url.
+    url = ((body or {}).get("data") or {}).get("url")
+    if isinstance(url, str) and url.startswith("http"):
+        log.info("imgbackup.imgbb.ok", url=url, bytes=len(blob))
         return url
-    log.warning("imgbackup.envs.bad_body", body=url[:200])
+    log.warning("imgbackup.imgbb.bad_body",
+                success=(body or {}).get("success"), status=(body or {}).get("status"))
     return None
 
 
@@ -125,7 +144,7 @@ async def _upload_telegraph(
 
 # Default host order when config doesn't specify one. Each host is independent so
 # a single operator outage can't strand every mirror.
-_DEFAULT_HOST_ORDER = ("catbox", "telegraph", "envs")
+_DEFAULT_HOST_ORDER = ("catbox", "telegraph", "imgbb")
 
 
 def _host_order(container: Container) -> tuple[str, ...]:
@@ -157,7 +176,7 @@ async def backup_bytes(
 
     The mirror order is config-driven (``bot.image_host_order``) but the result
     always records each host's URL in its own field — :attr:`BackupImage.primary`
-    picks catbox → telegraph → envs → source regardless of upload order.
+    picks catbox → telegraph → imgbb → source regardless of upload order.
     """
     result = BackupImage(source_url=source_url)
     if not blob:
@@ -169,14 +188,14 @@ async def backup_bytes(
             result.catbox_url = await _upload_catbox(blob, mime, ext, source_url)
         elif host == "telegraph":
             result.telegraph_url = await _upload_telegraph(container, blob, mime, source_url)
-        elif host == "envs":
-            result.envs_url = await _upload_envs(blob, mime, ext)
+        elif host == "imgbb":
+            result.imgbb_url = await _upload_imgbb(container, blob)
 
     return result
 
 
 async def backup_image(container: Container, source_url: str) -> BackupImage:
-    """Mirror ``source_url`` across every host (catbox → telegraph → envs.sh).
+    """Mirror ``source_url`` across every host (catbox → telegraph → ImgBB).
 
     Downloads the bytes once, then delegates to :func:`backup_bytes` so the
     restore path has independent copies. Returns a :class:`BackupImage`; any
