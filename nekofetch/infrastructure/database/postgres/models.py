@@ -445,6 +445,10 @@ class IndexSection(Base, PKMixin, TimestampMixin):
     label: Mapped[str | None] = mapped_column(String(16))         # e.g. "A", "A(2)", "B", None
     base_letter: Mapped[str | None] = mapped_column(String(4))    # e.g. "A", "B" — the original letter
     message_id: Mapped[int | None] = mapped_column(BigInteger)
+    # An admin repurposed this reserved slot into a normal post (edited away its
+    # "RESERVED FOR FUTURE" / "Slot N/N" marker). Auto-indexing must treat it as
+    # off-limits: never rebrand, shift into, or consume it — it's no longer a slot.
+    repurposed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class AccessToken(Base, PKMixin, TimestampMixin):

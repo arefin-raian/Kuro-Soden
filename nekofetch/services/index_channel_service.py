@@ -58,6 +58,26 @@ _POSTER_CAP = (
 _RESERVED_CAP = "█▓▒░<b> RESERVED FOR FUTURE </b>░▒▓█"
 _RESERVED_IMG = "https://files.catbox.moe/cp9nkw.png"
 
+# Substrings that mark a post as a genuine (untouched) reserved slot. The
+# auto-indexer only ever consumes a slot whose LIVE caption still carries one of
+# these — if an admin edited a reserved post into a real one (dropping the
+# "RESERVED FOR FUTURE" banner / the "Slot N/N" line), it's no longer a slot and
+# must never be overwritten. Matched case-insensitively against the plain text.
+_RESERVED_MARKERS = ("RESERVED FOR FUTURE", "SLOT ")
+
+
+def _is_reserved_caption(caption: str | None) -> bool:
+    """True when ``caption`` still carries a reserved-slot marker.
+
+    A reserved slot's caption reads ``RESERVED FOR FUTURE`` + ``Slot N/N``. An
+    empty/None caption is NOT treated as a marker match here — the verify pass
+    handles unreadable/empty messages separately (it never flags them), so this
+    stays a pure "does the text still mark it reserved?" check."""
+    if not caption:
+        return False
+    up = caption.upper()
+    return any(m in up for m in _RESERVED_MARKERS)
+
 # User-provided divider sticker.
 _DIVIDER = (
     "CAACAgUAAxkBAAJAhmpLZLtVdyR7k9JYI3_iqUJVR_zT"
@@ -307,10 +327,61 @@ class IndexChannelService:
             return await self._count_reserved_in_session(session)
 
     async def _count_reserved_in_session(self, session) -> int:
+        # A slot counts as reserved only when it has no label AND hasn't been
+        # repurposed by an admin into a normal post (see _verify_reserved_slots).
         result = await session.execute(
-            select(IndexSection).where(IndexSection.label.is_(None))
+            select(IndexSection).where(
+                IndexSection.label.is_(None),
+                IndexSection.repurposed.is_(False),
+            )
         )
         return len(list(result.scalars().all()))
+
+    async def _verify_reserved_slots(self) -> int:
+        """Re-check every tracked reserved slot against its live caption.
+
+        The admin can edit a reserved post into a real one (a promo, a notice,
+        an out-of-band letter). Once its caption loses the RESERVED marker
+        (``RESERVED FOR FUTURE`` / ``Slot N/N``) it is no longer ours to consume
+        or overwrite, so we flag it ``repurposed`` — auto-indexing then skips it
+        forever and works with the remaining genuine slots. Best-effort: an
+        unreadable message is left as-is (flagged only on a definite marker loss).
+
+        Returns the number of slots newly flagged. Cheap enough to run at the
+        top of a shift (only reserved, unflagged rows are fetched)."""
+        client = getattr(self._c, "admin_client", None)
+        if client is None:
+            return 0
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            reserved = (
+                await session.execute(
+                    select(IndexSection).where(
+                        IndexSection.label.is_(None),
+                        IndexSection.repurposed.is_(False),
+                    ).order_by(IndexSection.sort_order)
+                )
+            ).scalars().all()
+            flagged = 0
+            for slot in reserved:
+                if not slot.message_id:
+                    continue
+                try:
+                    msg = await client.get_messages(self.cfg.channel_id, slot.message_id)
+                except Exception as exc:  # noqa: BLE001 — unreadable → leave as-is
+                    log.debug("index.reserved.verify_unreadable",
+                              mid=slot.message_id, error=str(exc))
+                    continue
+                # A deleted/empty message can't be a repurposed post; skip it so a
+                # transient fetch miss doesn't strand the slot.
+                if not msg or getattr(msg, "empty", False):
+                    continue
+                caption = getattr(msg, "caption", None) or getattr(msg, "text", None) or ""
+                if not _is_reserved_caption(caption):
+                    slot.repurposed = True
+                    flagged += 1
+                    log.info("index.reserved.repurposed",
+                             mid=slot.message_id, order=slot.sort_order)
+        return flagged
 
     async def _get_poster_id(self) -> int:
         """Return the poster message ID (config-driven; falls back to seed default)."""
@@ -339,6 +410,13 @@ class IndexChannelService:
         titles = await self._titles_for_letter(base_letter)
         if not titles:
             return None
+
+        # Before any shift, confirm the trailing reserved slots are still reserved:
+        # an admin may have repurposed one into a normal post (dropping its
+        # "RESERVED FOR FUTURE" / "Slot N/N" marker). Such a slot is flagged
+        # ``repurposed`` and excluded from the reserved pool so auto-indexing
+        # never overwrites a real post — it just uses the remaining real slots.
+        await self._verify_reserved_slots()
 
         chunks = _chunk_titles(titles, base_letter)
         links = await self._links_for_titles(titles)
@@ -466,9 +544,16 @@ class IndexChannelService:
 
         MUST be called inside an active session_scope.
         """
+        # Exclude repurposed slots: an admin turned them into normal posts, so
+        # they're no longer part of our managed sequence — never shifted into and
+        # never consumed as reserved (that would overwrite a real post). Skipping
+        # them here means the shift flows over them to the next genuine slot.
         result = await session.execute(
             select(IndexSection)
-            .where(IndexSection.sort_order >= from_order)
+            .where(
+                IndexSection.sort_order >= from_order,
+                IndexSection.repurposed.is_(False),
+            )
             .order_by(IndexSection.sort_order)
         )
         sections = list(result.scalars().all())
@@ -668,3 +753,139 @@ class IndexChannelService:
             return f"https://t.me/{username}/{sections[0].message_id}"
 
         return None
+
+    # ── Manual slot management (Gojo index-management UI) ─────────────────────
+
+    async def list_slots(self) -> list[dict]:
+        """Return every tracked index slot for the management UI, in order.
+
+        Each dict is ``{order, message_id, label, base_letter, repurposed,
+        kind}`` where ``kind`` is ``"letter"`` (a live A–Z section), ``"reserved"``
+        (an empty slot we may consume), or ``"repurposed"`` (an admin turned it
+        into a normal post — auto-indexing leaves it alone). The poster is tracked
+        in config, not here, so it isn't listed."""
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            rows = (
+                await session.execute(
+                    select(IndexSection).order_by(IndexSection.sort_order)
+                )
+            ).scalars().all()
+        out: list[dict] = []
+        for r in rows:
+            if r.repurposed:
+                kind = "repurposed"
+            elif r.label is None:
+                kind = "reserved"
+            else:
+                kind = "letter"
+            out.append({
+                "order": r.sort_order, "message_id": r.message_id,
+                "label": r.label, "base_letter": r.base_letter,
+                "repurposed": bool(r.repurposed), "kind": kind,
+            })
+        return out
+
+    async def _slot_by_order(self, order: int) -> IndexSection | None:
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            return (
+                await session.execute(
+                    select(IndexSection).where(IndexSection.sort_order == order)
+                )
+            ).scalar_one_or_none()
+
+    async def edit_slot_caption(self, order: int, caption_html: str) -> bool:
+        """Overwrite one slot's caption (raw HTML) by ``sort_order``.
+
+        Manual override for the management UI — edits the live message in place.
+        Does not touch the label/base_letter mapping, so a *letter* slot keeps its
+        auto-index identity; editing a letter slot's text by hand is at the
+        operator's own risk (a later auto-refresh may rewrite it). Returns True on
+        a confirmed edit."""
+        if not self._active():
+            return False
+        slot = await self._slot_by_order(order)
+        if slot is None or not slot.message_id:
+            return False
+        try:
+            await self._c.admin_client.edit_message_caption(
+                self.cfg.channel_id, cast(int, slot.message_id),
+                caption=caption_html, parse_mode=ParseMode.HTML,
+                reply_markup=self._letter_buttons(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            if "MESSAGE_NOT_MODIFIED" in str(exc):
+                return True
+            log.warning("index.slot.edit_caption_failed", order=order, error=str(exc))
+            return False
+        log.info("index.slot.caption_edited", order=order)
+        return True
+
+    async def replace_slot_image(self, order: int, image: str,
+                                 caption_html: str | None = None) -> bool:
+        """Replace one slot's photo (URL or file_id) by ``sort_order``.
+
+        Keeps the existing caption unless ``caption_html`` is given. Edits the
+        live message media in place. Returns True on a confirmed edit."""
+        if not self._active():
+            return False
+        slot = await self._slot_by_order(order)
+        if slot is None or not slot.message_id:
+            return False
+        media = InputMediaPhoto(media=image, caption=caption_html or "",
+                                parse_mode=ParseMode.HTML) if caption_html \
+            else InputMediaPhoto(media=image)
+        try:
+            await self._c.admin_client.edit_message_media(
+                self.cfg.channel_id, cast(int, slot.message_id), media=media,
+                reply_markup=self._letter_buttons(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("index.slot.replace_image_failed", order=order, error=str(exc))
+            return False
+        log.info("index.slot.image_replaced", order=order)
+        return True
+
+    async def set_slot_buttons(self, order: int,
+                               buttons: list[tuple[str, str]]) -> bool:
+        """Set one slot's inline buttons to ``[(text, url), …]`` (one per row).
+
+        Passing an empty list clears the buttons. Edits the live message's reply
+        markup in place. Returns True on a confirmed edit."""
+        if not self._active():
+            return False
+        slot = await self._slot_by_order(order)
+        if slot is None or not slot.message_id:
+            return False
+        markup = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(text, url=url)] for text, url in buttons]
+        ) if buttons else None
+        try:
+            await self._c.admin_client.edit_message_reply_markup(
+                self.cfg.channel_id, cast(int, slot.message_id),
+                reply_markup=markup,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if "MESSAGE_NOT_MODIFIED" in str(exc):
+                return True
+            log.warning("index.slot.set_buttons_failed", order=order, error=str(exc))
+            return False
+        log.info("index.slot.buttons_set", order=order, count=len(buttons))
+        return True
+
+    async def mark_slot_repurposed(self, order: int, repurposed: bool = True) -> bool:
+        """Manually flag/unflag a slot as repurposed (management-UI override).
+
+        A repurposed slot is excluded from the reserved pool and never shifted or
+        overwritten by auto-indexing. This is the explicit counterpart to the
+        automatic caption-marker detection in :meth:`_verify_reserved_slots`."""
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            slot = (
+                await session.execute(
+                    select(IndexSection).where(IndexSection.sort_order == order)
+                )
+            ).scalar_one_or_none()
+            if slot is None:
+                return False
+            slot.repurposed = repurposed
+        log.info("index.slot.repurposed_set", order=order, repurposed=repurposed)
+        return True

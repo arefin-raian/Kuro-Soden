@@ -407,6 +407,108 @@ def restore_done(restored: int, total: int, failed: int) -> str:
     )
 
 
+# ── Index channel management ──────────────────────────────────────────────────
+
+CHANGE_INDEX_PROMPT = (
+    f"{ICON} <b>New index channel.</b>\n\n"
+    "Send the new channel's ID (like <code>-1001234567890</code>). Make me an admin "
+    "there first. I'll rebuild the whole index from backup — poster, every letter "
+    "slot, reserved slots — remap each slot's message id and repoint the config. "
+    "<code>/cancel</code> to back out."
+)
+
+INDEX_INTRO = f"{ICON} <b>Index slots.</b> Loading the current layout…"
+
+# Button labels for the slot-management UI.
+BTN_CHANGE_INDEX = "🆕 Change Index"
+BTN_IDX_BACK = "◀ Slots"
+BTN_IDX_EDIT_TEXT = "✏️ Edit text"
+BTN_IDX_EDIT_IMAGE = "🖼 Replace image"
+BTN_IDX_EDIT_BUTTONS = "🔘 Edit buttons"
+BTN_IDX_MARK_REPURPOSED = "🚫 Not a slot"
+BTN_IDX_MARK_RESERVED = "♻️ Mark reserved"
+
+_IDX_KIND_ICON = {"letter": "🔤", "reserved": "▫️", "repurposed": "🚫"}
+
+
+def index_slots_body(slots: list[dict]) -> str:
+    """Render the slot list: order, kind icon, label/state, per-slot tap hint."""
+    if not slots:
+        return (
+            f"{ICON} <b>No index slots tracked.</b>\n\n"
+            "The index channel hasn't been seeded yet, or it's disabled."
+        )
+    lines = [f"{ICON} <b>Index slots</b> — tap one to edit.\n"]
+    for s in slots:
+        icon = _IDX_KIND_ICON.get(s["kind"], "▫️")
+        if s["kind"] == "letter":
+            what = f"letter <b>{esc(s.get('label') or '?')}</b>"
+        elif s["kind"] == "repurposed":
+            what = "<i>repurposed — auto-index skips this</i>"
+        else:
+            what = "<i>reserved</i>"
+        lines.append(f"{icon} <code>#{s['order']}</code> — {what}")
+    lines.append(
+        "\n<blockquote>A slot marked <b>repurposed</b> is treated as a normal "
+        "post: auto-indexing never overwrites or shifts it.</blockquote>"
+    )
+    return "\n".join(lines)
+
+
+def index_slot_detail(order: int) -> str:
+    return (
+        f"{ICON} <b>Slot #{order}.</b>\n\n"
+        "Edit its text, replace its image, or set its buttons. You can also mark it "
+        "as <b>not a slot</b> (a normal post auto-indexing will leave alone) or hand "
+        "it back to the reserved pool."
+    )
+
+
+def index_edit_prompt(what: str) -> str:
+    if what == "caption":
+        return (
+            f"{ICON} <b>New slot text.</b>\n\n"
+            "Send the replacement text (Markdown or HTML). <code>/cancel</code> to back out."
+        )
+    if what == "image":
+        return (
+            f"{ICON} <b>New slot image.</b>\n\n"
+            "Send a photo, or paste an image URL / Telegram file_id. "
+            "<code>/cancel</code> to back out."
+        )
+    return (
+        f"{ICON} <b>Slot buttons.</b>\n\n"
+        "Send one button per line as <code>Label | https://link</code>. "
+        "Send <code>none</code> to clear all buttons. <code>/cancel</code> to back out."
+    )
+
+
+def index_edit_result(ok: bool, what: str) -> str:
+    if ok:
+        return f"{ICON} <b>Slot {what} updated.</b>"
+    return (
+        f"{ICON} <b>Couldn't update the slot {what}.</b> The slot may be missing or "
+        "the index channel unreachable — check the logs."
+    )
+
+
+def index_buttons_result(ok: bool, count: int) -> str:
+    if not ok:
+        return (
+            f"{ICON} <b>Couldn't set the buttons.</b> Check the slot exists and the "
+            "index channel is reachable."
+        )
+    if count == 0:
+        return f"{ICON} <b>Buttons cleared.</b>"
+    n = "button" if count == 1 else "buttons"
+    return f"{ICON} <b>Set {count} {n}.</b>"
+
+
+index_image_bad = (
+    f"{ICON} <b>No image found.</b> Send a photo, or paste an image URL / file_id."
+)
+
+
 # ── Errors / misc ───────────────────────────────────────────────────────────────
 
 GENERIC_FAIL = (
