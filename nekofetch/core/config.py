@@ -607,6 +607,13 @@ class BotConfig(BaseModel):
     # Days between comprehensive entity health checks (bots + channels).
     # Set to 0 to disable the scheduled full sweep (periodic bot checks still run).
     entity_full_check_days: int = 30
+    # Days between the scheduled monthly maintenance jobs Gojo runs. The update
+    # sweep is detect-only: it DMs Gojo admins a reviewable list (nothing is
+    # auto-created). The ban check probes every channel and auto-recovers down
+    # distribution channels. Set either to 0 to disable that scheduled job (the
+    # manual /updates and /bancheck commands always remain available).
+    update_check_interval_days: int = 30
+    ban_check_interval_days: int = 30
     # Username suffix formatting. The base suffix is shared; ``format_bot_username``
     # appends "_bot" for bot entities (Telegram requirement) and leaves it off for
     # channels. Both entities use the same base, but only bots get the "_bot" tail.

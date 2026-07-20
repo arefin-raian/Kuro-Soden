@@ -30,6 +30,7 @@ STATE_SCHEDULE = "gojo:await_schedule"
 STATE_EDIT_FOOTER = "gojo:await_footer_edit"
 STATE_CHANGE_MAIN = "gojo:await_new_main_channel"
 STATE_UPDATES_REVIEW = "gojo:await_updates_review"
+STATE_UPDATES_EDIT = "gojo:await_updates_edit"
 
 
 def _publish_keyboard(code: str):
@@ -40,6 +41,57 @@ def _publish_keyboard(code: str):
         [(V.BTN_SCHEDULE, cb("gojo", "publish_schedule", code)),
          (V.BTN_EDIT_CAPTION, cb("gojo", "publish_edit", code))],
         [(V.BTN_CANCEL, cb("gojo", "home"))],
+    )
+
+
+def _flatten_update_rows(results) -> list[dict]:
+    """Flatten ``CheckResult``s into serializable review rows (FSM-storable).
+
+    Keeps the whole ``NewEntry`` shape so the submit step can rebuild each entry
+    without re-walking the franchise graph. Shared by the manual ``/updates``
+    flow and the scheduled monthly notify.
+    """
+    return [
+        {
+            "doc": r.anime_doc_id, "title": r.title,
+            "aid": e.anilist_id, "fmt": e.format, "t": e.english_title,
+            "season": e.season_number, "eps": e.episode_count,
+            "rel": e.relation,
+        }
+        for r in results for e in r.new_entries
+    ]
+
+
+def updates_review_markup(rows: list[dict]):
+    """Build the review keyboard: one ✖ per entry, then Submit / Edit / Cancel.
+
+    Each entry uses the official AniList name (``t``) and carries its index in
+    the callback so a tap removes exactly that row before re-rendering. Module
+    level so the scheduled monthly notify reuses the exact manual-flow UI.
+    """
+    btn_rows = [
+        [(V.remove_entry_label(r["t"]), cb("gojo", "updates_drop", str(i)))]
+        for i, r in enumerate(rows)
+    ]
+    if rows:
+        btn_rows.append([(V.BTN_SUBMIT, cb("gojo", "updates_submit"))])
+    # Add-entries: hand the admin the current list to edit as free text so they
+    # can drop lines AND type new titles the sweep didn't surface.
+    btn_rows.append([(V.BTN_EDIT_LIST, cb("gojo", "updates_edit"))])
+    btn_rows.append([(V.BTN_CANCEL, cb("gojo", "home"))])
+    return keyboard(*btn_rows)
+
+
+async def render_updates_review(edit_target: Message, rows: list[dict]) -> None:
+    """Render/refresh the review card in place (edits the given message)."""
+    if not rows:
+        await edit_target.edit_text(V.UPDATES_NONE, parse_mode=ParseMode.HTML)
+        return
+    listing = "\n".join(f"⦿ {r['t']}" for r in rows)
+    await edit_target.edit_text(
+        f"{V.updates_found(len(rows))}\n\n<pre>{listing}</pre>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=updates_review_markup(rows),
     )
 
 
@@ -156,31 +208,8 @@ def register(client: Client, container: Container) -> None:
         await q.message.reply(V.CHANGE_MAIN_PROMPT, parse_mode=ParseMode.HTML)
 
     # ── Update check — detect-only sweep + edit-before-submit ─────────────────
-    def _updates_review_markup(rows: list[dict]):
-        """Build the review keyboard: one ✖ per entry, then Submit / Cancel.
-
-        Each entry uses the official AniList name (``t``) and carries its index
-        in the callback so a tap removes exactly that row before re-rendering.
-        """
-        btn_rows = [
-            [(V.remove_entry_label(r["t"]), cb("gojo", "updates_drop", str(i)))]
-            for i, r in enumerate(rows)
-        ]
-        if rows:
-            btn_rows.append([(V.BTN_SUBMIT, cb("gojo", "updates_submit"))])
-        btn_rows.append([(V.BTN_CANCEL, cb("gojo", "home"))])
-        return keyboard(*btn_rows)
-
-    async def _render_updates_review(edit_target: Message, rows: list[dict]) -> None:
-        if not rows:
-            await edit_target.edit_text(V.UPDATES_NONE, parse_mode=ParseMode.HTML)
-            return
-        listing = "\n".join(f"⦿ {r['t']}" for r in rows)
-        await edit_target.edit_text(
-            f"{V.updates_found(len(rows))}\n\n<pre>{listing}</pre>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=_updates_review_markup(rows),
-        )
+    _updates_review_markup = updates_review_markup
+    _render_updates_review = render_updates_review
 
     async def _run_update_check(reply_to: Message, user_id: int) -> None:
         from nekofetch.services.maintenance_service import MaintenanceService
@@ -190,18 +219,7 @@ def register(client: Client, container: Container) -> None:
         if not results:
             await note.edit_text(V.UPDATES_NONE, parse_mode=ParseMode.HTML)
             return
-        # Flatten every new entry into a serializable row and stash for submit.
-        # We keep the whole NewEntry shape so the submit step can rebuild it
-        # without re-walking the franchise graph.
-        rows = [
-            {
-                "doc": r.anime_doc_id, "title": r.title,
-                "aid": e.anilist_id, "fmt": e.format, "t": e.english_title,
-                "season": e.season_number, "eps": e.episode_count,
-                "rel": e.relation,
-            }
-            for r in results for e in r.new_entries
-        ]
+        rows = _flatten_update_rows(results)
         await fsm.set(user_id, STATE_UPDATES_REVIEW, rows=rows)
         await _render_updates_review(note, rows)
 
@@ -236,6 +254,27 @@ def register(client: Client, container: Container) -> None:
         if not rows:
             await fsm.clear(q.from_user.id)
         await _render_updates_review(q.message, rows)
+
+    @client.on_callback_query(filters.regex(r"^gojo\|updates_edit$"))
+    async def _cb_updates_edit(_: Client, q: CallbackQuery) -> None:
+        """Arm the free-text edit step: show the current list as editable text.
+
+        The admin copies the block, trims lines, and/or adds new titles (one per
+        line, official AniList English title). We stash the current rows so a
+        kept line matches back to its already-resolved entry and only genuinely
+        new lines hit AniList — see ``_fsm_text``'s ``STATE_UPDATES_EDIT`` arm."""
+        state, data = await fsm.get(q.from_user.id)
+        if state != STATE_UPDATES_REVIEW:
+            await q.answer("This list expired — run the check again.", show_alert=True)
+            return
+        await q.answer()
+        rows = data.get("rows", [])
+        await fsm.set(q.from_user.id, STATE_UPDATES_EDIT, rows=rows)
+        listing = "\n".join(r["t"] for r in rows)
+        await q.message.reply(
+            f"{V.UPDATES_EDIT_PROMPT}\n\n<pre>{listing}</pre>",
+            parse_mode=ParseMode.HTML,
+        )
 
     @client.on_callback_query(filters.regex(r"^gojo\|updates_submit$"))
     async def _cb_updates_submit(_: Client, q: CallbackQuery) -> None:
@@ -307,6 +346,80 @@ def register(client: Client, container: Container) -> None:
         await q.answer("Probing…")
         await _run_ban_check(q.message)
 
+    async def _apply_updates_edit(message: Message, prev_rows: list[dict]) -> None:
+        """Apply a returned edit-list: keep survivors, resolve added titles.
+
+        The admin sends back the block with lines removed and/or new titles
+        added (one per line). A line whose title matches an existing row (case-
+        insensitive) keeps that row's already-resolved entry verbatim. A genuinely
+        new line is resolved via AniList and bound to the same anime as the list
+        it was added to (single-anime lists are unambiguous; for a mixed list we
+        bind an add to the first anime, since a manual add is almost always
+        another entry of the franchise being reviewed). Unresolvable lines are
+        reported and skipped. Re-renders the review so the admin can still submit.
+        """
+        lines = [ln.strip() for ln in (message.text or "").splitlines() if ln.strip()]
+        if not lines:
+            await fsm.clear(message.from_user.id)
+            await message.reply(V.UPDATES_NONE, parse_mode=ParseMode.HTML)
+            return
+
+        by_title = {r["t"].casefold(): r for r in prev_rows}
+        kept: list[dict] = []
+        added_titles: list[str] = []
+        for ln in lines:
+            match = by_title.get(ln.casefold())
+            if match is not None:
+                kept.append(match)
+            else:
+                added_titles.append(ln)
+
+        # Default anime binding for adds: the (single) anime under review.
+        default_doc = prev_rows[0]["doc"] if prev_rows else None
+        default_title = prev_rows[0]["title"] if prev_rows else None
+
+        unresolved: list[str] = []
+        if added_titles and default_doc is not None:
+            for title in added_titles:
+                try:
+                    media = await container.anilist.search(title)
+                except Exception as exc:  # noqa: BLE001 — a lookup miss is not fatal
+                    log.warning("gojo.updates_edit.search_failed",
+                                title=title, error=str(exc))
+                    media = None
+                if media is None:
+                    unresolved.append(title)
+                    continue
+                fmt = (media.format or "TV").upper()
+                is_tv = fmt in ("TV", "TV_SHORT")
+                kept.append({
+                    "doc": default_doc, "title": default_title,
+                    "aid": media.id, "fmt": fmt,
+                    "t": media.english or media.romaji or title,
+                    "season": (media.franchise_seasons or None) if is_tv else None,
+                    "eps": media.episodes,
+                    "rel": "MANUAL",
+                })
+        elif added_titles:
+            unresolved.extend(added_titles)
+
+        # De-dup by AniList id, preserving order (a kept row + re-added line).
+        seen: set[int] = set()
+        deduped: list[dict] = []
+        for r in kept:
+            if r["aid"] in seen:
+                continue
+            seen.add(r["aid"])
+            deduped.append(r)
+
+        await fsm.set(message.from_user.id, STATE_UPDATES_REVIEW, rows=deduped)
+        if unresolved:
+            await message.reply(
+                V.updates_unresolved(unresolved), parse_mode=ParseMode.HTML,
+            )
+        note = await message.reply(V.UPDATES_RUNNING, parse_mode=ParseMode.HTML)
+        await _render_updates_review(note, deduped)
+
     # ── FSM text consumer — caption edit + schedule time ──────────────────────
     @client.on_message(filters.text & filters.private & ~filters.command(["cancel"]))
     async def _fsm_text(_: Client, message: Message) -> None:
@@ -323,6 +436,8 @@ def register(client: Client, container: Container) -> None:
                 client, container, message, code,
                 silent=False, caption_override=caption,
             )
+        elif state == STATE_UPDATES_EDIT:
+            await _apply_updates_edit(message, data.get("rows", []))
         elif state == STATE_SCHEDULE and code:
             raw = (message.text or "").strip()
             tz_name = await _admin_tz(container, message.from_user.id)
@@ -708,3 +823,131 @@ async def _restore_to_channel(
         V.restore_done(stats.restored, stats.total, stats.failed),
         parse_mode=ParseMode.HTML,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scheduled monthly maintenance jobs (wired onto the pipeline scheduler)
+# ─────────────────────────────────────────────────────────────────────────────
+# Both DM the on-shift Gojo admins rather than acting silently: the update sweep
+# is detect-only (create=False) so a human reviews/trims/adds before anything is
+# requested, and the ban check reports + auto-recovers down channels. Each is a
+# closure over ``container`` so the pipeline manager can register it without the
+# Gojo handler's ``register`` scope.
+
+async def _gojo_admin_ids(container: Container) -> list[int]:
+    """Telegram ids of admins who cover the Gojo (publishing) stage.
+
+    Falls back to the ``.env`` owner/admin ids when the pool has no Gojo admin,
+    so a scheduled notify is never silently dropped on a fresh deployment.
+    """
+    ids: list[int] = []
+    try:
+        from kurosoden.shared.management_service import ManagementService
+
+        admins = await ManagementService(container.pg_sessionmaker).list_admins(
+            stage="gojo",
+        )
+        ids = [a.telegram_id for a in admins]
+    except Exception as exc:  # noqa: BLE001 — fall back to env owners below
+        log.warning("gojo.sched.admin_lookup_failed", error=str(exc))
+    if not ids:
+        ids = list(getattr(container.env, "admin_ids", []) or [])
+    # De-dup, preserve order.
+    seen: set[int] = set()
+    return [i for i in ids if not (i in seen or seen.add(i))]
+
+
+def make_monthly_update_notify_job(container: Container):
+    """Build the scheduled monthly update-check job.
+
+    Detect-only franchise sweep → DM each Gojo admin the **reviewable** list
+    (same drop/edit/submit card as ``/updates``) with per-admin FSM state armed,
+    so nothing is auto-created; the admin commits via Submit. A no-op when there
+    are no new entries. Best-effort per admin — one failed DM never aborts the rest.
+    """
+    fsm = FSM(container.redis, bot="gojo")
+
+    async def _tick() -> None:
+        try:
+            from nekofetch.services.maintenance_service import MaintenanceService
+
+            results = await MaintenanceService(container).scan_updates()
+            if not results:
+                log.info("gojo.sched.updates.none")
+                return
+            rows = _flatten_update_rows(results)
+            if not rows:
+                return
+            mgr = getattr(container, "pipeline_manager", None)
+            gojo = getattr(mgr, "gojo", None) if mgr else None
+            if gojo is None:
+                log.warning("gojo.sched.updates.no_client")
+                return
+            admin_ids = await _gojo_admin_ids(container)
+            sent = 0
+            for admin_id in admin_ids:
+                try:
+                    await fsm.set(admin_id, STATE_UPDATES_REVIEW, rows=rows)
+                    note = await gojo.send_message(
+                        admin_id, V.UPDATES_SCHEDULED_INTRO, parse_mode=ParseMode.HTML,
+                    )
+                    await render_updates_review(note, rows)
+                    sent += 1
+                except Exception as exc:  # noqa: BLE001 — one bad DM never stops the rest
+                    log.warning("gojo.sched.updates.dm_failed",
+                                admin=admin_id, error=str(exc)[:200])
+            log.info("gojo.sched.updates.sent", admins=sent, entries=len(rows))
+        except Exception as exc:  # noqa: BLE001 — a scheduler job must never crash the loop
+            log.warning("gojo.sched.updates.tick_failed", error=str(exc)[:200])
+
+    return _tick
+
+
+def make_monthly_bancheck_job(container: Container):
+    """Build the scheduled monthly ban-check job.
+
+    Probes every channel; auto-recovers down distribution channels (Senku rebuild
+    → verbatim restore from backup) and DMs the Gojo admins a summary. The main
+    channel and index channel have no ``anime_doc_id`` — they need the manual
+    Change-Main / Change-Index flow — so they're reported but not auto-recovered.
+    """
+    async def _tick() -> None:
+        try:
+            from nekofetch.services.bot_orchestrator import BotOrchestratorService
+            from nekofetch.services.maintenance_service import MaintenanceService
+
+            result = await MaintenanceService(container).probe_channels()
+            if not result.banned:
+                log.info("gojo.sched.bancheck.clear", checked=result.checked)
+                return
+            orch = BotOrchestratorService(container)
+            recovered: list[str] = []
+            for probe in result.banned:
+                if not probe.anime_doc_id:
+                    continue
+                try:
+                    info = await orch.recreate_bot(probe.anime_doc_id)
+                    if info:
+                        recovered.append(probe.name)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("gojo.sched.bancheck.recover_failed",
+                                anime=probe.anime_doc_id, error=str(exc)[:200])
+            mgr = getattr(container, "pipeline_manager", None)
+            gojo = getattr(mgr, "gojo", None) if mgr else None
+            if gojo is not None:
+                summary = V.bancheck_scheduled_summary(
+                    result.checked, len(result.banned), recovered,
+                )
+                for admin_id in await _gojo_admin_ids(container):
+                    try:
+                        await gojo.send_message(admin_id, summary,
+                                                parse_mode=ParseMode.HTML)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("gojo.sched.bancheck.dm_failed",
+                                    admin=admin_id, error=str(exc)[:200])
+            log.info("gojo.sched.bancheck.done", checked=result.checked,
+                     banned=len(result.banned), recovered=len(recovered))
+        except Exception as exc:  # noqa: BLE001 — a scheduler job must never crash the loop
+            log.warning("gojo.sched.bancheck.tick_failed", error=str(exc)[:200])
+
+    return _tick

@@ -99,6 +99,31 @@ class PipelineManager:
 
         self._scheduler.every(600, make_idle_nudge_job(self._c), id="idle-nudge")
 
+        # Monthly maintenance (Gojo): a detect-only update sweep that DMs admins a
+        # reviewable list (nothing auto-created) and a ban check that auto-recovers
+        # down distribution channels. Both fire only when the Gojo bot is up and
+        # honour a config interval (0 disables). Registered here because the
+        # scheduler + bot clients both live on the manager.
+        if self.gojo is not None:
+            from kurosoden.bots.gojo.handlers.tasks import (
+                make_monthly_bancheck_job,
+                make_monthly_update_notify_job,
+            )
+
+            bcfg = self._c.config.bot
+            upd_days = getattr(bcfg, "update_check_interval_days", 30)
+            ban_days = getattr(bcfg, "ban_check_interval_days", 30)
+            if upd_days > 0:
+                self._scheduler.every(
+                    upd_days * 86400, make_monthly_update_notify_job(self._c),
+                    id="gojo-update-notify",
+                )
+            if ban_days > 0:
+                self._scheduler.every(
+                    ban_days * 86400, make_monthly_bancheck_job(self._c),
+                    id="gojo-ban-check",
+                )
+
         self._scheduler.start()
 
         # ── Connection watchdog ───────────────────────────────────────────────

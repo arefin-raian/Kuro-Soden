@@ -243,6 +243,18 @@ UPDATES_EDIT_PROMPT = (
 )
 
 
+def updates_unresolved(titles: list[str]) -> str:
+    """Warn that some hand-added titles couldn't be matched on AniList."""
+    listing = "\n".join(f"• {t}" for t in titles)
+    n = "title" if len(titles) == 1 else "titles"
+    return (
+        f"{ICON} <b>Couldn't match {len(titles)} {n}.</b>\n\n"
+        f"<pre>{listing}</pre>\n"
+        "Check the spelling against the official AniList English title. "
+        "The rest of the list is ready below."
+    )
+
+
 def updates_submitted(count: int) -> str:
     n = "entry" if count == 1 else "entries"
     return (
@@ -250,6 +262,44 @@ def updates_submitted(count: int) -> str:
         "Each one runs the normal course — download, thumbnail, then its channel "
         "gets the new card. No main-channel repost; these just extend what's already up."
     )
+
+
+# The monthly sweep pushes this before the reviewable list (detect-only — nothing
+# is requested until the admin taps Submit).
+UPDATES_SCHEDULED_INTRO = (
+    f"{ICON} <b>Monthly update sweep.</b>\n\n"
+    "I checked every published franchise for finished entries that aren't up yet. "
+    "Review the list below — drop anything you don't want, add titles I missed, "
+    "then hit <b>Submit</b>. Nothing's requested until you do."
+)
+
+
+def bancheck_scheduled_summary(
+    checked: int, banned: int, recovered: list[str],
+) -> str:
+    """Monthly ban-check result DM: what was probed, down, and auto-recovered."""
+    if not banned:
+        return (
+            f"{ICON} <b>Monthly ban check — all clear.</b>\n\n"
+            f"Probed {checked} channels, every one reachable."
+        )
+    lines = [
+        f"{ICON} <b>Monthly ban check.</b>\n",
+        f"Probed {checked} · <b>{banned} down</b>.",
+    ]
+    if recovered:
+        listing = "\n".join(f"• {name}" for name in recovered)
+        lines.append(
+            f"\n♻️ Auto-recovered {len(recovered)} distribution "
+            f"{'channel' if len(recovered) == 1 else 'channels'}:\n{listing}"
+        )
+    down_unrecovered = banned - len(recovered)
+    if down_unrecovered > 0:
+        lines.append(
+            f"\n⚠️ {down_unrecovered} need a manual move "
+            "(main/index channel) — use Change Main / Change Index."
+        )
+    return "\n".join(lines)
 
 
 # ── Ban check / recovery ──────────────────────────────────────────────────────────
