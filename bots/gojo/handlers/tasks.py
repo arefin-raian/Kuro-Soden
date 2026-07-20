@@ -137,7 +137,10 @@ def register(client: Client, container: Container) -> None:
     async def _cb_publish(_: Client, q: CallbackQuery) -> None:
         _, _, code = q.data.split("|", 2)
         await q.answer("Publishing...")
-        await _execute_publish(client, container, q.message, code, silent=False)
+        # "Publish Now" honours the configured default (some operators prefer
+        # silent posts as the norm); the separate "Silent" button always forces it.
+        silent = bool(getattr(container.config.main_channel, "silent_default", False))
+        await _execute_publish(client, container, q.message, code, silent=silent)
 
     @client.on_callback_query(filters.regex(r"^gojo\|publish_silent\|"))
     async def _cb_publish_silent(_: Client, q: CallbackQuery) -> None:
@@ -345,6 +348,39 @@ def register(client: Client, container: Container) -> None:
     async def _cb_check_banned(_: Client, q: CallbackQuery) -> None:
         await q.answer("Probing…")
         await _run_ban_check(q.message)
+
+    # ── Stats — catalog coverage + backup/schedule/maintenance dashboard ──────
+    @client.on_callback_query(filters.regex(r"^gojo\|stats$"))
+    async def _cb_stats(_: Client, q: CallbackQuery) -> None:
+        await q.answer("Crunching…")
+        from nekofetch.services.stats_service import StatsService
+
+        note = await q.message.reply(V.STATS_RUNNING, parse_mode=ParseMode.HTML)
+        try:
+            data = await StatsService(container).gojo_dashboard()
+            body = StatsService.dashboard_message(data)
+        except Exception as exc:  # noqa: BLE001 — stats must never hard-fail the panel
+            log.warning("gojo.stats.failed", error=str(exc))
+            await note.edit_text(V.STATS_FAILED, parse_mode=ParseMode.HTML)
+            return
+        await note.edit_text(
+            body, parse_mode=ParseMode.HTML,
+            reply_markup=keyboard([(V.BTN_HOME, cb("gojo", "home"))]),
+        )
+
+    @client.on_message(filters.command("stats"))
+    async def _stats_cmd(_: Client, message: Message) -> None:
+        from nekofetch.services.stats_service import StatsService
+
+        note = await message.reply(V.STATS_RUNNING, parse_mode=ParseMode.HTML)
+        try:
+            data = await StatsService(container).gojo_dashboard()
+            body = StatsService.dashboard_message(data)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("gojo.stats.failed", error=str(exc))
+            await note.edit_text(V.STATS_FAILED, parse_mode=ParseMode.HTML)
+            return
+        await note.edit_text(body, parse_mode=ParseMode.HTML)
 
     async def _apply_updates_edit(message: Message, prev_rows: list[dict]) -> None:
         """Apply a returned edit-list: keep survivors, resolve added titles.
@@ -869,8 +905,15 @@ def make_monthly_update_notify_job(container: Container):
 
     async def _tick() -> None:
         try:
+            from nekofetch.core.redis_safe import safe_redis_set
             from nekofetch.services.maintenance_service import MaintenanceService
 
+            # Stamp the sweep time so the Stats screen shows when it last ran,
+            # even when the sweep finds nothing.
+            await safe_redis_set(
+                container.redis, "nf:maint:last_update_check",
+                datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            )
             results = await MaintenanceService(container).scan_updates()
             if not results:
                 log.info("gojo.sched.updates.none")
@@ -913,9 +956,14 @@ def make_monthly_bancheck_job(container: Container):
     """
     async def _tick() -> None:
         try:
+            from nekofetch.core.redis_safe import safe_redis_set
             from nekofetch.services.bot_orchestrator import BotOrchestratorService
             from nekofetch.services.maintenance_service import MaintenanceService
 
+            await safe_redis_set(
+                container.redis, "nf:maint:last_ban_check",
+                datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            )
             result = await MaintenanceService(container).probe_channels()
             if not result.banned:
                 log.info("gojo.sched.bancheck.clear", checked=result.checked)

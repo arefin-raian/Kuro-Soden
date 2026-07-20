@@ -499,6 +499,10 @@ FIELD_DOCS: dict[str, FieldDoc] = {
         desc="Label of the Index button (small-caps Unicode supported).", example="ɪɴᴅᴇx"),
     "main_channel.download_button_text": FieldDoc(
         desc="Label of the Download button (small-caps Unicode supported).", example="ᴅᴏᴡɴʟᴏᴀᴅ"),
+    "main_channel.silent_default": FieldDoc(
+        desc="Publish to the main channel silently by default (no member notification). "
+             "The review card's Silent button always forces silent regardless.",
+        label="Silent by default"),
 
     # ── index channel ─────────────────────────────────────────────────────────
     "index_channel.enabled": FieldDoc(
@@ -512,6 +516,17 @@ FIELD_DOCS: dict[str, FieldDoc] = {
     "index_channel.entry_template": FieldDoc(
         desc="One catalog line per title in the index.",
         placeholders={"{title}": "anime title"}, html=True, example="⦿ {title}"),
+    "index_channel.username": FieldDoc(
+        desc="Public @username of the index channel (no @). Drives every t.me/…/… "
+             "deep link on the poster and letter buttons; a restore rewrites it.",
+        label="Index channel username", example="AniXWeebs_Index"),
+    "index_channel.poster_message_id": FieldDoc(
+        desc="Message id of the pinned poster (the letter-grid navigation post). "
+             "Updated automatically by a restore.",
+        label="Poster message id", example="171"),
+    "index_channel.main_channel_link": FieldDoc(
+        desc="Link the index letter buttons' “Main Channel” button targets.",
+        label="Main-channel link", example="https://t.me/AniXWeebs"),
 
     # ── UI / onboarding ───────────────────────────────────────────────────────
     "ui.start_sticker_id": FieldDoc(
@@ -574,6 +589,36 @@ FIELD_DOCS: dict[str, FieldDoc] = {
         example="10"),
     "bot.entity_full_check_days": FieldDoc(
         desc="Days between full health audits of all created bots/channels.", example="7"),
+    "bot.update_check_interval_days": FieldDoc(
+        label="Monthly Update-Check Interval (days)",
+        desc="Days between the scheduled franchise update sweep. 0 disables the "
+             "scheduled job (the manual /updates command still works).", example="30"),
+    "bot.ban_check_interval_days": FieldDoc(
+        label="Monthly Ban-Check Interval (days)",
+        desc="Days between the scheduled ban check. 0 disables the scheduled job "
+             "(the manual /bancheck command still works).", example="30"),
+    "bot.monthly_update_check_enabled": FieldDoc(
+        label="Scheduled Update Check",
+        desc="Master switch for the scheduled monthly update sweep (detect-only — "
+             "it DMs Gojo admins a reviewable list, nothing is auto-created)."),
+    "bot.monthly_ban_check_enabled": FieldDoc(
+        label="Scheduled Ban Check",
+        desc="Master switch for the scheduled monthly ban check (auto-recovers down "
+             "distribution channels from backup)."),
+    "bot.restore_batch_size": FieldDoc(
+        label="Restore Batch Size",
+        desc="Posts per batch during a whole-channel restore (Change Main). 0 posts "
+             "as fast as the API allows; a positive value paces large catalogs.",
+        example="10"),
+    "bot.restore_batch_delay_seconds": FieldDoc(
+        label="Restore Batch Delay (seconds)",
+        desc="Seconds to sleep between restore batches when Restore Batch Size is set.",
+        example="5"),
+    "bot.image_host_order": FieldDoc(
+        label="Image Mirror Host Order",
+        desc="Durable image-backup hosts tried in order; the first that sticks becomes "
+             "the primary URL. Recognized: catbox, telegraph, envs.",
+        example="catbox, telegraph, envs"),
     "bot.bot_username_suffix": FieldDoc(
         desc="Suffix appended when generating new distribution-bot usernames.", example="Bot"),
     "bot.channel_username_suffix": FieldDoc(

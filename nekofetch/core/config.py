@@ -424,6 +424,9 @@ class MainChannelConfig(BaseModel):
     )
     index_button_text: str = "ɪɴᴅᴇx"
     download_button_text: str = "ᴅᴏᴡɴʟᴏᴀᴅ"
+    # Default notification mode for a main-channel publish. True = post silently
+    # (no member notification) unless the operator overrides per-publish.
+    silent_default: bool = False
 
 
 class IndexChannelConfig(BaseModel):
@@ -614,6 +617,22 @@ class BotConfig(BaseModel):
     # manual /updates and /bancheck commands always remain available).
     update_check_interval_days: int = 30
     ban_check_interval_days: int = 30
+    # Master on/off for each scheduled monthly job, independent of the interval
+    # above. Off = the job never fires on the scheduler (manual command still works).
+    monthly_update_check_enabled: bool = True
+    monthly_ban_check_enabled: bool = True
+    # Restore pacing for a whole-channel main-channel restore (Change Main). 0 posts
+    # as fast as the API allows; a positive ``restore_batch_size`` posts that many
+    # then sleeps ``restore_batch_delay_seconds`` before the next batch — gentler on
+    # Telegram's flood limits for a large catalog.
+    restore_batch_size: int = 0
+    restore_batch_delay_seconds: float = 0.0
+    # Image-host mirror order for durable backups (image_backup). A comma-free list
+    # of host keys tried in order; the first that sticks becomes the primary URL.
+    # Recognized: "catbox", "telegraph", "envs". Unknown keys are ignored.
+    image_host_order: list[str] = Field(
+        default_factory=lambda: ["catbox", "telegraph", "envs"]
+    )
     # Username suffix formatting. The base suffix is shared; ``format_bot_username``
     # appends "_bot" for bot entities (Telegram requirement) and leaves it off for
     # channels. Both entities use the same base, but only bots get the "_bot" tail.

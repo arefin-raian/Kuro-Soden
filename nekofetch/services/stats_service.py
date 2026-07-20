@@ -235,6 +235,79 @@ class StatsService:
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         }
 
+    # ── Gojo dashboard (compute + operational counts) ──────────────────────────
+
+    async def gojo_dashboard(self) -> dict:
+        """Compute the catalog stats **plus** operational counts for Gojo's Stats
+        screen: durable backup coverage, scheduled publishes in flight, and the
+        timestamps of the last update/ban-check sweeps.
+
+        Best-effort per source — a missing table or a bad row degrades one line,
+        never the whole screen. Returns the ``compute()`` dict augmented with a
+        ``dashboard`` sub-dict.
+        """
+        from sqlalchemy import func
+
+        from nekofetch.infrastructure.database.postgres.models import (
+            ChannelContentBackup,
+            PublishedPostBackup,
+            ScheduledPost,
+        )
+
+        base = await self.compute()
+        d: dict = {
+            "main_backups": 0, "dist_backups": 0, "index_backups": 0,
+            "pending_scheduled": 0, "next_scheduled_utc": None,
+            "last_update_check": None, "last_ban_check": None,
+        }
+        try:
+            async with session_scope(self._c.pg_sessionmaker) as session:
+                d["main_backups"] = int(
+                    (await session.execute(
+                        select(func.count()).select_from(PublishedPostBackup)
+                    )).scalar() or 0
+                )
+                d["dist_backups"] = int(
+                    (await session.execute(
+                        select(func.count()).select_from(ChannelContentBackup)
+                        .where(ChannelContentBackup.scope == "distribution")
+                    )).scalar() or 0
+                )
+                d["index_backups"] = int(
+                    (await session.execute(
+                        select(func.count()).select_from(ChannelContentBackup)
+                        .where(ChannelContentBackup.scope == "index")
+                    )).scalar() or 0
+                )
+                d["pending_scheduled"] = int(
+                    (await session.execute(
+                        select(func.count()).select_from(ScheduledPost)
+                        .where(ScheduledPost.status == "pending")
+                    )).scalar() or 0
+                )
+                nxt = (await session.execute(
+                    select(ScheduledPost.scheduled_at)
+                    .where(ScheduledPost.status == "pending")
+                    .order_by(ScheduledPost.scheduled_at.asc()).limit(1)
+                )).scalar()
+                if nxt is not None:
+                    d["next_scheduled_utc"] = nxt.strftime("%Y-%m-%d %H:%M UTC")
+        except Exception as exc:  # noqa: BLE001 — counts are best-effort
+            log.warning("stats.dashboard.counts_failed", error=str(exc))
+
+        # Last-sweep timestamps are stamped in Redis by the scheduled jobs.
+        for key, field in (("nf:maint:last_update_check", "last_update_check"),
+                           ("nf:maint:last_ban_check", "last_ban_check")):
+            try:
+                val = await safe_redis_get(self._c.redis, key)
+                if val:
+                    d[field] = val
+            except Exception:  # noqa: BLE001
+                pass
+
+        base["dashboard"] = d
+        return base
+
     # ── message display ───────────────────────────────────────────────────────
 
     @staticmethod
@@ -265,6 +338,45 @@ class StatsService:
         parts.append(RULE_HEAVY)
         parts.append(t(M.STATS_UPDATED, ts=stats["ts"]))
 
+        return "\n".join(parts)
+
+    @staticmethod
+    def dashboard_message(stats: dict) -> str:
+        """Gojo's Stats screen: catalog overview + the operational counts from
+        :meth:`gojo_dashboard` (backup coverage, scheduled publishes, last sweeps).
+
+        Reuses the catalog block from :meth:`_format_message` (minus the long
+        pending-titles list, which would bury the operational numbers) and appends
+        a durable-recovery section. Plain HTML — no localization keys, since this
+        surface is Gojo-specific."""
+        d = stats.get("dashboard", {})
+        parts: list[str] = [
+            "<b>🔮 Gojo — Dashboard</b>",
+            RULE_HEAVY,
+            "",
+            "<b>Catalog</b>",
+            f"  ⦿ Total series: <b>{stats.get('total_series', 0)}</b>",
+            f"  ⦿ Published: <b>{stats.get('published_series', 0)}</b>",
+            f"  ⦿ Not indexed: <b>{stats.get('not_indexed_series', 0)}</b>",
+            "",
+            "<b>Durable backups</b>",
+            f"  ⦿ Main-channel posts: <b>{d.get('main_backups', 0)}</b>",
+            f"  ⦿ Distribution channels: <b>{d.get('dist_backups', 0)}</b>",
+            f"  ⦿ Index channel: <b>{d.get('index_backups', 0)}</b>",
+            "",
+            "<b>Scheduling</b>",
+            f"  ⦿ Publishes in flight: <b>{d.get('pending_scheduled', 0)}</b>",
+        ]
+        nxt = d.get("next_scheduled_utc")
+        if nxt:
+            parts.append(f"  ⦿ Next: <b>{html.escape(nxt)}</b>")
+        parts.append("")
+        parts.append("<b>Last maintenance sweeps</b>")
+        parts.append(f"  ⦿ Update check: <b>{html.escape(d.get('last_update_check') or '—')}</b>")
+        parts.append(f"  ⦿ Ban check: <b>{html.escape(d.get('last_ban_check') or '—')}</b>")
+        parts.append("")
+        parts.append(RULE_HEAVY)
+        parts.append(t(M.STATS_UPDATED, ts=stats["ts"]))
         return "\n".join(parts)
 
     # ── refresh (post/edit/pin) ───────────────────────────────────────────────

@@ -302,6 +302,16 @@ def bancheck_scheduled_summary(
     return "\n".join(lines)
 
 
+# ── Stats dashboard ────────────────────────────────────────────────────────────────
+
+STATS_RUNNING = f"{ICON} <b>Crunching the numbers…</b>"
+
+STATS_FAILED = (
+    f"{ICON} <b>Couldn't build the stats screen.</b>\n\n"
+    "Something hiccuped gathering the counts — try again in a moment."
+)
+
+
 # ── Ban check / recovery ──────────────────────────────────────────────────────────
 
 def ban_check_result(banned: int, checked: int) -> str:

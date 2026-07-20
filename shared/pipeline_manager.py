@@ -113,12 +113,15 @@ class PipelineManager:
             bcfg = self._c.config.bot
             upd_days = getattr(bcfg, "update_check_interval_days", 30)
             ban_days = getattr(bcfg, "ban_check_interval_days", 30)
-            if upd_days > 0:
+            # Two gates each: the enable flag (operator switch) AND a positive
+            # interval. Either off → that scheduled job is skipped; the manual
+            # /updates and /bancheck commands stay available regardless.
+            if getattr(bcfg, "monthly_update_check_enabled", True) and upd_days > 0:
                 self._scheduler.every(
                     upd_days * 86400, make_monthly_update_notify_job(self._c),
                     id="gojo-update-notify",
                 )
-            if ban_days > 0:
+            if getattr(bcfg, "monthly_ban_check_enabled", True) and ban_days > 0:
                 self._scheduler.every(
                     ban_days * 86400, make_monthly_bancheck_job(self._c),
                     id="gojo-ban-check",

@@ -101,7 +101,8 @@ def build_gojo(container: Container, token: str) -> Client:
                  InlineKeyboardButton("📡 Change Main", callback_data=cb(bot, "change_main"))],
                 [InlineKeyboardButton("🔎 Check Updates", callback_data=cb(bot, "check_updates")),
                  InlineKeyboardButton("🩺 Ban Check", callback_data=cb(bot, "check_banned"))],
-                [InlineKeyboardButton("✏️ Edit Footer", callback_data=cb(bot, "edit_footer"))],
+                [InlineKeyboardButton("📊 Stats", callback_data=cb(bot, "stats")),
+                 InlineKeyboardButton("✏️ Edit Footer", callback_data=cb(bot, "edit_footer"))],
                 [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
             ])
             await send_screen(client, q.message.chat.id,
