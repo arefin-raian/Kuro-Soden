@@ -98,4 +98,5 @@ def register_all(client: Client, container: Container) -> None:
             ],
             "queue": ["max_visible", "position_recalc_seconds"],
         },
+        owner_only=True,
     )

@@ -592,6 +592,7 @@ def register_settings(
     input_group: int = 5,
     extra_buttons: Sequence[tuple[str, str]] = (),
     fields: dict[str, Sequence[str]] | None = None,
+    owner_only: bool = False,
 ) -> None:
     """Wire ``bot``'s settings hub/section/field/edit flow onto real config.
 
@@ -630,6 +631,9 @@ def register_settings(
         if not _allowed(user):
             await q.answer(f"You don't have permission to configure {bot.title()}.",
                            show_alert=True)
+            return True
+        if owner_only and not auth.is_owner(user):
+            await q.answer("That panel is owner-only.", show_alert=True)
             return True
         if section and is_owner_only(section) and not auth.is_owner(user):
             await q.answer("That section is owner-only.", show_alert=True)
@@ -892,6 +896,9 @@ def register_settings(
                 f"You don't have permission to configure {bot.title()}.",
                 parse_mode=ParseMode.HTML,
             )
+            return
+        if owner_only and not auth.is_owner(user):
+            await message.reply("That panel is owner-only.", parse_mode=ParseMode.HTML)
             return
         await send_screen(client, message.chat.id, _hub(user))
 

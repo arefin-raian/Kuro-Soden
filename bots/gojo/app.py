@@ -40,7 +40,9 @@ log = get_logger(__name__)
 
 
 async def publish_commands(client: Client) -> None:
-    await client.set_bot_commands(GOJO_COMMANDS)
+    # Staff-only bot → empty global menu; staff/owner get theirs per-chat on /start.
+    from kurosoden.shared.command_menu import default_commands
+    await client.set_bot_commands(default_commands("gojo"))
 
 
 def build_gojo(container: Container, token: str) -> Client:
@@ -92,7 +94,9 @@ def build_gojo(container: Container, token: str) -> Client:
                 "• Update the index\n"
                 "• Recover banned channels"
             )
-            keyboard = InlineKeyboardMarkup([
+            from kurosoden.shared.access_gate import is_owner
+
+            rows = [
                 [InlineKeyboardButton("📋 Tasks", callback_data=cb(bot, "tasks")),
                  InlineKeyboardButton("🔮 Publish", callback_data=cb(bot, "publish"))],
                 [InlineKeyboardButton("📅 Schedule", callback_data=cb(bot, "schedule")),
@@ -106,7 +110,13 @@ def build_gojo(container: Container, token: str) -> Client:
                 [InlineKeyboardButton("📊 Stats", callback_data=cb(bot, "stats")),
                  InlineKeyboardButton("✏️ Edit Footer", callback_data=cb(bot, "edit_footer"))],
                 [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
-            ])
+            ]
+            if not is_owner(container, q):
+                rows = [
+                    row for row in rows
+                    if all("settings" not in (btn.callback_data or "") for btn in row)
+                ]
+            keyboard = InlineKeyboardMarkup(rows)
             await send_screen(client, q.message.chat.id,
                               Screen(caption=caption, image=pick_artwork(bot),
                                      keyboard=keyboard), old_msg=q.message)
@@ -198,6 +208,11 @@ def build_gojo(container: Container, token: str) -> Client:
         from nekofetch.ui.components import cb, keyboard
         from nekofetch.ui.artwork import pick_artwork
         from kurosoden.shared.ui_helpers import send_rich_welcome
+        from kurosoden.shared.command_menu import apply_for_user
+
+        if message.from_user:
+            await apply_for_user(client, container, "gojo",
+                                 message.from_user.id, getattr(message, "nf_user", None))
 
         rows = [
             [("📋 Tasks", cb("gojo", "tasks")),
@@ -212,6 +227,12 @@ def build_gojo(container: Container, token: str) -> Client:
             [("⚙️ Settings", cb("gojo", "settings")),
              ("❓ Help", cb("gojo", "help"))],
         ]
+        from kurosoden.shared.access_gate import is_owner
+        if not is_owner(container, message):
+            rows = [
+                row for row in rows
+                if all("settings" not in data for _label, data in row)
+            ]
         screen = Screen(
             caption=(
                 "<b>🔮 Gojo Satoru — Publisher</b>\n\n"

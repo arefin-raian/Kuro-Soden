@@ -18,7 +18,7 @@ def register_all(client: Client, container: Container) -> None:
     from kurosoden.bots.senku.handlers.wizard import register as register_wizard
     from kurosoden.shared.settings_ui import register_settings
 
-    install_auth_middleware(client, container)
+    install_auth_middleware(client, container, staff_only_bot="senku")
     register_wizard(client, container)
     register_tasks(client, container)
 
@@ -34,4 +34,5 @@ def register_all(client: Client, container: Container) -> None:
             "season and movie cards, the watch guide, the quality buttons, and "
             "the footer. Change any of it and see a live preview before you save."
         ),
+        owner_only=True,
     )

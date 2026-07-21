@@ -33,7 +33,7 @@ def register_all(client: Client, container: Container) -> None:
     # ── Auth middleware ────────────────────────────────────────────────────
     from nekofetch.bots.middleware import install_auth_middleware
 
-    install_auth_middleware(client, container)
+    install_auth_middleware(client, container, staff_only_bot="levi")
 
     # ── The full download/source machinery (mounted from admin.review) ─────
     from nekofetch.bots.admin.handlers import review
@@ -55,6 +55,7 @@ def register_all(client: Client, container: Container) -> None:
             "qualities to grab, how files are named and branded. On/off "
             "switches flip in place; text fields open an editor with an example."
         ),
+        owner_only=True,
     )
 
     # ── Levi task handlers (task list → routes into the review flow) ───────

@@ -32,7 +32,10 @@ log = get_logger(__name__)
 
 
 async def publish_commands(client: Client) -> None:
-    await client.set_bot_commands(LEVI_COMMANDS)
+    # Staff-only bot → empty global menu (a stranger sees nothing). Staff/owner
+    # get their menu per-chat on /start via command_menu.apply_for_user.
+    from kurosoden.shared.command_menu import default_commands
+    await client.set_bot_commands(default_commands("levi"))
 
 
 def build_levi(container: Container, token: str) -> Client:
@@ -84,11 +87,19 @@ def build_levi(container: Container, token: str) -> Client:
                 "• Download and process files\n"
                 "• Upload thumbnails and generate headers"
             )
-            keyboard = InlineKeyboardMarkup([
+            from kurosoden.shared.access_gate import is_owner
+
+            rows = [
                 [InlineKeyboardButton("📋 Tasks", callback_data=cb(bot, "tasks"))],
                 [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "set", "home")),
                  InlineKeyboardButton("❓ Help", callback_data=cb(bot, "help"))],
-            ])
+            ]
+            if not is_owner(container, q):
+                rows = [
+                    row for row in rows
+                    if all("set|home" not in (btn.callback_data or "") for btn in row)
+                ]
+            keyboard = InlineKeyboardMarkup(rows)
             await send_screen(client, q.message.chat.id,
                               Screen(caption=caption, image=pick_artwork(bot),
                                      keyboard=keyboard), old_msg=q.message)
@@ -162,6 +173,13 @@ def build_levi(container: Container, token: str) -> Client:
         from nekofetch.ui.components import cb, keyboard
         from nekofetch.ui.artwork import pick_artwork
         from kurosoden.shared.ui_helpers import send_rich_welcome
+        from kurosoden.shared.command_menu import apply_for_user
+
+        # Non-staff never reach here (the auth middleware gates them), but tailor
+        # the ☰ menu for whoever does open it.
+        if message.from_user:
+            await apply_for_user(client, container, "levi",
+                                 message.from_user.id, getattr(message, "nf_user", None))
 
         rows = [
             [("📋 Tasks", cb("levi", "tasks"))],
@@ -169,6 +187,12 @@ def build_levi(container: Container, token: str) -> Client:
             [("⚙️ Settings", cb("levi", "settings")),
              ("❓ Help", cb("levi", "help"))],
         ]
+        from kurosoden.shared.access_gate import is_owner
+        if not is_owner(container, message):
+            rows = [
+                row for row in rows
+                if all("settings" not in data for _label, data in row)
+            ]
         screen = Screen(
             caption=(
                 "<b>⚔️ Levi Ackerman — Downloader</b>\n\n"

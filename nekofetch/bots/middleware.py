@@ -20,7 +20,17 @@ from nekofetch.ui.typography import bq
 log = get_logger(__name__)
 
 
-def install_auth_middleware(client: Client, container: Container) -> None:
+def install_auth_middleware(
+    client: Client, container: Container, *, staff_only_bot: str | None = None
+) -> None:
+    """Resolve the user on every update; optionally gate the whole bot to staff.
+
+    ``staff_only_bot`` (e.g. ``"levi"``) turns the client into a staff-only tool:
+    a non-staff user's message or tap is intercepted here — they get the shared
+    "authorized staff only" gate (with a Request-Anime button pointing at
+    Lelouch) and propagation stops, so no feature handler ever runs for them.
+    Only Lelouch (the request bot) is left open to users, so it passes no value.
+    """
     auth = AuthService(container)
     rate_limit = container.config.security.rate_limit_per_minute
 
@@ -30,6 +40,15 @@ def install_auth_middleware(client: Client, container: Container) -> None:
         return await auth.resolve_user(
             from_user.id, username=from_user.username, first_name=from_user.first_name
         )
+
+    def _is_staff(user) -> bool:
+        if user is None:
+            return False
+        try:
+            from nekofetch.domain.enums import Role
+            return Role(user.role) in (Role.STAFF, Role.ADMIN)
+        except Exception:  # noqa: BLE001
+            return False
 
     async def _rate_limited(user_id: int) -> bool:
         """Returns True when the user is over the rate-limit budget.
@@ -62,6 +81,9 @@ def install_auth_middleware(client: Client, container: Container) -> None:
             await message.reply(bq(container.localizer.get("rate_limited")), parse_mode=ParseMode.HTML)
             await message.stop_propagation()
         message.nf_user = await _resolve(message.from_user)  # type: ignore[attr-defined]
+        if staff_only_bot and not _is_staff(message.nf_user):
+            await _show_gate_msg(message)
+            await message.stop_propagation()
 
     @client.on_callback_query(group=-1)
     async def _cb_mw(_: Client, query: CallbackQuery) -> None:
@@ -69,3 +91,18 @@ def install_auth_middleware(client: Client, container: Container) -> None:
             await query.answer(bq(container.localizer.get("rate_limited")), show_alert=True)
             await query.stop_propagation()
         query.nf_user = await _resolve(query.from_user)  # type: ignore[attr-defined]
+        if staff_only_bot and not _is_staff(query.nf_user):
+            await query.answer("🔒 This bot is for authorized staff only.",
+                               show_alert=True)
+            await query.stop_propagation()
+
+    async def _show_gate_msg(message: Message) -> None:
+        """Send the staff-only gate card to a non-staff user (best-effort)."""
+        try:
+            from kurosoden.shared.access_gate import gated_screen
+            from nekofetch.ui.screens import send_screen
+
+            screen = await gated_screen(container, staff_only_bot)
+            await send_screen(client, message.chat.id, screen)
+        except Exception as exc:  # noqa: BLE001 — never crash the gate itself
+            log.warning("middleware.gate.failed", bot=staff_only_bot, error=str(exc))

@@ -38,7 +38,10 @@ log = get_logger(__name__)
 
 
 async def publish_commands(client: Client) -> None:
-    await client.set_bot_commands(LELOUCH_COMMANDS)
+    # Global default = the lowest-privilege (plain user) menu. Staff/owner get an
+    # expanded per-chat menu on /start via command_menu.apply_for_user.
+    from kurosoden.shared.command_menu import default_commands
+    await client.set_bot_commands(default_commands("lelouch"))
 
 
 def build_lelouch(container: Container, token: str) -> Client:
@@ -289,6 +292,12 @@ def build_lelouch(container: Container, token: str) -> Client:
     @client.on_message(filters.command("start"))
     async def _start(_: Client, message: Message) -> None:
         from kurosoden.shared.ui_helpers import send_rich_welcome
+        from kurosoden.shared.command_menu import apply_for_user
+
+        # Tailor the ☰ command menu to who's opening the bot.
+        if message.from_user:
+            await apply_for_user(client, container, "lelouch",
+                                 message.from_user.id, getattr(message, "nf_user", None))
 
         role = _role(message)
         screen = S.home(

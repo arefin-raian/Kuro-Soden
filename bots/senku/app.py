@@ -35,7 +35,9 @@ log = get_logger(__name__)
 
 
 async def publish_commands(client: Client) -> None:
-    await client.set_bot_commands(SENKU_COMMANDS)
+    # Staff-only bot → empty global menu; staff/owner get theirs per-chat on /start.
+    from kurosoden.shared.command_menu import default_commands
+    await client.set_bot_commands(default_commands("senku"))
 
 
 def build_senku(container: Container, token: str) -> Client:
@@ -85,12 +87,20 @@ def build_senku(container: Container, token: str) -> Client:
                 "• Create season separators & watch guides\n"
                 "• Add footers and branding"
             )
-            keyboard = InlineKeyboardMarkup([
+            from kurosoden.shared.access_gate import is_owner
+
+            rows = [
                 [InlineKeyboardButton("📋 Tasks", callback_data=cb(bot, "tasks")),
                  InlineKeyboardButton("🧪 Generate", callback_data=cb(bot, "generate"))],
                 [InlineKeyboardButton("📢 Create Channel", callback_data=cb(bot, "create"))],
                 [InlineKeyboardButton("⚙️ Settings", callback_data=cb(bot, "settings"))],
-            ])
+            ]
+            if not is_owner(container, q):
+                rows = [
+                    row for row in rows
+                    if all("settings" not in (btn.callback_data or "") for btn in row)
+                ]
+            keyboard = InlineKeyboardMarkup(rows)
             await send_screen(client, q.message.chat.id,
                               Screen(caption=caption, image=pick_artwork(bot),
                                      keyboard=keyboard), old_msg=q.message)
@@ -175,6 +185,11 @@ def build_senku(container: Container, token: str) -> Client:
         from nekofetch.ui.components import cb, keyboard
         from nekofetch.ui.artwork import pick_artwork
         from kurosoden.shared.ui_helpers import send_rich_welcome
+        from kurosoden.shared.command_menu import apply_for_user
+
+        if message.from_user:
+            await apply_for_user(client, container, "senku",
+                                 message.from_user.id, getattr(message, "nf_user", None))
 
         rows = [
             [("📋 Tasks", cb("senku", "tasks")),
@@ -183,6 +198,12 @@ def build_senku(container: Container, token: str) -> Client:
             [("⚙️ Settings", cb("senku", "settings")),
              ("❓ Help", cb("senku", "help"))],
         ]
+        from kurosoden.shared.access_gate import is_owner
+        if not is_owner(container, message):
+            rows = [
+                row for row in rows
+                if all("settings" not in data for _label, data in row)
+            ]
         screen = Screen(
             caption=(
                 "<b>🧪 Senku Ishigami — Distribution</b>\n\n"
