@@ -10,7 +10,7 @@
 
 ### The Dark Relay - four anime-themed Telegram bots for request intake, downloads, distribution, and publishing
 
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=18&duration=2800&pause=800&color=8B5CF6&center=true&vCenter=true&width=900&lines=Lelouch+requests+%E2%86%92+Levi+downloads+%E2%86%92+Senku+distributes+%E2%86%92+Gojo+publishes;Every+admin+assigned.+Every+duplicate+caught.+Every+handoff+visible.;645+tests+passed.+Five+skipped.+One+unbroken+relay." alt="Kuro Sōden relay typing banner" />
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=18&duration=2800&pause=800&color=8B5CF6&center=true&vCenter=true&width=900&lines=Lelouch+requests+%E2%86%92+Levi+downloads+%E2%86%92+Senku+distributes+%E2%86%92+Gojo+publishes;Every+admin+assigned.+Every+duplicate+caught.+Every+handoff+visible.;650+tests+passed.+Five+skipped.+One+unbroken+relay." alt="Kuro Sōden relay typing banner" />
 
 <br /><br />
 
@@ -20,7 +20,7 @@
 [![PostgreSQL](https://img.shields.io/badge/postgresql-durable_state-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![MongoDB](https://img.shields.io/badge/mongodb-runtime_settings-47A248?style=for-the-badge&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
 [![Redis](https://img.shields.io/badge/redis-live_state-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
-[![Tests](https://img.shields.io/badge/tests-645_passed-2E7D32?style=for-the-badge&logo=pytest&logoColor=white)](#testing)
+[![Tests](https://img.shields.io/badge/tests-650_passed-2E7D32?style=for-the-badge&logo=pytest&logoColor=white)](#testing)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](#deployment)
 [![Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?style=for-the-badge&logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
 
@@ -152,7 +152,7 @@ Both launchers create `.venv`, install the editable package, warn when `.env` is
 | Stage handoff | Levi completion assigns Senku; Senku completion assigns Gojo. `notify_stage_assignment` sends stage-specific task cards. |
 | Anime artwork | Stage cards and request cards use anime backdrop art when available, with configured art fallbacks. |
 | Schema safety | Alembic owns production migrations; development startup can reconcile schema when `AUTO_CREATE_SCHEMA=true`. |
-| Test state | Latest full verification in this workspace: 645 passed, 5 skipped. |
+| Test state | Latest full verification in this workspace: 650 passed, 5 skipped. |
 
 ## The Relay At A Glance
 
@@ -909,7 +909,7 @@ pytest --collect-only -q
 Latest workspace verification:
 
 ```text
-645 passed, 5 skipped, 11 warnings
+650 passed, 5 skipped, 11 warnings
 ```
 
 Coverage areas:

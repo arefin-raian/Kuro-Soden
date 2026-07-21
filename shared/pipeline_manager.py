@@ -62,6 +62,13 @@ class PipelineManager:
         # ── 1. Lelouch — Request Bot ──────────────────────────────────────────
         await self._start_bot("lelouch", "REQUEST_BOT_TOKEN")
 
+        try:
+            from kurosoden.shared.owner_seed import seed_configured_principals
+
+            await seed_configured_principals(self._c, client=self.lelouch)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("principal_seed.refresh_failed", error=str(exc))
+
         # ── 2. Levi — Downloader Bot ──────────────────────────────────────────
         await self._start_bot("levi", "DOWNLOADER_BOT_TOKEN")
 

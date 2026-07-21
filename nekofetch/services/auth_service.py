@@ -27,20 +27,27 @@ class AuthService:
     ) -> User:
         async with session_scope(self._c.pg_sessionmaker) as session:
             repo = UserRepository(session)
-            user = await repo.get_or_create(
-                telegram_id, username=username, first_name=first_name
-            )
-            # Admin whitelist from env is authoritative.
-            if telegram_id in self._env.admin_ids and user.role != Role.ADMIN:
-                user.role = Role.ADMIN
+            user = await repo.get_by_telegram_id(telegram_id)
+            if user is None:
+                role = Role.ADMIN if telegram_id in self._configured_principal_ids() else Role.USER
+                user = User(
+                    telegram_id=telegram_id,
+                    username=username,
+                    first_name=first_name,
+                    role=role,
+                )
+                await repo.add(user)
+            else:
+                if username and not user.username:
+                    user.username = username
+                if first_name and not user.first_name:
+                    user.first_name = first_name
             user.last_seen_at = datetime.now(UTC)
             await session.flush()
             session.expunge(user)
             return user
 
     def role_of(self, user: User) -> Role:
-        if user.telegram_id in self._env.admin_ids:
-            return Role.ADMIN
         return Role(user.role)
 
     def owner_ids(self) -> set[int]:
@@ -56,6 +63,11 @@ class AuthService:
 
     def is_owner(self, user: User | None) -> bool:
         return bool(user) and user.telegram_id in self.owner_ids()
+
+    def _configured_principal_ids(self) -> set[int]:
+        ids = {int(admin_id) for admin_id in self._env.admin_ids}
+        ids.update(self.owner_ids())
+        return ids
 
     def has_permission(self, user: User, permission: Permission) -> bool:
         if user.is_banned:
