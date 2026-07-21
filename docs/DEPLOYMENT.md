@@ -11,7 +11,7 @@ Compose** (recommended) and **local/manual**.
 ## 1. Prerequisites
 
 - A server or machine with Docker + Docker Compose (or Python 3.12+ for manual setup).
-- `ffmpeg` and `mkvtoolnix` (bundled in the Docker image; install locally otherwise).
+- `aria2`, `ffmpeg`, and `mkvtoolnix` (bundled in the Docker image; install locally otherwise).
 - Telegram **API credentials**: create an app at https://my.telegram.org → note `api_id` + `api_hash`.
 - An **admin bot** token from https://t.me/BotFather.
 - Your own Telegram **user id** (message https://t.me/userinfobot).

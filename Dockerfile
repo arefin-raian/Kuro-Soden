@@ -1,8 +1,9 @@
 # ── Kuro Sōden (黒送伝) — Standalone Docker image ─────────────────────────
 FROM python:3.12-slim
 
-# System deps: ffmpeg (media), mkvtoolnix (mkv metadata), playwright (thumbnails)
+# System deps: aria2 (torrent download), ffmpeg (media), mkvtoolnix (mkv metadata), playwright (thumbnails)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    aria2 \
     ffmpeg \
     mkvtoolnix \
     wget \

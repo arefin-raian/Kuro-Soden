@@ -603,7 +603,7 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 |---|---|
 | `features` | request system, queue, distribution bots, metadata editing, thumbnails, temporary links, analytics, audit logs |
 | `downloads` | concurrency, retry behavior, per-task timeout |
-| `processing` | ffmpeg/mkvtoolnix flow, subtitles, audio handling |
+| `processing` | aria2 torrent fetches, ffmpeg/mkvtoolnix flow, subtitles, audio handling |
 | `rename` | filename templates and language labels |
 | `metadata` | AniList/Jikan/TMDB provider behavior |
 | `thumbnail` | renderer, templates, upload and backup behavior |
@@ -640,7 +640,7 @@ Linux/macOS:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ffmpeg mkvtoolnix
+sudo apt-get install -y aria2 ffmpeg mkvtoolnix
 
 python -m venv .venv
 source .venv/bin/activate
@@ -672,7 +672,7 @@ python main.py
 
 ### 2. Docker
 
-The repository ships a `Dockerfile`. It uses Python 3.12 slim, installs `ffmpeg`, `mkvtoolnix`, Playwright Chromium, runtime requirements, and starts `python main.py`.
+The repository ships a `Dockerfile`. It uses Python 3.12 slim, installs `aria2`, `ffmpeg`, `mkvtoolnix`, Playwright Chromium, runtime requirements, and starts `python main.py`.
 
 PowerShell:
 
@@ -750,7 +750,7 @@ Use:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3.12 python3.12-venv ffmpeg mkvtoolnix postgresql redis-server
+sudo apt-get install -y python3.12 python3.12-venv aria2 ffmpeg mkvtoolnix postgresql redis-server
 
 git clone <your-repo-url> KuroSoden
 cd KuroSoden
@@ -792,7 +792,7 @@ Termux works for small test runs, not heavy production media work.
 
 ```bash
 pkg update
-pkg install python git ffmpeg postgresql redis
+pkg install python git aria2 ffmpeg postgresql redis
 git clone <your-repo-url> KuroSoden
 cd KuroSoden
 python -m venv .venv
