@@ -1,173 +1,210 @@
-<a id="readme-top"></a>
+<a id="top"></a>
+
+<!-- Kuro Sōden · 黒送伝 · README -->
 
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&height=230&section=header&text=Kuro%20S%C5%8Dden&fontSize=76&fontAlignY=36&desc=%E9%BB%92%E9%80%81%E4%BC%9D%20%C2%B7%20The%20Dark%20Relay&descAlignY=59&descSize=18&fontColor=F8FAFC&color=0:050505,42:171717,72:4C1D95,100:0F172A" width="100%" alt="Kuro Sōden banner" />
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0d0d0d,50:1a1a2e,100:16213e&height=220&section=header&text=Kuro%20S%C5%8Dden&fontSize=72&fontColor=e0e0e0&animation=fadeIn&fontAlignY=38&desc=%E9%BB%92%E9%80%81%E4%BC%9D%20-%20Four-Bot%20Anime%20Distribution%20Relay&descAlignY=60&descSize=18" width="100%" alt="Kuro Sōden banner" />
 
-# Kuro Sōden
+# Kuro Sōden (黒送伝)
 
-**黒送伝 · The Dark Relay · a four-bot Telegram anime distribution pipeline**
+### The Dark Relay - four anime-themed Telegram bots for request intake, downloads, distribution, and publishing
+
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=18&duration=2800&pause=800&color=8B5CF6&center=true&vCenter=true&width=900&lines=Lelouch+requests+%E2%86%92+Levi+downloads+%E2%86%92+Senku+distributes+%E2%86%92+Gojo+publishes;Every+admin+assigned.+Every+duplicate+caught.+Every+handoff+visible.;645+tests+passed.+Five+skipped.+One+unbroken+relay." alt="Kuro Sōden relay typing banner" />
+
+<br /><br />
+
+[![Python](https://img.shields.io/badge/python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Pyrogram](https://img.shields.io/badge/pyrofork-telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://github.com/Mayuri-Chan/pyrofork)
+[![SQLAlchemy](https://img.shields.io/badge/sqlalchemy-2.0-D71F00?style=for-the-badge&logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
+[![PostgreSQL](https://img.shields.io/badge/postgresql-durable_state-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![MongoDB](https://img.shields.io/badge/mongodb-runtime_settings-47A248?style=for-the-badge&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![Redis](https://img.shields.io/badge/redis-live_state-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
+[![Tests](https://img.shields.io/badge/tests-645_passed-2E7D32?style=for-the-badge&logo=pytest&logoColor=white)](#testing)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](#deployment)
+[![Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?style=for-the-badge&logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
+
+<br /><br />
 
 <p>
-  <b>Lelouch accepts requests</b> → <b>Levi pulls media</b> → <b>Senku builds distribution</b> → <b>Gojo publishes</b>
+  <a href="#what-this-is"><b>What</b></a> ·
+  <a href="#pipeline-diagrams"><b>Pipeline</b></a> ·
+  <a href="#admin-assignment-engine"><b>Admin Engine</b></a> ·
+  <a href="#download-sources"><b>Sources</b></a> ·
+  <a href="#deployment"><b>Deploy</b></a> ·
+  <a href="#commands-reference"><b>Commands</b></a> ·
+  <a href="#testing"><b>Tests</b></a>
 </p>
 
-<p>
-  <a href="#quick-start"><b>Quick Start</b></a> ·
-  <a href="#pipeline"><b>Pipeline</b></a> ·
-  <a href="#the-four-bots"><b>Four Bots</b></a> ·
-  <a href="#architecture"><b>Architecture</b></a> ·
-  <a href="#deployment"><b>Deployment</b></a> ·
-  <a href="#operations"><b>Operations</b></a>
-</p>
+<br />
 
-![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Pyrogram](https://img.shields.io/badge/Pyrofork-2.3+-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-async-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
-![MongoDB](https://img.shields.io/badge/MongoDB-runtime%20state-47A248?style=for-the-badge&logo=mongodb&logoColor=white)
-![Redis](https://img.shields.io/badge/Redis-FSM%20%2B%20locks-DC382D?style=for-the-badge&logo=redis&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-372%20passing-22C55E?style=for-the-badge&logo=pytest&logoColor=white)
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                                                                               ║
+║   Lelouch              Levi              Senku              Gojo              ║
+║   Request Intake  ->   Download     ->   Distribution   ->  Publishing        ║
+║   Dedup Check          Source Review      Channel Build      Index Update     ║
+║   Admin Assign         Process Files      Package Flow       Recovery         ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
 
 </div>
 
 ---
 
-## What This Is
-
-Kuro Sōden is a **standalone repository** that packages a specialized, anime-themed orchestration layer around the NekoFetch runtime. It does not replace the NekoFetch service layer. It vendors and reuses the existing `nekofetch/` package, then splits the human workflow across four focused Telegram bots.
-
-The result is a relay: users submit requests, staff members pick up stage-specific work, shared database state carries the job forward, and the final post lands in the main/index channels with distribution ready behind it.
-
-> [!IMPORTANT]
-> This repo is intentionally self-contained. Run it from this directory, configure the `.env` in this directory, and edit this README here. It is not the parent NekoFetch README.
-
-<details open>
-<summary><b>Contents</b></summary>
+## Contents
 
 - [What This Is](#what-this-is)
-- [Why It Exists](#why-it-exists)
-- [Quick Start](#quick-start)
-- [Pipeline](#pipeline)
+- [30-Second Quick Start](#30-second-quick-start)
+- [Current Build Highlights](#current-build-highlights)
+- [The Relay At A Glance](#the-relay-at-a-glance)
+- [Pipeline Diagrams](#pipeline-diagrams)
 - [The Four Bots](#the-four-bots)
+- [Admin Assignment Engine](#admin-assignment-engine)
 - [Visual Identity](#visual-identity)
-- [Core Capabilities](#core-capabilities)
 - [Download Sources](#download-sources)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Deployment](#deployment)
 - [First Run Checklist](#first-run-checklist)
-- [Commands](#commands)
+- [Commands Reference](#commands-reference)
+- [Project Layout](#project-layout)
 - [Testing](#testing)
 - [Operations](#operations)
 - [Troubleshooting](#troubleshooting)
 - [Roadmap](#roadmap)
+- [Glossary](#glossary)
 
-</details>
+---
 
-## Why It Exists
+## What This Is
 
-One all-purpose admin bot becomes noisy once requests, downloads, source review, channel creation, thumbnail generation, publishing, recovery, staff routing, and user delivery all happen in the same room.
+Kuro Sōden is a production Telegram relay for anime content operations. It splits a single user request into four controlled stages:
 
-Kuro Sōden gives every stage its own bot and its own staff lane:
+| Stage | Bot | Job |
+|---|---|---|
+| Request | Lelouch | user intake, title resolution, duplicate checks, request gating, admin control plane |
+| Download | Levi | source review, queueing, download supervision, file processing |
+| Distribution | Senku | channel/bot creation, package generation, thumbnail flow, distribution setup |
+| Publish | Gojo | final review, caption editing, scheduled publishing, recovery, index updates |
 
-| Problem | Kuro Sōden answer |
-|---|---|
-| Request intake and staff work collide | Lelouch owns users, dedup, request gating, and batch work |
-| Downloads need careful source review | Levi opens assigned jobs into the shared review/source flow |
-| Distribution setup is repetitive | Senku wraps channel creation and generated content flows |
-| Publishing needs final approval and repair tools | Gojo handles caption review, publish, scheduling surface, and recovery |
-| Admin load needs fairness | Assignment rows, availability, weights, breaks, hours, and idle nudges |
-| Users ask for existing titles | Dedup checks main channel, distribution entities, and in-progress requests |
-| Restarts and Telegram disconnects happen | PipelineManager starts bots in order and runs a connection watchdog |
+The runtime is database-driven. The bots do not depend on direct Telegram messages to pass state. Requests, assignments, work items, content rows, and progress live in shared stores so a process restart can pick the pipeline back up.
 
-## Quick Start
+Kuro Sōden is built around NekoFetch internals, but the root project is now the orchestration shell: the `bots/` package owns Telegram surfaces, `shared/` owns relay-specific logic, and `nekofetch/` carries the core services, providers, sources, UI, and infrastructure.
+
+## 30-Second Quick Start
 
 ```bash
-git clone <repo-url> kuro-soden
-cd kuro-soden
+git clone <your-repo-url>
+cd KuroSoden
 
-cp .env.example .env
+python -m venv .venv
+source .venv/bin/activate
+
 python -m pip install -e ".[dev]"
+cp .env.example .env
+# edit .env and config.yaml
+
+alembic upgrade head
 python main.py
 ```
 
-Minimum services required:
+Windows:
 
-| Service | Used for |
-|---|---|
-| PostgreSQL | users, requests, assignments, work items, storage packs, posts |
-| MongoDB | runtime settings, metadata cache, flexible content state |
-| Redis | FSM state, gates, progress, cooldowns, locks |
-| Telegram API credentials | Pyrogram clients for all bots |
-| Four BotFather tokens | Lelouch, Levi, Senku, Gojo |
-| ffmpeg + mkvtoolnix | media probing, processing, metadata, muxing |
+```powershell
+git clone <your-repo-url>
+cd KuroSoden
 
-On startup, the process prints a build stamp like:
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 
-```text
-Kuro Sōden 0.1.0 · build <git-sha> <date> · 4-bot pipeline
+python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+# edit .env and config.yaml
+
+alembic upgrade head
+python main.py
 ```
 
-Use that stamp when restarting. If it does not change after a deploy, the old process is still running.
+Launchers are included:
+
+```powershell
+.\run.bat
+```
+
+```bash
+bash run.sh
+```
+
+Both launchers create `.venv`, install the editable package, warn when `.env` is missing, and start `main.py`.
+
+## Current Build Highlights
+
+| Area | Current behavior |
+|---|---|
+| Four-bot runtime | `PipelineManager` starts Lelouch, Levi, Senku, and Gojo from four BotFather tokens on one event loop. |
+| Recovery scheduler | The scheduler starts download workers, idle reminders, assignment recovery, Gojo maintenance, and the Telegram connection watchdog. |
+| Staff scoping | Levi, Senku, and Gojo are staff-only. Lelouch remains user-facing, with admin surfaces gated by role. |
+| Request gate | Lelouch enforces force-join, global request pause, one-active-request limits, duplicate detection, and confirmation cards. |
+| Assignment offers | Recently active admins outside their current slot receive one-hour offers with Accept and Reject buttons. |
+| Quiet hours | Local 04:00-08:00 assignments are held unless the admin is active and chooses to accept the offer. |
+| Stage handoff | Levi completion assigns Senku; Senku completion assigns Gojo. `notify_stage_assignment` sends stage-specific task cards. |
+| Anime artwork | Stage cards and request cards use anime backdrop art when available, with configured art fallbacks. |
+| Schema safety | Alembic owns production migrations; development startup can reconcile schema when `AUTO_CREATE_SCHEMA=true`. |
+| Test state | Latest full verification in this workspace: 645 passed, 5 skipped. |
 
 ## The Relay At A Glance
 
 ```text
 User request
-  ↓
-Lelouch: resolve, dedup, confirm, assign
-  ↓
-Levi: choose source, queue download, process files
-  ↓
-Senku: create/generate distribution content
-  ↓
-Gojo: review, publish, update index, recover if needed
-  ↓
-Main channel + index channel + distribution entity + storage pack delivery
+  |
+  v
+Lelouch: resolve title, dedup, gate, confirm, assign Levi
+  |
+  v
+Levi: review source, queue download, process files, hand off
+  |
+  v
+Senku: create distribution surface, generate package, hand off
+  |
+  v
+Gojo: review caption, schedule or publish, update index, recover
+  |
+  v
+Storage channel + main channel + index channel + distribution entity
 ```
 
-## Pipeline
+## Pipeline Diagrams
 
-The relay is database-driven. Bots do not depend on direct messages from each other to keep state alive; they read assignments, requests, work items, and service state from the shared stores.
+### Relay Flow
 
 ```mermaid
 flowchart LR
-    %% ─────────────────────────────
-    %% Actors
-    %% ─────────────────────────────
-    user["👤 User"]
-    staff["🧑‍💻 Staff / Admin"]
+    user["User"]
+    staff["Staff / Admin"]
 
-    %% ─────────────────────────────
-    %% Stage bots
-    %% ─────────────────────────────
     subgraph bots["Kuro Sōden Stage Bots"]
         direction LR
-        lelouch["🎭 Lelouch<br/><b>Request Intake</b><br/>dedup · gate · confirm · assign"]
-        levi["⚔️ Levi<br/><b>Download</b><br/>source review · queue · process"]
-        senku["🧪 Senku<br/><b>Distribution</b><br/>channel setup · generated posts"]
-        gojo["🔮 Gojo<br/><b>Publishing</b><br/>caption review · main/index · recovery"]
+        lelouch["Lelouch<br/><b>Request Intake</b><br/>dedup - gate - confirm - assign"]
+        levi["Levi<br/><b>Download</b><br/>source review - queue - process"]
+        senku["Senku<br/><b>Distribution</b><br/>channel setup - generated posts"]
+        gojo["Gojo<br/><b>Publishing</b><br/>caption review - schedule - recovery"]
     end
 
-    %% ─────────────────────────────
-    %% Shared runtime
-    %% ─────────────────────────────
     subgraph runtime["Shared Runtime"]
-        pg[("PostgreSQL<br/>requests · assignments · work_items")]
-        mongo[("MongoDB<br/>settings · metadata cache")]
-        redis[("Redis<br/>FSM · gates · progress")]
-        storage[("Storage Path<br/>sessions · media · thumbnails")]
+        pg[("PostgreSQL<br/>requests - assignments - work_items")]
+        mongo[("MongoDB<br/>settings - metadata cache")]
+        redis[("Redis<br/>FSM - gates - progress")]
+        storage[("Local Storage<br/>sessions - media - thumbnails")]
     end
 
-    %% ─────────────────────────────
-    %% Output surfaces
-    %% ─────────────────────────────
     subgraph telegram["Telegram Surfaces"]
-        storage_channel["📦 Storage Channel<br/>header → files → end sticker"]
-        main_channel["📣 Main Channel<br/>poster + caption + buttons"]
-        index_channel["🔤 Index Channel<br/>A-Z title posts"]
-        dist_entity["🤖 Distribution Bot / Channel<br/>season packages"]
-        log_channel["📊 Log Channel<br/>events + pinned dashboards"]
+        storage_channel["Storage Channel<br/>header - files - end sticker"]
+        main_channel["Main Channel<br/>poster + caption + buttons"]
+        index_channel["Index Channel<br/>A-Z title posts"]
+        dist_entity["Distribution Bot / Channel<br/>season packages"]
+        log_channel["Log Channel<br/>events + pinned dashboards"]
     end
 
     user -->|"title"| lelouch
@@ -194,19 +231,21 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
     [*] --> title_sent: user sends title
-    title_sent --> blocked: force-join / paused / limit
+    title_sent --> blocked: force-join / paused / active limit
     title_sent --> duplicate: already exists
     title_sent --> resolving: new title
     resolving --> confirm: franchise found
     resolving --> retry: no confident match
     confirm --> pending: user confirms
-    pending --> approved: staff accepts
-    approved --> queued: Levi opens source flow
+    pending --> levi_assigned: assignment created
+    levi_assigned --> queued: Levi opens source flow
     queued --> downloading
     downloading --> processing
     processing --> ready: files stored
-    ready --> distributed: Senku builds entity/content
-    distributed --> published: Gojo publishes
+    ready --> senku_assigned: handoff
+    senku_assigned --> distributed: Senku builds package
+    distributed --> gojo_assigned: handoff
+    gojo_assigned --> published: Gojo publishes
     duplicate --> [*]
     blocked --> [*]
     retry --> title_sent
@@ -230,252 +269,112 @@ sequenceDiagram
 
     U->>L: Send anime title
     L->>R: Check request gate + FSM
-    L->>DB: Dedup main/distribution/in-progress
-    L->>L: Resolve AniList/Jikan → Acute bot → TMDB
-    L->>U: Confirm franchise card
+    L->>DB: Dedup main/distribution/in-progress state
+    L->>L: Resolve AniList/Jikan/Acute/TMDB chain
+    L->>U: Send confirmation card
     U->>L: Confirm
     L->>DB: Create request + assign Levi
-    V->>DB: Load assigned tasks
+    V->>DB: Load assigned task or offer
     V->>W: Start source/download flow
     W->>R: Publish live progress
     W->>DB: Mark request ready
-    W->>S: Handoff distribution task
-    S->>DB: Generate/bind distribution content
-    G->>DB: Review publish task
-    G->>T: Publish main post + refresh index
-    T->>U: User opens download surface
+    V->>DB: Assign Senku
+    S->>DB: Build distribution content rows
+    S->>T: Create or update distribution surface
+    S->>DB: Assign Gojo
+    G->>T: Publish main/index posts
+    G->>DB: Mark request published
+```
+
+### Assignment Recovery
+
+```mermaid
+flowchart TD
+    tick["assignment-recovery job<br/>every 60 seconds"] --> stale["expire stale offered assignments"]
+    stale --> rejected["respect local-day rejections"]
+    rejected --> quiet{"admin local time<br/>04:00-08:00?"}
+    quiet -->|yes| active{"recently active / online?"}
+    active -->|yes| offer["send optional offer card"]
+    active -->|no| defer["hold until 08:00 local"]
+    quiet -->|no| rank["rank available admins"]
+    offer --> accept{"accept?"}
+    accept -->|yes| assign["promote offer to active assignment"]
+    accept -->|no| reject["reject for quiet window"]
+    rank --> assign
+    defer --> retry["retry on next job tick"]
+    reject --> retry
+    assign --> card["send stage card with anime backdrop"]
 ```
 
 ## The Four Bots
 
-<table>
-<tr>
-<td width="25%" valign="top">
+### Lelouch - Request Bot and Control Plane
 
-### 🎭 Lelouch
-
-**Request Bot**
-
-- `/start`, `/help`, `/myrequests`
-- request gate and force-join check
-- one-active-request limit for users
-- AniList/Jikan, Acute bot, TMDB resolution chain
-- duplicate detection
-- batch work intake for staff
-- admin pool management
-
-</td>
-<td width="25%" valign="top">
-
-### ⚔️ Levi
-
-**Downloader Bot**
-
-- `/tasks`, `/settings`, `/help`
-- assigned download task list
-- routes into existing review/source flow
-- website, torrent, Telegram/manual paths
-- queues background downloads
-- uses processing stages for verify, rename, metadata, branding, thumbnails, store
-
-</td>
-<td width="25%" valign="top">
-
-### 🧪 Senku
-
-**Distribution Bot**
-
-- `/tasks`, `/create`, `/generate`
-- channel creation guidance
-- distribution entity handling
-- BotContentService reuse
-- info cards, season separators, guides, footer, stickers
-- settings for branding and layout
-
-</td>
-<td width="25%" valign="top">
-
-### 🔮 Gojo
-
-**Publisher Bot**
-
-- `/tasks`, `/publish`, `/recover`, `/schedule`
-- publish preview and caption edit flow
-- main channel publishing
-- A-Z index refresh
-- distribution channel recovery
-- publishing settings and caption templates
-
-</td>
-</tr>
-</table>
-
-## Visual Identity
-
-The repository ships local artwork for each stage bot under `images/<bot>/`. The UI helpers rotate this art into welcome cards, task screens, join gates, duplicate notices, and handoff cards so the pipeline feels like one continuous relay instead of four unrelated command shells.
-
-<table>
-<tr>
-<td width="25%" align="center">
-<img src="images/lelouch/art_01.jpg" alt="Lelouch artwork" width="180" /><br />
-<b>Lelouch</b><br />
-Request command
-</td>
-<td width="25%" align="center">
-<img src="images/levi/art_01.jpg" alt="Levi artwork" width="180" /><br />
-<b>Levi</b><br />
-Download execution
-</td>
-<td width="25%" align="center">
-<img src="images/senku/art_01.jpg" alt="Senku artwork" width="180" /><br />
-<b>Senku</b><br />
-Distribution buildout
-</td>
-<td width="25%" align="center">
-<img src="images/gojo/art_01.jpg" alt="Gojo artwork" width="180" /><br />
-<b>Gojo</b><br />
-Publishing finish
-</td>
-</tr>
-</table>
-
-Anime-specific cards use TMDB/AniList artwork where available, then fall back to the local bot identity art. That gives request receipts, duplicate cards, handoff DMs, and task boards a consistent visual thread.
-
-## Core Capabilities
-
-| Area | What it does | Key files |
-|---|---|---|
-| Startup | Builds container, registers namespace shims, starts four bots | `main.py`, `shared/pipeline_manager.py` |
-| Bot shells | Pyrogram clients, menus, command lists, stage dashboards | `bots/*/app.py`, `bots/*/handlers/` |
-| Request intake | user flow, dedup, franchise cards, assignment | `bots/lelouch/handlers/requests.py` |
-| Batch work | staff enters many titles; confirmed rows become work items | `bots/lelouch/handlers/batch.py`, `shared/work_service.py` |
-| Admin routing | availability, weights, breaks, hours, reassignment | `shared/admin_assignment.py`, `shared/management_service.py` |
-| Dedup | main channel → distribution bot → in-progress request | `shared/dedup.py` |
-| Franchise resolver | AniList/Jikan → Acute bot → TMDB normalized dict | `shared/franchise_resolver.py` |
-| Handoff | completed downloads notify the next stage | `shared/handoff.py` |
-| Idle nudges | scheduled pings for idle on-shift admins | `shared/idle_reminder.py` |
-| Processing | verify, rename, metadata, branding, watermark, thumbnail, store | `nekofetch/services/processing/` |
-| Publishing | main channel post, index refresh, auto-publish path | `nekofetch/services/publishing_service.py` |
-| Storage packs | Telegram database channel range delivery | `nekofetch/services/storage_channel_service.py` |
-| Log channel | event stream and pinned dashboards | `nekofetch/services/log_channel_service.py` |
-
-## Download Sources
-
-Levi works through the shared `AnimeSource` contract, so every source returns the
-same normalized shape: search results, episodes, variants, and a concrete media
-download plan. The worker can choose quality/audio, probe HLS duration, mux
-compatible tracks, and hand processed files forward without caring which site
-produced the stream.
-
-| Source | Role | Notes |
-|---|---|---|
-| `anikoto` | website HLS source | resolves mapper/iframe streams, skips hard-sub variants, and builds dual-audio plans only from soft-sub + dub matches |
-| `miruro` | Miruro-API backed source | reads multiple providers, prefers soft-sub streams, keeps hard-sub streams as fallback, and can plan dual audio when soft-sub and dub durations line up |
-| `kickassanime` | website fallback | keeps legacy website acquisition available behind the same review flow |
-| `anizone` | website fallback | alternate site adapter for operator-approved deployments |
-| `nyaa` | torrent acquisition | selected through torrent/manual review paths |
-| `telegram` / `local` | manual media | lets staff feed already-owned files into the same processing pipeline |
-
-### Source Decision Flow
-
-```mermaid
-flowchart TD
-    request["Levi download task"] --> chain["source chain<br/>example: miruro > anikoto > kickassanime"]
-    chain --> resolve["SourceRegistry.resolve"]
-    resolve --> search["search title / anilist ref"]
-    search --> episodes["list normalized episodes"]
-    episodes --> variants["collect variants<br/>quality + audio + subtitles + provider"]
-
-    variants --> soft{"soft-sub stream available?"}
-    soft -->|yes| sub["prefer soft-sub"]
-    soft -->|no| hsub["use hard-sub as separate fallback"]
-
-    variants --> dub{"dub stream available?"}
-    sub --> duration["probe HLS duration"]
-    dub --> duration
-    duration --> match{"soft-sub duration matches dub?"}
-    match -->|yes| dual["download both streams<br/>mux dual audio"]
-    match -->|no| separate["download selected stream separately"]
-    hsub --> separate
-    dual --> processing["verify -> rename -> metadata -> thumbnail -> store"]
-    separate --> processing
-```
-
-Hard-sub streams are never merged into dual audio. That path is only valid when
-the subtitle-side video carries soft subtitle tracks and the dub stream duration
-matches closely enough for muxing.
-
-### Miruro Configuration
-
-`miruro` is enabled in `config.yaml` by default, but it expects a running
-self-hosted Miruro-API service. Point these settings at that service:
-
-```yaml
-sources:
-  enabled: [local, telegram, anikoto, kickassanime, anizone, miruro, nyaa]
-  default: telegram
-  miruro:
-    api_base_url: http://localhost:8000
-    stream_referer: http://localhost:8000
-    preferred_quality: 1080p
-    provider_order: [kiwi, arc, zoro, hop, pahe]
-```
-
-## Architecture
-
-```mermaid
-flowchart TB
-    entry["main.py<br/>namespace shim + container startup"]
-    manager["PipelineManager<br/>starts bots · watchdog · scheduler"]
-
-    subgraph pyrogram["Pyrogram Bot Layer"]
-        L["bots/lelouch"]
-        V["bots/levi"]
-        S["bots/senku"]
-        G["bots/gojo"]
-    end
-
-    subgraph shared["Kuro Sōden Shared Layer"]
-        assn["admin_assignment.py"]
-        mgmt["management_service.py"]
-        work["work_service.py"]
-        dedup["dedup.py"]
-        resolver["franchise_resolver.py"]
-        handoff["handoff.py"]
-        gate["request_gate.py / join_gate.py"]
-    end
-
-    subgraph nf["Vendored NekoFetch Runtime"]
-        core["core<br/>config · logging · container"]
-        services["services<br/>requests · downloads · publishing · content"]
-        providers["providers<br/>metadata · shortlinks · Acute bot"]
-        sources["sources<br/>local · telegram · nyaa · anizone · anikoto · kickassanime · miruro"]
-        infra["infrastructure<br/>postgres · mongo · redis · scheduler"]
-        ui["ui<br/>screens · cards · artwork · progress"]
-    end
-
-    entry --> manager
-    manager --> pyrogram
-    pyrogram --> shared
-    shared --> services
-    services --> providers
-    services --> sources
-    services --> infra
-    pyrogram --> ui
-    core --> services
-```
-
-### Data Stores
-
-| Store | Responsibility |
+| Surface | Behavior |
 |---|---|
-| PostgreSQL | durable relational state: users, roles, requests, queue, assignments, availability, work items, packs, posts, analytics |
-| MongoDB | flexible state: runtime settings, metadata cache, message/content templates |
-| Redis | fast runtime state: FSM conversations, request gate, mode, progress, cooldowns, locks |
-| Local storage | downloaded files, temporary artifacts, Pyrogram sessions, rendered thumbnails |
-| Telegram channels | storage packs, main posts, index posts, logs, thumbnail workflow |
+| `/start` | user entry, force-join checks, status surface |
+| `/myrequests` | personal request history |
+| `/help` | user-facing help |
+| `/admin` | staff control plane for requests, batches, pools, and management |
+| `/settings` | owner/admin settings surface, hidden from unauthorized staff menus |
+| `/batch` | admin batch work item creation and routing |
 
-### Admin Assignment Model
+Lelouch owns title intake. It resolves franchise data, checks duplicates, prevents users from stacking active requests, and assigns the first real work stage to Levi.
+
+### Levi - Download Bot
+
+| Surface | Behavior |
+|---|---|
+| `/tasks` | assigned downloads and optional offers |
+| Source flow | provider selection, episode normalization, quality/audio review |
+| Worker handoff | queues downloads and progress into the shared runtime |
+| Completion | marks files ready and assigns Senku |
+
+Levi is staff-only. Non-staff users are intercepted by middleware before task handlers run.
+
+### Senku - Distribution Bot
+
+| Surface | Behavior |
+|---|---|
+| `/tasks` | assigned distribution tasks and offers |
+| `/create` | distribution channel or bot wizard |
+| `/generate` | package generation surface |
+| Wizard | userbot-created channels, invite promotion, watch-order confirmation |
+| Thumbnail loop | thumbnail-channel workflow and rendered assets |
+
+Senku turns processed media into a distribution surface the end user can actually consume.
+
+### Gojo - Publisher Bot
+
+| Surface | Behavior |
+|---|---|
+| `/tasks` | assigned publishing tasks and offers |
+| `/publish` | final review surface |
+| `/schedule` | delayed publish path |
+| `/recover` | recovery tools for interrupted publishing |
+| `/updates` | update and maintenance checks |
+| `/bancheck` | distribution health and ban checks |
+| `/settings` | owner-level publishing configuration |
+
+Gojo owns the final public surfaces: main channel posts, index posts, captions, buttons, silent publish, scheduling, and recovery.
+
+## Admin Assignment Engine
+
+The assignment engine lives in `shared/admin_assignment.py`. Recovery lives in `shared/assignment_recovery.py`. Stage cards are sent through `shared/handoff.py`.
+
+Routing considers:
+
+| Signal | Effect |
+|---|---|
+| Stage coverage | admins must be configured for the stage: `lelouch`, `levi`, `senku`, or `gojo` |
+| Availability | unavailable admins are skipped |
+| Local working hours | active slots receive normal assignments |
+| Quiet hours | local 04:00-08:00 assignments are deferred unless the admin is active and accepts an offer |
+| Scheduled breaks | admins on break are skipped |
+| Existing task count | lower active load ranks higher |
+| Weight | configured seniority/capacity affects tie-breaking |
+| Rejections | offer rejection blocks that quiet-window offer for the local day |
+| Stale offers | unaccepted offers expire after one hour and return to routing |
 
 ```mermaid
 erDiagram
@@ -499,7 +398,8 @@ erDiagram
         string request_code
         string stage
         string status
-        integer task_count_at_assignment
+        string assignment_kind
+        datetime offered_until
         datetime completed_at
     }
 
@@ -515,107 +415,266 @@ erDiagram
     }
 ```
 
-The assignment engine chooses admins by:
+The database enforces one open assignment per request and stage through a partial unique index. Startup can self-heal that index in development mode, but production deploys belong to Alembic.
 
-1. stage coverage (`lelouch`, `levi`, `senku`, `gojo`)
-2. availability
-3. active break exclusion
-4. working-hours window
-5. weighted active load
-6. total completed count as the tie-breaker
+## Visual Identity
+
+Kuro Sōden uses stage-specific voice and anime artwork on task cards.
+
+| Asset path | Role |
+|---|---|
+| `images/lelouch/` | request and command identity |
+| `images/levi/` | download task identity |
+| `images/senku/` | distribution task identity |
+| `images/gojo/` | publishing task identity |
+| `images/art_*.jpg` | fallback art pool |
+| `thumbnail/` | rendered thumbnail assets and HTML template |
+
+Anime request cards use backdrop art from franchise metadata whenever the request has it. If metadata lacks a backdrop, the card falls back to configured art while preserving the same Telegram image width and card structure.
+
+## Download Sources
+
+Source adapters live under `nekofetch/sources/`. The source chain is configured in `config.yaml`.
+
+| Source | Role |
+|---|---|
+| `local` | staff-provided local files |
+| `telegram` | Telegram/manual acquisition path |
+| `anikoto` | AniKoto source integration |
+| `kickassanime` | website fallback adapter |
+| `anizone` | website fallback adapter |
+| `miruro` | self-hosted Miruro-API source |
+| `nyaa` | torrent/manual review path |
+
+### Source Decision Flow
+
+```mermaid
+flowchart TD
+    request["Levi download task"] --> chain["source chain<br/>miruro > anikoto > kickassanime"]
+    chain --> resolve["SourceRegistry.resolve"]
+    resolve --> search["search title / AniList reference"]
+    search --> episodes["list normalized episodes"]
+    episodes --> variants["collect variants<br/>quality + audio + subtitle + provider"]
+
+    variants --> soft{"soft-sub stream available?"}
+    soft -->|yes| sub["prefer soft-sub"]
+    soft -->|no| hsub["use hard-sub as separate fallback"]
+
+    variants --> dub{"dub stream available?"}
+    sub --> duration["probe HLS duration"]
+    dub --> duration
+    duration --> match{"soft-sub duration matches dub?"}
+    match -->|yes| dual["download both streams<br/>mux dual audio"]
+    match -->|no| separate["download selected stream separately"]
+    hsub --> separate
+    dual --> processing["verify -> rename -> metadata -> thumbnail -> store"]
+    separate --> processing
+```
+
+Hard-sub streams are not merged into dual audio. Dual audio is only valid when the subtitle-side video carries soft subtitles and the dub stream duration matches closely enough.
+
+### Miruro Configuration
+
+`miruro` expects a running self-hosted Miruro-API service.
+
+```yaml
+sources:
+  enabled: [local, telegram, anikoto, kickassanime, anizone, miruro, nyaa]
+  default: telegram
+  miruro:
+    api_base_url: http://localhost:8000
+    stream_referer: http://localhost:8000
+    preferred_quality: 1080p
+    provider_order: [kiwi, arc, zoro, hop, pahe]
+```
+
+## Architecture
+
+```mermaid
+flowchart TB
+    entry["main.py<br/>namespace shim + container startup"]
+    manager["PipelineManager<br/>bots + scheduler + watchdog"]
+
+    subgraph pyrogram["Pyrogram Bot Layer"]
+        L["bots/lelouch"]
+        V["bots/levi"]
+        S["bots/senku"]
+        G["bots/gojo"]
+    end
+
+    subgraph shared["Kuro Sōden Shared Layer"]
+        assn["admin_assignment.py"]
+        recovery["assignment_recovery.py"]
+        mgmt["management_service.py"]
+        work["work_service.py"]
+        dedup["dedup.py"]
+        resolver["franchise_resolver.py"]
+        handoff["handoff.py"]
+        gate["request_gate.py / join_gate.py"]
+    end
+
+    subgraph nf["NekoFetch Runtime"]
+        core["core<br/>config - logging - container"]
+        services["services<br/>requests - downloads - publishing - content"]
+        providers["providers<br/>metadata - shortlinks - storage - Acute bot"]
+        sources["sources<br/>local - telegram - nyaa - anizone - anikoto - kickassanime - miruro"]
+        infra["infrastructure<br/>postgres - mongo - redis - scheduler"]
+        ui["ui<br/>screens - cards - artwork - progress"]
+    end
+
+    entry --> manager
+    manager --> pyrogram
+    manager --> recovery
+    pyrogram --> shared
+    shared --> services
+    services --> providers
+    services --> sources
+    services --> infra
+    pyrogram --> ui
+    core --> services
+```
+
+### Data Stores
+
+| Store | Responsibility |
+|---|---|
+| PostgreSQL | durable relational state: users, roles, requests, queue, assignments, availability, work items, packs, posts, analytics |
+| MongoDB | flexible state: runtime settings, metadata cache, message/content templates |
+| Redis | fast runtime state: FSM conversations, request gate, mode, progress, cooldowns, locks |
+| Local storage | downloaded files, temporary artifacts, Pyrogram sessions, rendered thumbnails |
+| Telegram channels | storage packs, main posts, index posts, logs, thumbnail workflow |
+
+### Runtime Services
+
+| Service | Location | Job |
+|---|---|---|
+| Pipeline lifecycle | `shared/pipeline_manager.py` | starts bots, workers, scheduler jobs, and watchdog |
+| Assignment | `shared/admin_assignment.py` | ranks admins and creates stage assignments/offers |
+| Recovery | `shared/assignment_recovery.py` | expires offers, wakes deferred work, restores missing stage assignments |
+| Handoff | `shared/handoff.py` | assigns next stage and sends image-backed task cards |
+| Work items | `shared/work_service.py` | batch/admin-added work queue |
+| Downloads | `nekofetch/services/download_service.py` | download orchestration and file processing |
+| Publishing | `nekofetch/services/publish_service.py` | main/index/distribution publishing |
 
 ## Configuration
 
-Configuration has three layers:
-
-| Layer | File/store | Purpose |
-|---|---|---|
-| Secrets | `.env` | Telegram tokens, DB URLs, admin ids, API keys, paths |
-| Defaults | `config.yaml` | features, downloads, processing, storage, channels, UI, branding |
-| Runtime overrides | MongoDB settings | live toggles changed from bot panels |
+Secrets belong in `.env`. Behavior belongs in `config.yaml`.
 
 ### Required `.env` Keys
 
-```dotenv
-TELEGRAM_API_ID=
-TELEGRAM_API_HASH=
+| Key | Required | Purpose |
+|---|---:|---|
+| `TELEGRAM_API_ID` | yes | Telegram API application id |
+| `TELEGRAM_API_HASH` | yes | Telegram API application hash |
+| `REQUEST_BOT_TOKEN` | yes | Lelouch BotFather token |
+| `DOWNLOADER_BOT_TOKEN` | yes | Levi BotFather token |
+| `DISTRIBUTION_BOT_TOKEN` | yes | Senku BotFather token |
+| `PUBLISHER_BOT_TOKEN` | yes | Gojo BotFather token |
+| `ADMIN_BOT_TOKEN` | yes | legacy/admin compatibility token used by shared config |
+| `ADMIN_IDS` | yes | comma-separated Telegram ids with staff access |
+| `OWNER_ID` | yes | owner Telegram id for owner-only settings |
+| `POSTGRES_HOST` / `POSTGRES_PORT` | yes | PostgreSQL endpoint |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | yes | PostgreSQL credentials and database |
+| `MONGO_URI` / `MONGO_DB` | yes | MongoDB connection |
+| `REDIS_URL` | yes | Redis connection |
+| `STORAGE_PATH` | yes | persistent media/artifact path |
+| `SESSION_PATH` | yes | persistent Pyrogram session path |
+| `SECRET_KEY` | yes | encryption/signing secret |
+| `AUTO_CREATE_SCHEMA` | environment-dependent | `true` for dev bootstrap, `false` for production migrations |
+| `TMDB_API_READ_ACCESS_TOKEN` | recommended | TMDB metadata and backdrop images |
+| `TMDB_API_KEY` | optional | alternate TMDB credential |
+| `IMGBB_API_KEY` | optional | thumbnail/image backup URL support |
+| `TELEGRAM_USERBOT_SESSION` | optional | single userbot session |
+| `TELEGRAM_USERBOT_ACCOUNTS` | optional | JSON list of userbot accounts |
+| `TELEGRAM_USERBOT_ACCOUNTS_FILE` | optional | external JSON account file |
+| `MIRURO_API_BASE_URL` | optional | Miruro-API endpoint |
+| `MIRURO_STREAM_REFERER` | optional | stream referer for Miruro providers |
+| `LOG_LEVEL` / `LOG_JSON` | optional | process log behavior |
 
-REQUEST_BOT_TOKEN=
-DOWNLOADER_BOT_TOKEN=
-DISTRIBUTION_BOT_TOKEN=
-PUBLISHER_BOT_TOKEN=
-ADMIN_BOT_TOKEN=
+Generate a strong secret:
 
-ADMIN_IDS=123456789
-OWNER_ID=123456789
-SECRET_KEY=change-me
-
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_USER=kuro_soden
-POSTGRES_PASSWORD=change-me
-POSTGRES_DB=kuro_soden
-
-MONGO_URI=mongodb://localhost:27017
-MONGO_DB=kuro_soden
-REDIS_URL=redis://localhost:6379/0
-
-STORAGE_PATH=data/storage
-SESSION_PATH=data/sessions
-TMDB_API_READ_ACCESS_TOKEN=
-TMDB_API_KEY=
-AUTO_CREATE_SCHEMA=true
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
-
-> [!WARNING]
-> Bot tokens must be the single `<id>:<token>` string from BotFather. A duplicated token string causes Telegram `ACCESS_TOKEN_INVALID`.
 
 ### High-Impact `config.yaml` Sections
 
 | Section | Controls |
 |---|---|
-| `features` | request system, download queue, distribution bots, metadata editing, thumbnail generation, analytics |
-| `downloads` | concurrency, retries, resume behavior, progress update interval |
-| `processing` | verify, rename, metadata, branding, thumbnail, approval-before-publish |
-| `security` | rate limits, force-subscribe gates |
-| `storage_channel` | database channel packs and delivery copy/forward mode |
-| `log_channel` | event sink and pinned dashboard/catalog messages |
-| `thumbnail_channel` | asset-picking workflow and Playwright thumbnail renderer |
-| `main_channel` | public post caption and Index/Download buttons |
-| `index_channel` | per-letter catalog posts |
-| `acquisition` | resolution × language matrix |
-| `access` + `shortlink` | trial/token delivery gate |
-| `sources` | enabled acquisition adapters, Miruro-API endpoint, source priority, provider order |
-| `bot` | distribution entity naming, branding, avatar/footer behavior |
+| `features` | request system, queue, distribution bots, metadata editing, thumbnails, temporary links, analytics, audit logs |
+| `downloads` | concurrency, retry behavior, per-task timeout |
+| `processing` | ffmpeg/mkvtoolnix flow, subtitles, audio handling |
+| `rename` | filename templates and language labels |
+| `metadata` | AniList/Jikan/TMDB provider behavior |
+| `thumbnail` | renderer, templates, upload and backup behavior |
+| `branding` | bot display copy, footer image/text |
+| `distribution` | protect content, temporary links, distribution surfaces |
+| `security` | owner id, force-subscribe channels, access policy |
+| `storage_channel` | storage pack formatting and delivery messages |
+| `log_channel` | operational events and dashboards |
+| `main_channel` / `index_channel` | publish destinations |
+| `thumbnail_channel` | thumbnail workflow channel |
+| `access` / `shortlink` | access token and shortlink provider behavior |
+| `acquisition` | language, resolution, fallback, provider order |
+| `sources` | enabled adapters and per-source settings |
+| `post_format` | captions, buttons, pinning, premium emoji |
 
 ## Deployment
 
-### Local
+### 0. Pre-Flight
+
+Before choosing a platform:
+
+1. Create four BotFather bots: request, downloader, distribution, publisher.
+2. Create or choose storage, log, main, index, and optional thumbnail channels.
+3. Add the correct bot or userbot as admin wherever it posts, edits, pins, or reads.
+4. Prepare PostgreSQL, MongoDB, and Redis.
+5. Decide where persistent storage lives for media and Pyrogram sessions.
+6. Fill `.env` from `.env.example`.
+7. Fill channel ids and behavior in `config.yaml`.
+8. Run `alembic upgrade head` for production-style database setup.
+
+### 1. Local Bare Metal
+
+Linux/macOS:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y ffmpeg mkvtoolnix
+
 python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# Linux / macOS
 source .venv/bin/activate
-
+python -m pip install -U pip
 python -m pip install -e ".[dev]"
+python -m playwright install chromium
+
+cp .env.example .env
+alembic upgrade head
 python main.py
 ```
 
-Local prerequisites:
+Windows:
 
-- Python 3.12+
-- PostgreSQL
-- MongoDB
-- Redis
-- ffmpeg
-- mkvtoolnix
-- Chromium dependencies for Playwright thumbnail rendering
+```powershell
+winget install Gyan.FFmpeg
+winget install Python.Python.3.12
 
-### Docker
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+python -m playwright install chromium
+
+Copy-Item .env.example .env
+alembic upgrade head
+python main.py
+```
+
+### 2. Docker
+
+The repository ships a `Dockerfile`. It uses Python 3.12 slim, installs `ffmpeg`, `mkvtoolnix`, Playwright Chromium, runtime requirements, and starts `python main.py`.
+
+PowerShell:
 
 ```powershell
 docker build -t kuro-soden .
@@ -629,125 +688,243 @@ docker build -t kuro-soden .
 docker run --env-file .env -v "$PWD/data:/data" kuro-soden
 ```
 
-### Render
+There is no checked-in Compose manifest. If you use Compose, wire this image to external Postgres, MongoDB, and Redis services and mount persistent volumes for `/data/storage` and `/data/sessions`.
 
-`render.yaml` defines a worker service:
+### 3. Render
 
-- build: `pip install --no-cache-dir -r requirements.txt && pip install -e .`
-- start: `python main.py`
-- persistent disk mounted at `/data/storage`
-- all secrets are `sync: false`
+`render.yaml` defines the worker:
 
-### Railway / Koyeb / VPS
+| Field | Value |
+|---|---|
+| service | `kuro-soden` worker |
+| build | `pip install --no-cache-dir -r requirements.txt && pip install -e .` |
+| start | `python main.py` |
+| disk | 10 GB mounted at `/data/storage` |
+| secrets | `sync: false`, set in Render dashboard |
 
-Use the same rules everywhere:
+Recommended Render path:
 
-1. create managed Postgres, MongoDB, and Redis
-2. set every `.env.example` secret
-3. mount persistent storage for `/data/storage` and `/data/sessions`
-4. run `alembic upgrade head` when `AUTO_CREATE_SCHEMA=false`
-5. run `python main.py`
+1. Connect the repository.
+2. Let Render read `render.yaml`.
+3. Add Postgres, Redis, and MongoDB connection values.
+4. Add every required `.env.example` secret.
+5. Mount persistent storage for sessions and media.
+6. Run migrations once through a shell or deploy hook.
+7. Start the worker.
+
+### 4. Railway
+
+Railway works best with the Dockerfile or Nixpacks plus managed services.
+
+```bash
+railway login
+railway init
+railway link
+```
+
+1. Add PostgreSQL and Redis services.
+2. Use MongoDB Atlas or a Railway MongoDB template.
+3. Set the four bot tokens, owner/admin ids, Telegram API credentials, and storage/session paths.
+4. Add a persistent volume mounted to `/data`.
+5. Set `AUTO_CREATE_SCHEMA=false` after migrations are stable.
+6. Deploy from the connected Git branch.
+
+### 5. Koyeb
+
+Koyeb can run the Dockerfile as a worker with external data services.
+
+```bash
+koyeb login
+koyeb app create kuro-soden
+```
+
+Use:
+
+- Docker build from this repository
+- external Postgres, MongoDB, and Redis
+- persistent volume for `/data`
+- start command: `python main.py`
+- production migrations: `alembic upgrade head`
+
+### 6. Linux VPS / VM
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3.12 python3.12-venv ffmpeg mkvtoolnix postgresql redis-server
+
+git clone <your-repo-url> KuroSoden
+cd KuroSoden
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+
+cp .env.example .env
+alembic upgrade head
+python main.py
+```
+
+Systemd unit:
+
+```ini
+[Unit]
+Description=Kuro Sōden Telegram Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kuro-soden
+EnvironmentFile=/opt/kuro-soden/.env
+ExecStart=/opt/kuro-soden/.venv/bin/python main.py
+Restart=always
+RestartSec=10
+User=kuro
+Group=kuro
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 7. Android Termux / Cluterms
+
+Termux works for small test runs, not heavy production media work.
+
+```bash
+pkg update
+pkg install python git ffmpeg postgresql redis
+git clone <your-repo-url> KuroSoden
+cd KuroSoden
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+cp .env.example .env
+python main.py
+```
+
+Use external MongoDB unless you are running a full Linux container/chroot. Keep sessions and storage on persistent app-accessible storage.
 
 ## First Run Checklist
 
-1. Create four BotFather bots and set:
-   - `REQUEST_BOT_TOKEN`
-   - `DOWNLOADER_BOT_TOKEN`
-   - `DISTRIBUTION_BOT_TOKEN`
-   - `PUBLISHER_BOT_TOKEN`
-2. Add owner/admin ids to `ADMIN_IDS`.
-3. Create channels:
-   - storage/database channel
-   - log channel
-   - main channel
-   - index channel
-   - optional thumbnail workflow channel
-4. Add the needed bot/client as admin in each channel.
-5. Fill channel ids in `config.yaml`.
-6. If using Miruro, start Miruro-API and point `sources.miruro.api_base_url` at it.
-7. Start the process.
-8. Open Lelouch and send `/start`.
-9. Use the admin panel to muster admins into the pool and assign stages.
-10. Submit a small test request.
-11. Follow it through Levi → Senku → Gojo.
+1. Create four BotFather bots and set `REQUEST_BOT_TOKEN`, `DOWNLOADER_BOT_TOKEN`, `DISTRIBUTION_BOT_TOKEN`, and `PUBLISHER_BOT_TOKEN`.
+2. Add owner/admin ids to `ADMIN_IDS` and `OWNER_ID`.
+3. Create storage, log, main, index, and optional thumbnail channels.
+4. Add bots/userbot accounts as admins in the channels they need.
+5. Fill channel ids and behavior in `config.yaml`.
+6. Configure Postgres, MongoDB, and Redis.
+7. Run `alembic upgrade head` or use `AUTO_CREATE_SCHEMA=true` only for development bootstrap.
+8. Start `python main.py`.
+9. Open Lelouch and send `/start`.
+10. Use Lelouch management to add admins, set stages, working hours, slots, and availability.
+11. Submit a small test request and follow it through Levi, Senku, and Gojo.
 
-## Commands
+## Commands Reference
 
-| Bot | Commands |
+### Bot Commands
+
+| Bot | Commands | Access |
+|---|---|---|
+| Lelouch | `/start`, `/myrequests`, `/help` | users |
+| Lelouch | `/admin`, `/settings`, `/batch` | staff/admin/owner surfaces |
+| Levi | `/start`, `/tasks`, `/help` | staff only |
+| Senku | `/start`, `/tasks`, `/create`, `/generate`, `/help` | staff only |
+| Gojo | `/start`, `/tasks`, `/publish`, `/recover`, `/schedule`, `/updates`, `/bancheck`, `/settings`, `/help` | staff only, with owner-only settings where configured |
+
+### Development And Operations
+
+| Command | Purpose |
 |---|---|
-| Lelouch | `/start`, `/myrequests`, `/help`, `/admin`, `/settings`, `/batch` |
-| Levi | `/start`, `/tasks`, `/settings`, `/help` |
-| Senku | `/start`, `/tasks`, `/create`, `/generate`, `/settings`, `/help` |
-| Gojo | `/start`, `/tasks`, `/publish`, `/recover`, `/schedule`, `/settings`, `/help` |
-
-Most serious work is button-driven after entry. Commands open the correct surface; callbacks drive the stage.
+| `python main.py` | start the relay |
+| `python -m nekofetch` | alternate package entry |
+| `python -m pip install -e ".[dev]"` | install package and dev tools |
+| `pytest` | run the full test suite |
+| `pytest tests/test_admin_assignment.py` | run focused assignment tests |
+| `pytest --collect-only -q` | inspect collected tests |
+| `ruff check .` | lint imports, async rules, pyupgrade, bugbear |
+| `mypy src` | strict type checking for legacy/package source layouts |
+| `alembic upgrade head` | apply migrations |
+| `alembic revision --autogenerate -m "message"` | create migration |
+| `python scripts/clear_database.py` | interactive reset helper |
+| `python scripts/clear_database.py --all --yes` | destructive Postgres + Mongo + Redis reset |
+| `python scripts/userbot_manager.py` | manage userbot sessions/accounts |
+| `.\add_userbot.bat` | Windows userbot manager launcher |
+| `bash add_userbot.sh` | Unix userbot manager launcher |
+| `docker build -t kuro-soden .` | build image |
+| `docker logs -f <container>` | follow container logs |
 
 ## Project Layout
 
 ```text
 .
-├── main.py                         # process entry; starts the four-bot relay
-├── pyproject.toml                  # package metadata and dev dependencies
-├── requirements.txt                # runtime dependencies for Docker/platforms
-├── config.yaml                     # feature and behavior defaults
-├── render.yaml                     # Render worker service
-├── Dockerfile                      # Python 3.12 slim image with media tooling
-├── bots/
-│   ├── lelouch/                    # request bot and management control plane
-│   ├── levi/                       # downloader bot task surface
-│   ├── senku/                      # distribution bot task surface
-│   └── gojo/                       # publisher bot task surface
-├── shared/
-│   ├── pipeline_manager.py         # bot lifecycle, watchdog, scheduler
-│   ├── admin_assignment.py         # assignment ORM + engine
-│   ├── management_service.py       # admin pool control plane
-│   ├── work_service.py             # admin-added work items
-│   ├── dedup.py                    # duplicate detection
-│   ├── franchise_resolver.py       # provider chain normalization
-│   ├── handoff.py                  # download-to-distribution handoff
-│   ├── join_gate.py                # request membership gate
-│   └── lelouch_voice.py            # Lelouch copy and button labels
-├── nekofetch/
-│   ├── core/                       # config, logging, constants, container
-│   ├── bots/                       # vendored admin/distribution handlers
-│   ├── services/                   # business workflows
-│   ├── sources/                    # acquisition adapters
-│   ├── providers/                  # metadata, shortlinks, filestore, Acute bot
-│   ├── infrastructure/             # DB, Redis, repositories, scheduler
-│   ├── ui/                         # cards, artwork, terminal, progress
-│   ├── localization/               # messages and i18n
-│   └── domain/                     # enums and domain values
-├── migrations/                     # Alembic revisions
-├── tests/                          # 335 collected tests
-├── docs/                           # architecture, deployment, scraper guide
-├── images/                         # per-bot artwork
-├── resources/                      # language and canonical data
-├── thumbnail/                      # HTML/CSS thumbnail renderer assets
-└── playground/                     # diagnostics and probes
+|-- main.py                         # process entry; starts the relay
+|-- pyproject.toml                  # package metadata and dev dependencies
+|-- requirements.txt                # runtime dependencies for Docker/platforms
+|-- config.yaml                     # behavior defaults
+|-- render.yaml                     # Render worker service
+|-- Dockerfile                      # Python 3.12 image with media tooling
+|-- bots/
+|   |-- lelouch/                    # request bot and management control plane
+|   |-- levi/                       # downloader bot task surface
+|   |-- senku/                      # distribution bot task surface
+|   `-- gojo/                       # publisher bot task surface
+|-- shared/
+|   |-- pipeline_manager.py         # bot lifecycle, watchdog, scheduler
+|   |-- admin_assignment.py         # assignment ORM + engine
+|   |-- assignment_recovery.py      # offer expiry and deferred-task recovery
+|   |-- handoff.py                  # stage cards and assignment handoff
+|   |-- management_service.py       # admin pool control plane
+|   |-- work_service.py             # admin-added work items
+|   |-- dedup.py                    # duplicate detection
+|   `-- franchise_resolver.py       # provider chain normalization
+|-- nekofetch/
+|   |-- core/                       # config, logging, constants, container
+|   |-- bots/                       # shared bot middleware and handlers
+|   |-- services/                   # request/download/publish workflows
+|   |-- sources/                    # acquisition adapters
+|   |-- providers/                  # metadata, shortlinks, filestore, Acute bot
+|   |-- infrastructure/             # Postgres, Mongo, Redis, scheduler
+|   |-- ui/                         # cards, artwork, terminal, progress
+|   |-- localization/               # messages and i18n
+|   `-- domain/                     # enums and domain values
+|-- migrations/                     # Alembic revisions
+|-- tests/                          # pytest suite
+|-- scripts/                        # reset and userbot utilities
+|-- docs/                           # architecture, deployment, scraper guide
+|-- images/                         # stage art and fallback artwork
+|-- resources/                      # language and canonical data
+|-- thumbnail/                      # HTML/CSS thumbnail renderer assets
+`-- playground/                     # diagnostics and probes
 ```
 
 ## Testing
 
 ```bash
 pytest
-pytest tests/test_lelouch_routing.py
-pytest tests/test_work_items.py
-pytest tests/test_management_service.py
+pytest tests/test_admin_assignment.py
+pytest tests/test_pipeline_manager.py
+pytest tests/test_gojo_maintenance_jobs.py
 pytest --collect-only -q
 ```
 
-The suite currently passes **372 tests** covering:
+Latest workspace verification:
+
+```text
+645 passed, 5 skipped, 11 warnings
+```
+
+Coverage areas:
 
 | Area | Coverage |
 |---|---|
-| Assignment | availability, breaks, weighted routing, hours, completion counters |
+| Assignment | availability, breaks, weighted routing, local hours, quiet offers, rejection windows, completion counters |
+| Recovery | stale offer expiry, deferred work after 08:00 local, missing stage assignment restoration |
 | Work items | batch add, rate-limit isolation, stage drain, lifecycle |
 | Dedup | priority order, fuzzy title fallback, unicode, empty input |
 | Routing | Lelouch callbacks, no-dead-tap guard, app imports |
 | Management | pool CRUD, availability, breaks, reassignment, idle admins |
-| Idle reminders | fires, suppression, cooldown, DM failure resilience |
-| Integration | config, schema creation, handoff, session rollback, request codes |
-| Artwork | per-anime rotation, TMDB seeding, fallback behavior |
+| Gojo | maintenance jobs, schedules, recovery, publish review surfaces |
+| Channel tools | userbot quotas, channel wizard, recovery and health checks |
+| Artwork | per-anime backdrop selection, fallback art, card rendering behavior |
 
 ## Operations
 
@@ -756,9 +933,11 @@ The suite currently passes **372 tests** covering:
 Use both process logs and the Telegram log channel.
 
 ```bash
-docker logs -f <container>
-# or
 python main.py
+```
+
+```bash
+docker logs -f <container>
 ```
 
 The log channel can maintain:
@@ -766,7 +945,7 @@ The log channel can maintain:
 - event stream
 - pinned live stats dashboard
 - pinned catalog index
-- queue/download/publish/error notices
+- queue, download, publish, and error notices
 
 ### Migrations
 
@@ -775,14 +954,15 @@ alembic upgrade head
 alembic revision --autogenerate -m "describe change"
 ```
 
-For first boot in a dev setup, `AUTO_CREATE_SCHEMA=true` can create tables automatically. For production, prefer Alembic and set `AUTO_CREATE_SCHEMA=false`.
+For first boot in a development setup, `AUTO_CREATE_SCHEMA=true` can create and reconcile tables. For production, run Alembic and keep `AUTO_CREATE_SCHEMA=false`.
 
 ### Restart Safety
 
-- Keep `data/sessions` persistent or Pyrogram clients will need fresh authorization.
-- Keep `data/storage` persistent or cached media/thumbnails disappear.
-- Check the startup build stamp after every deploy.
+- Keep `data/sessions` persistent or Pyrogram clients need fresh authorization.
+- Keep `data/storage` persistent or cached media and thumbnails disappear.
+- Check the startup build stamp after every deploy. If it does not change, the old process is still running.
 - The connection watchdog probes Telegram clients and attempts clean restarts.
+- Assignment recovery runs every 60 seconds, so stale offers and deferred work recover without operator clicks.
 
 ### Backups
 
@@ -790,64 +970,72 @@ Back up:
 
 - PostgreSQL database
 - MongoDB database
-- Redis if you need live FSM/gate continuity
+- Redis when live FSM/gate continuity matters
 - `data/storage`
 - `data/sessions`
+- `.env` and userbot account JSON files
 
-## Source And Metadata Policy
+### Reset Safety
 
-Kuro Sōden is built around pluggable source adapters. Enable only sources you are allowed to use in your environment.
+`scripts/clear_database.py` is destructive. Use it for test resets only.
 
-Current source layer includes adapters under `nekofetch/sources/`, including local, Telegram, torrent helpers, AniKoto, KickAssAnime, AniZone, and Miruro-API. Metadata enrichment is isolated under `nekofetch/providers/metadata/`; implement the provider fetchers against your approved metadata source and flip the provider flag when ready.
-
-Miruro and AniKoto both feed the same worker contract:
-
-- soft-sub + dub with matching duration can become one dual-audio release
-- hard-sub streams stay separate, even when a matching dub exists
-- requested resolution is honored before any dual-audio merge is attempted
-- provider/server order is operator-controlled through config
+```bash
+python scripts/clear_database.py
+python scripts/clear_database.py --all --yes
+```
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Bot does not start | missing or malformed bot token | check `.env`; token must be one BotFather string |
+| Bot does not start | missing or malformed bot token | check `.env`; each token must be one BotFather token |
 | Only some bots start | one stage token missing | set all four pipeline token variables |
-| No admin buttons | your id is not in `ADMIN_IDS` or role middleware did not seed you | update `.env`, restart, open `/start` |
+| No admin buttons | id is not in `ADMIN_IDS` or roles were not seeded | update `.env`, restart, open `/start` |
+| Staff bot denies access | Levi/Senku/Gojo middleware is staff-only | add the Telegram id to the admin pool and restart if needed |
+| `/settings` missing from staff menu | owner-only scoping is active | open it from an owner account |
 | Requests do not open | request gate paused or force-join unmet | open Lelouch admin panel; check `security.force_subscribe_channels` |
-| Duplicate card appears | title already exists in main/distribution/in-progress state | follow the card link or wait for publish |
-| Levi shows no tasks | no active assignment for your Telegram id | assign yourself to `levi` in Lelouch management |
-| Senku/Gojo task list is empty | previous stage has not handed off yet | check request status and log channel |
+| Duplicate card appears | title already exists in main/distribution/in-progress state | follow the existing card link or wait for publish |
+| Levi shows no tasks | no active assignment or offer for that Telegram id | set Levi stage coverage and availability in Lelouch management |
+| Offer disappeared | one-hour offer expired or was rejected for the local quiet window | wait for recovery/reroute or assign manually |
+| Quiet-hour admin did not receive work | local time is 04:00-08:00 and admin was inactive | work is deferred until 08:00 local unless active/admin accepts |
+| Senku task list is empty | Levi has not completed the handoff | check request status and log channel |
+| Gojo task list is empty | Senku has not completed the handoff | check distribution status and log channel |
 | Publishing fails | channel id, admin rights, missing media, or caption issue | verify bot/channel rights and process logs |
 | Storage delivery fails | bot lacks storage channel rights or pack range is invalid | re-check channel admin rights and indexed message ids |
-| Old code appears after deploy | stale process still running | compare startup build stamp, stop old worker |
+| Old code appears after deploy | stale process still running | compare startup build stamp, stop the old worker |
+| Docker run loses sessions | no persistent volume | mount `/data` or explicit session/storage paths |
+| Miruro returns no variants | API URL/referer/provider order is wrong | check `sources.miruro` and the Miruro-API logs |
 
 ## Roadmap
 
-- stronger task cards for Senku and Gojo that open direct per-request flows from `/tasks`
-- richer `/schedule` execution behind Gojo's current scheduling surface
+- richer Gojo schedule execution behind the current schedule surface
 - expanded update detector for already-owned titles
 - custom franchise segmentation for long-running series
 - broader analytics windows for staff throughput and title demand
-- more provider adapters behind the same normalized franchise contract
+- additional source adapters behind the normalized source contract
+- deeper thumbnail templates for per-franchise styling
 
-## Credits In The Code
+## Glossary
 
-Kuro Sōden is shaped around four stage identities:
-
-- **Lelouch Vi Britannia**: request command, strategy, staff control
-- **Levi Ackerman**: source picking, download discipline, task execution
-- **Senku Ishigami**: distribution construction and content generation
-- **Gojo Satoru**: publishing, index control, recovery
-
-The characters are UI flavor. The engineering contract is the relay: one clear stage, one shared state model, one next handoff.
+| Term | Meaning |
+|---|---|
+| Relay | the four-stage runtime from Lelouch to Gojo |
+| Stage | one unit of work: request, download, distribution, publish |
+| Assignment | active staff ownership for a request/stage |
+| Offer | optional assignment sent to a recently active off-slot admin |
+| Quiet hours | local 04:00-08:00 window where work is held unless explicitly accepted |
+| FSM | Redis-backed conversation state |
+| Storage pack | Telegram storage-channel group containing delivered media |
+| Distribution entity | generated bot/channel users consume from |
+| Build stamp | startup identifier used to detect stale processes after deploy |
+| PipelineManager | runtime coordinator that starts bots, scheduler jobs, workers, and watchdog |
 
 ---
 
 <div align="center">
 
-**Kuro Sōden** · four bots · one event loop · shared state · no silent handoff
+Kuro Sōden moves one request through four hands, keeps the evidence in durable stores, and leaves every operator with the right button at the right time.
 
-<a href="#readme-top">Back to top</a>
+[Back to top](#top)
 
 </div>
