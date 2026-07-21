@@ -34,9 +34,17 @@ def upgrade() -> None:
     op.add_column("admin_assignments", sa.Column("expires_at", sa.DateTime(timezone=True)))
     op.add_column("admin_assignments", sa.Column("responded_at", sa.DateTime(timezone=True)))
     op.add_column("admin_assignments", sa.Column("decision_reason", sa.String(64)))
+    op.create_index(
+        "uq_admin_assignments_open_request_stage",
+        "admin_assignments",
+        ["request_code", "stage"],
+        unique=True,
+        postgresql_where=sa.text("status IN ('assigned', 'in_progress', 'offered')"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("uq_admin_assignments_open_request_stage", table_name="admin_assignments")
     op.drop_column("admin_assignments", "decision_reason")
     op.drop_column("admin_assignments", "responded_at")
     op.drop_column("admin_assignments", "expires_at")

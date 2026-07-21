@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, select
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,7 +36,6 @@ class AdminAssignment(Base, PKMixin, TimestampMixin):
     """Tracks which admin owns, has been offered, or closed a pipeline task."""
 
     __tablename__ = "admin_assignments"
-
     admin_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     request_code: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     stage: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -51,6 +50,16 @@ class AdminAssignment(Base, PKMixin, TimestampMixin):
     decision_reason: Mapped[str | None] = mapped_column(String(64))
     task_count_at_assignment: Mapped[int] = mapped_column(Integer, default=0)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        Index(
+            "uq_admin_assignments_open_request_stage",
+            "request_code",
+            "stage",
+            unique=True,
+            postgresql_where=status.in_(OPEN_STATUSES),
+            sqlite_where=status.in_(OPEN_STATUSES),
+        ),
+    )
 
 
 class AdminAvailability(Base, PKMixin, TimestampMixin):
@@ -462,28 +471,33 @@ class AdminAssignmentEngine:
         second_pass: bool,
         availability_by_id: dict[int, AdminAvailability],
     ) -> set[int]:
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        oldest_local_day = now - timedelta(days=2)
         rows = (
             await session.execute(
                 select(
                     AdminAssignment.admin_telegram_id,
                     AdminAssignment.status,
                     AdminAssignment.decision_reason,
+                    AdminAssignment.created_at,
                 ).where(
                     AdminAssignment.stage == stage,
                     AdminAssignment.status.in_(["skipped", "rejected"]),
-                    AdminAssignment.created_at >= day_start,
+                    AdminAssignment.created_at >= oldest_local_day,
                 )
             )
         ).all()
         blocked: set[int] = set()
-        for admin_id, status, reason in rows:
+        for admin_id, status, reason, created_at in rows:
             admin_id = int(admin_id)
+            avail = availability_by_id.get(admin_id)
+            if avail is not None and created_at is not None:
+                created_at = self._utc(created_at)
+                if created_at < self._local_day_start_utc(avail, now):
+                    continue
             if status == "skipped" and not second_pass:
                 blocked.add(admin_id)
             elif status == "rejected":
                 if reason == "quiet_reject":
-                    avail = availability_by_id.get(admin_id)
                     if avail is not None and self._in_quiet_hours(avail, now):
                         blocked.add(admin_id)
                 else:
@@ -505,6 +519,7 @@ class AdminAssignmentEngine:
                     AdminAssignment.admin_telegram_id,
                     AdminAssignment.status,
                     AdminAssignment.decision_reason,
+                    AdminAssignment.created_at,
                 ).where(
                     AdminAssignment.request_code == request_code,
                     AdminAssignment.stage == stage,
@@ -513,13 +528,17 @@ class AdminAssignmentEngine:
             )
         ).all()
         blocked: set[int] = set()
-        for admin_id, status, reason in rows:
+        for admin_id, status, reason, created_at in rows:
             admin_id = int(admin_id)
+            avail = availability_by_id.get(admin_id)
+            if avail is not None and created_at is not None:
+                created_at = self._utc(created_at)
+                if created_at < self._local_day_start_utc(avail, now):
+                    continue
             if status == "skipped" and not second_pass:
                 blocked.add(admin_id)
             elif status == "rejected":
                 if reason == "quiet_reject":
-                    avail = availability_by_id.get(admin_id)
                     if avail is not None and self._in_quiet_hours(avail, now):
                         blocked.add(admin_id)
                 else:
@@ -675,6 +694,12 @@ class AdminAssignmentEngine:
         except ZoneInfoNotFoundError:
             tz = UTC
         return now.astimezone(tz)
+
+    @classmethod
+    def _local_day_start_utc(cls, avail: AdminAvailability, now: datetime) -> datetime:
+        local_now = cls._local_now(avail, now)
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return local_start.astimezone(UTC)
 
     @staticmethod
     def _utc(value: datetime | None) -> datetime:

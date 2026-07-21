@@ -76,6 +76,15 @@ def _reconcile_columns(conn) -> None:
                 f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS {coldef}'
             )
 
+    if "admin_assignments" in existing_tables:
+        conn.exec_driver_sql(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_admin_assignments_open_request_stage
+            ON admin_assignments (request_code, stage)
+            WHERE status IN ('assigned', 'in_progress', 'offered')
+            """
+        )
+
 
 @asynccontextmanager
 async def session_scope(

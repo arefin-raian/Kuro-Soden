@@ -770,8 +770,7 @@ def register(client: Client, container: Container) -> None:
             "/tasks — What's waiting to publish\n"
             "/publish — Review &amp; publish a title\n"
             "/schedule — Publish at a set time\n"
-            "/recover — Rebuild a banned channel + fix every button\n"
-            "/settings — Caption template, main channel, index"
+            "/recover — Rebuild a banned channel + fix every button"
         )
         await send_screen(
             client, message.chat.id,
@@ -912,7 +911,7 @@ async def _recover_channel(
             )
         else:
             await message.reply(
-                f"⚠️ <b>Recovery incomplete</b>\n\n"
+                "⚠️ <b>Recovery incomplete</b>\n\n"
                 "Could not recreate the distribution entity.\n"
                 "Check the logs for details.",
                 parse_mode=ParseMode.HTML,

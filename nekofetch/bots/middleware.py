@@ -78,7 +78,10 @@ def install_auth_middleware(
     @client.on_message(group=-1)
     async def _msg_mw(_: Client, message: Message) -> None:
         if message.from_user and await _rate_limited(message.from_user.id):
-            await message.reply(bq(container.localizer.get("rate_limited")), parse_mode=ParseMode.HTML)
+            await message.reply(
+                bq(container.localizer.get("rate_limited")),
+                parse_mode=ParseMode.HTML,
+            )
             await message.stop_propagation()
         message.nf_user = await _resolve(message.from_user)  # type: ignore[attr-defined]
         if staff_only_bot and not _is_staff(message.nf_user):
@@ -92,8 +95,7 @@ def install_auth_middleware(
             await query.stop_propagation()
         query.nf_user = await _resolve(query.from_user)  # type: ignore[attr-defined]
         if staff_only_bot and not _is_staff(query.nf_user):
-            await query.answer("🔒 This bot is for authorized staff only.",
-                               show_alert=True)
+            await _show_gate_cb(query)
             await query.stop_propagation()
 
     async def _show_gate_msg(message: Message) -> None:
@@ -106,3 +108,19 @@ def install_auth_middleware(
             await send_screen(client, message.chat.id, screen)
         except Exception as exc:  # noqa: BLE001 — never crash the gate itself
             log.warning("middleware.gate.failed", bot=staff_only_bot, error=str(exc))
+
+    async def _show_gate_cb(query: CallbackQuery) -> None:
+        """Edit the current callback message into the staff-only gate card."""
+        try:
+            from kurosoden.shared.access_gate import gated_screen
+            from nekofetch.ui.screens import send_screen
+
+            if query.message is None:
+                await query.answer("🔒 This bot is for authorized staff only.", show_alert=True)
+                return
+            screen = await gated_screen(container, staff_only_bot)
+            await send_screen(client, query.message.chat.id, screen, old_msg=query.message)
+            await query.answer()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("middleware.gate.callback_failed", bot=staff_only_bot, error=str(exc))
+            await query.answer("🔒 This bot is for authorized staff only.", show_alert=True)

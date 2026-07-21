@@ -9,9 +9,6 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constants
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -99,6 +96,15 @@ class TestBotNameMapping:
             assert indices[i] > 0, f"Bot {expected_order[i]} not found in start()"
             assert indices[i] < indices[i + 1], \
                 f"{expected_order[i]} should start before {expected_order[i+1]}"
+
+    def test_assignment_recovery_job_is_registered(self):
+        """Offer expiry and quiet-hour recovery must run in the scheduler."""
+        from kurosoden.shared.pipeline_manager import PipelineManager
+        import inspect
+
+        source = inspect.getsource(PipelineManager.start)
+        assert "make_assignment_recovery_job" in source
+        assert "assignment-recovery" in source
 
     def test_env_var_mapping(self):
         """Each bot name maps to the correct env var."""

@@ -27,7 +27,7 @@ from nekofetch.core.exceptions import NekoFetchError
 from nekofetch.core.logging import get_logger
 from nekofetch.domain.enums import DownloadScope, RequestStatus
 from nekofetch.localization.messages import M, t
-from nekofetch.ui.components import cb, lock_buttons
+from nekofetch.ui.components import lock_buttons
 from nekofetch.ui.progress import SPINNER, animate_until
 from nekofetch.ui.artwork import (
     anime_art_key,
@@ -526,6 +526,13 @@ def register(client: Client, container: Container) -> None:
                     await ManagementService(container.pg_sessionmaker).reassign(
                         receipt.code, "levi", owner_id
                     )
+                    from types import SimpleNamespace
+
+                    assignment_result = SimpleNamespace(
+                        admin_telegram_id=owner_id,
+                        status="assigned",
+                        assignment_mode="fallback",
+                    )
                     log.warning("lelouch.assign.fallback_owner",
                                 code=receipt.code, owner=owner_id)
                 else:
@@ -553,13 +560,10 @@ def register(client: Client, container: Container) -> None:
         code: str, title: str, requester: str, requester_id: int,
         franchise_json: dict, assignment_result=None,
     ) -> None:
-        """DM every configured admin about a freshly-submitted request.
+        """DM the selected downloader with a Levi-styled request card."""
+        from types import SimpleNamespace
 
-        Prefers Levi's client (the downloader stage that picks this up), then
-        falls back to Lelouch's own client. Each send is independent so one
-        blocked admin can't stop the others.
-        """
-        from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+        from kurosoden.shared.handoff import notify_stage_assignment
 
         admin_ids = (
             [assignment_result.admin_telegram_id]
@@ -570,72 +574,23 @@ def register(client: Client, container: Container) -> None:
             log.warning("lelouch.notify.no_admins", code=code)
             return
 
-        # Pick the notifying bot: Levi (downloader) first, else this bot.
-        notifier = client
-        mgr = getattr(container, "pipeline_manager", None)
-        if mgr is not None and getattr(mgr, "levi", None) is not None:
-            notifier = mgr.levi
-
-        fseasons = franchise_json.get("franchise_seasons") or 0
-        fmovies = franchise_json.get("franchise_movies") or 0
-        fovas = franchise_json.get("franchise_ovas") or 0
-        bits = []
-        if fseasons:
-            bits.append(f"{fseasons} season{'s' if fseasons != 1 else ''}")
-        if fmovies:
-            bits.append(f"{fmovies} movie{'s' if fmovies != 1 else ''}")
-        if fovas:
-            bits.append(f"{fovas} OVA{'s' if fovas != 1 else ''}")
-        breakdown = " · ".join(bits) if bits else "single entry"
-
-        caption = (
-            "<b>📥 New Request</b>\n\n"
-            f"<b>{html.escape(title)}</b>\n"
-            f"<code>{code}</code>  ·  {breakdown}\n\n"
-            f"👤 <b>By:</b> {html.escape(requester or 'user')} "
-            f"(<code>{requester_id}</code>)\n\n"
-            "<i>Assigned to the download stage. Open Levi to pick a source.</i>"
-        )
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚔️ Open Downloader", callback_data=cb("levi", "tasks"))],
-        ])
-
-        # The Levi card must carry the anime's backdrop — the EN-tagged one we
-        # already resolved at request time (``_backdrop_url``), else the first of
-        # the textless ``backdrops`` gallery we seeded. Both are full URLs stored
-        # on the request's franchise JSON, so no extra TMDB call is needed. If we
-        # have neither, fall back to a plain text DM rather than dropping the ping.
-        backdrop = franchise_json.get("_backdrop_url")
-        if not backdrop:
-            gallery = franchise_json.get("backdrops") or []
-            backdrop = gallery[0] if gallery else None
-
         sent = 0
         for admin_id in admin_ids:
-            try:
-                if backdrop:
-                    await notifier.send_photo(
-                        admin_id, backdrop, caption=caption,
-                        parse_mode=ParseMode.HTML, reply_markup=kb,
-                    )
-                else:
-                    await notifier.send_message(
-                        admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
-                    )
-                sent += 1
-            except Exception:  # noqa: BLE001
-                # A bad image URL shouldn't cost the admin their ping — retry once
-                # as plain text before giving up on this admin.
-                try:
-                    await notifier.send_message(
-                        admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
-                    )
-                    sent += 1
-                except Exception as exc2:  # noqa: BLE001
-                    # An admin who never /start-ed the notifier bot can't be DMed —
-                    # log and keep going so the others still get pinged.
-                    log.warning("lelouch.notify.dm_failed", admin=admin_id,
-                                code=code, error=str(exc2))
+            assignment = assignment_result or SimpleNamespace(
+                admin_telegram_id=admin_id,
+                status="assigned",
+                assignment_mode="fallback",
+            )
+            sent += await notify_stage_assignment(
+                container,
+                "levi",
+                assignment,
+                code,
+                title,
+                requester=requester,
+                requester_id=requester_id,
+                franchise_json=franchise_json,
+            )
         log.info("lelouch.notify.sent", code=code, admins=len(admin_ids), delivered=sent)
 
     # ── My Requests ───────────────────────────────────────────────────────────

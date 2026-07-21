@@ -95,8 +95,12 @@ class PipelineManager:
         # Idle-reminder: every 10 min, nudge on-shift idle admins when work is
         # waiting. The job itself honours mode/availability/hours/breaks and a
         # per-admin cooldown, so it's safe to tick often.
+        from kurosoden.shared.assignment_recovery import make_assignment_recovery_job
         from kurosoden.shared.idle_reminder import make_idle_nudge_job
 
+        self._scheduler.every(
+            60, make_assignment_recovery_job(self._c), id="assignment-recovery",
+        )
         self._scheduler.every(600, make_idle_nudge_job(self._c), id="idle-nudge")
 
         # Monthly maintenance (Gojo): a detect-only update sweep that DMs admins a
@@ -225,7 +229,12 @@ class PipelineManager:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.warning("kuro-soden.conn.reconnect_failed", bot=name, attempt=attempt, error=str(exc))
+                log.warning(
+                    "kuro-soden.conn.reconnect_failed",
+                    bot=name,
+                    attempt=attempt,
+                    error=str(exc),
+                )
                 await asyncio.sleep(_CONN_RECONNECT_BACKOFF)
         log.error("kuro-soden.conn.reconnect_exhausted", bot=name)
         return False

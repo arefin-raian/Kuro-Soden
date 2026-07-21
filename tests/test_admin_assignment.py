@@ -745,3 +745,96 @@ class TestSlotAwareAssignment:
         assert released.admin_telegram_id == 882
         assert released.status == "assigned"
         assert released.assignment_mode == "duty"
+
+
+@pytest.mark.asyncio
+async def test_recovery_assigns_quiet_deferred_queued_request_after_8am(
+    sessionmaker, session,
+):
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+    from kurosoden.shared.admin_assignment import AdminAssignment
+    from kurosoden.shared.assignment_recovery import recover_assignment_queue
+    from kurosoden.tests.helpers import _create_admin_availability, _create_request
+
+    await _create_admin_availability(
+        session,
+        admin_telegram_id=883,
+        admin_name="MorningLevi",
+        assigned_bots=["levi"],
+        timezone="UTC",
+        slots_weekday=[[8 * 60, 16 * 60]],
+    )
+    await _create_request(session, code="REQ-QUIET-WAKE", status="queued")
+
+    container = SimpleNamespace(pg_sessionmaker=sessionmaker, pipeline_manager=None)
+    report = await recover_assignment_queue(
+        container,
+        now=datetime(2026, 7, 21, 8, 5, tzinfo=timezone.utc),
+        notify=False,
+    )
+
+    assert report.recovered_assignments == 1
+    row = (
+        await session.execute(
+            select(AdminAssignment).where(
+                AdminAssignment.request_code == "REQ-QUIET-WAKE",
+                AdminAssignment.stage == "levi",
+            )
+        )
+    ).scalar_one()
+    assert row.admin_telegram_id == 883
+    assert row.status == "assigned"
+
+
+@pytest.mark.asyncio
+async def test_recovery_assigns_ready_request_to_next_missing_stage(
+    sessionmaker, session,
+):
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+    from kurosoden.shared.admin_assignment import AdminAssignment
+    from kurosoden.shared.assignment_recovery import recover_assignment_queue
+    from kurosoden.tests.helpers import (
+        _create_admin_assignment,
+        _create_admin_availability,
+        _create_request,
+    )
+
+    await _create_admin_availability(
+        session,
+        admin_telegram_id=884,
+        admin_name="SenkuAdmin",
+        assigned_bots=["senku"],
+        timezone="UTC",
+        slots_weekday=[[8 * 60, 16 * 60]],
+    )
+    await _create_request(session, code="REQ-SENKU-WAKE", status="ready")
+    await _create_admin_assignment(
+        session,
+        admin_telegram_id=800,
+        request_code="REQ-SENKU-WAKE",
+        stage="levi",
+        status="completed",
+    )
+
+    container = SimpleNamespace(pg_sessionmaker=sessionmaker, pipeline_manager=None)
+    report = await recover_assignment_queue(
+        container,
+        now=datetime(2026, 7, 21, 8, 5, tzinfo=timezone.utc),
+        notify=False,
+    )
+
+    assert report.recovered_assignments == 1
+    row = (
+        await session.execute(
+            select(AdminAssignment).where(
+                AdminAssignment.request_code == "REQ-SENKU-WAKE",
+                AdminAssignment.stage == "senku",
+            )
+        )
+    ).scalar_one()
+    assert row.admin_telegram_id == 884
+    assert row.status == "assigned"

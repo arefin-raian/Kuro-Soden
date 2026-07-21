@@ -143,7 +143,6 @@ def register(client: Client, container: Container) -> None:
             "/tasks — Distribution tasks waiting on you\n"
             "/create — Channel setup wizard\n"
             "/generate — Build content for a title\n"
-            "/settings — Branding &amp; layout\n"
             "/help — This guide\n\n"
             "<i>Everything is button-driven — tap /start to begin.</i>"
         )
