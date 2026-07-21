@@ -434,3 +434,228 @@ class TestAdminAssignmentEngineDB:
         tasks = await engine.get_active_tasks(700)
         codes = [t.request_code for t in tasks]
         assert codes == ["REQ-A", "REQ-B", "REQ-C"]
+
+
+class TestSlotAwareAssignment:
+    @pytest.fixture
+    def engine(self, sessionmaker):
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
+
+        return AdminAssignmentEngine(sessionmaker)
+
+    @pytest.mark.asyncio
+    async def test_in_slot_admin_gets_duty_assignment(self, engine, session):
+        from sqlalchemy import select
+        from kurosoden.shared.admin_assignment import AdminAssignment
+        from kurosoden.tests.helpers import _create_admin_availability, _create_user
+
+        now = datetime(2026, 7, 21, 12, 0, tzinfo=timezone.utc)
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=810,
+            admin_name="InSlot",
+            timezone="UTC",
+            slots_weekday=[[11 * 60, 13 * 60]],
+            slots_weekend=[],
+            total_tasks_completed=4,
+        )
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=811,
+            admin_name="OutSlot",
+            timezone="UTC",
+            slots_weekday=[[18 * 60, 20 * 60]],
+            slots_weekend=[],
+            total_tasks_completed=0,
+        )
+        await _create_user(session, telegram_id=811, role="staff",
+                           username="outslot", last_seen_at=now - timedelta(minutes=5))
+
+        result = await engine.assign("REQ-SLOT-DUTY", "levi", now=now)
+
+        assert result is not None
+        assert result.admin_telegram_id == 810
+        assert result.status == "assigned"
+        assert result.assignment_mode == "duty"
+        row = (await session.execute(
+            select(AdminAssignment).where(AdminAssignment.request_code == "REQ-SLOT-DUTY")
+        )).scalar_one()
+        assert row.assignment_mode == "duty"
+
+    @pytest.mark.asyncio
+    async def test_out_of_slot_recently_active_admin_gets_offer(self, engine, session):
+        from kurosoden.tests.helpers import _create_admin_availability, _create_user
+
+        now = datetime(2026, 7, 21, 12, 0, tzinfo=timezone.utc)
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=820,
+            admin_name="ActiveOutSlot",
+            timezone="UTC",
+            slots_weekday=[[18 * 60, 20 * 60]],
+            slots_weekend=[],
+        )
+        await _create_user(session, telegram_id=820, role="staff",
+                           username="active", last_seen_at=now - timedelta(minutes=3))
+
+        result = await engine.assign("REQ-OFFER", "levi", now=now)
+
+        assert result is not None
+        assert result.admin_telegram_id == 820
+        assert result.status == "offered"
+        assert result.assignment_mode == "offer"
+        assert result.expires_at == now + timedelta(hours=1)
+        assert await engine.get_active_tasks(820) == []
+        offers = await engine.get_pending_offers(820, now=now)
+        assert len(offers) == 1
+        assert offers[0].request_code == "REQ-OFFER"
+
+    @pytest.mark.asyncio
+    async def test_inactive_out_of_slot_admin_gets_closest_slot_fallback(self, engine, session):
+        from kurosoden.tests.helpers import _create_admin_availability
+
+        now = datetime(2026, 7, 21, 12, 0, tzinfo=timezone.utc)
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=830,
+            admin_name="Closest",
+            timezone="UTC",
+            slots_weekday=[[13 * 60, 14 * 60]],
+            slots_weekend=[],
+        )
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=831,
+            admin_name="Later",
+            timezone="UTC",
+            slots_weekday=[[20 * 60, 21 * 60]],
+            slots_weekend=[],
+        )
+
+        result = await engine.assign("REQ-FALLBACK", "levi", now=now)
+
+        assert result is not None
+        assert result.admin_telegram_id == 830
+        assert result.status == "assigned"
+        assert result.assignment_mode == "fallback"
+
+    @pytest.mark.asyncio
+    async def test_accept_offer_promotes_to_duty_assignment(self, engine, session):
+        from kurosoden.shared.admin_assignment import AdminAssignment
+        from kurosoden.tests.helpers import _create_admin_availability
+
+        expires = datetime.now(timezone.utc) + timedelta(hours=1)
+        await _create_admin_availability(session, admin_telegram_id=840, admin_name="Accepting")
+        row = AdminAssignment(
+            admin_telegram_id=840,
+            request_code="REQ-ACCEPT",
+            stage="senku",
+            status="offered",
+            assignment_mode="offer",
+            offer_attempt=1,
+            expires_at=expires,
+            offered_at=expires - timedelta(hours=1),
+        )
+        session.add(row)
+        await session.commit()
+
+        result = await engine.accept_offer("REQ-ACCEPT", "senku", 840)
+        await session.refresh(row)
+
+        assert result is not None
+        assert result.status == "assigned"
+        assert row.status == "assigned"
+        assert row.assignment_mode == "duty"
+        assert row.decision_reason == "accepted_offer"
+
+    @pytest.mark.asyncio
+    async def test_reject_offer_excludes_admin(self, engine, session):
+        from kurosoden.shared.admin_assignment import AdminAssignment
+        from kurosoden.tests.helpers import _create_admin_availability
+
+        expires = datetime.now(timezone.utc) + timedelta(hours=1)
+        await _create_admin_availability(session, admin_telegram_id=850, admin_name="Rejecting")
+        row = AdminAssignment(
+            admin_telegram_id=850,
+            request_code="REQ-REJECT",
+            stage="gojo",
+            status="offered",
+            assignment_mode="offer",
+            offer_attempt=1,
+            expires_at=expires,
+        )
+        session.add(row)
+        await session.commit()
+
+        assert await engine.reject_offer("REQ-REJECT", "gojo", 850) is True
+        await session.refresh(row)
+        assert row.status == "rejected"
+        assert row.decision_reason == "manual_reject"
+
+    @pytest.mark.asyncio
+    async def test_first_silent_timeout_reoffers_on_second_pass(self, engine, session):
+        from sqlalchemy import select
+        from kurosoden.shared.admin_assignment import AdminAssignment
+        from kurosoden.tests.helpers import _create_admin_availability, _create_user
+
+        now = datetime(2026, 7, 21, 12, 0, tzinfo=timezone.utc)
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=860,
+            admin_name="Silent",
+            timezone="UTC",
+            slots_weekday=[[18 * 60, 20 * 60]],
+            slots_weekend=[],
+        )
+        await _create_user(session, telegram_id=860, role="staff",
+                           username="silent", last_seen_at=now)
+        session.add(AdminAssignment(
+            admin_telegram_id=860,
+            request_code="REQ-SILENT",
+            stage="levi",
+            status="offered",
+            assignment_mode="offer",
+            offer_attempt=1,
+            offered_at=now - timedelta(hours=2),
+            expires_at=now - timedelta(minutes=1),
+        ))
+        await session.commit()
+
+        expired = await engine.expire_offers(now=now, reassign=True)
+
+        assert len(expired) == 1
+        assert expired[0].final_status == "skipped"
+        rows = (await session.execute(
+            select(AdminAssignment)
+            .where(AdminAssignment.request_code == "REQ-SILENT")
+            .order_by(AdminAssignment.id.asc())
+        )).scalars().all()
+        assert [r.status for r in rows] == ["skipped", "offered"]
+        assert rows[1].offer_attempt == 2
+
+    @pytest.mark.asyncio
+    async def test_second_silent_timeout_rejects_for_day(self, engine, session):
+        from kurosoden.shared.admin_assignment import AdminAssignment
+        from kurosoden.tests.helpers import _create_admin_availability
+
+        now = datetime(2026, 7, 21, 12, 0, tzinfo=timezone.utc)
+        await _create_admin_availability(session, admin_telegram_id=870, admin_name="SecondSilent")
+        row = AdminAssignment(
+            admin_telegram_id=870,
+            request_code="REQ-SECOND-SILENT",
+            stage="levi",
+            status="offered",
+            assignment_mode="offer",
+            offer_attempt=2,
+            offered_at=now - timedelta(hours=2),
+            expires_at=now - timedelta(minutes=1),
+        )
+        session.add(row)
+        await session.commit()
+
+        expired = await engine.expire_offers(now=now, reassign=False)
+        await session.refresh(row)
+
+        assert expired[0].final_status == "rejected"
+        assert row.status == "rejected"
+        assert row.decision_reason == "second_silent_timeout"

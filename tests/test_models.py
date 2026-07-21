@@ -133,7 +133,10 @@ class TestAdminAssignmentColumns:
         from kurosoden.shared.admin_assignment import AdminAssignment
         cols = {c.name for c in AdminAssignment.__table__.columns}
         expected = {"id", "created_at", "updated_at", "admin_telegram_id",
-                     "request_code", "stage", "status", "task_count_at_assignment", "completed_at"}
+                     "request_code", "stage", "status", "assignment_mode",
+                     "offer_attempt", "offered_at", "expires_at",
+                     "responded_at", "decision_reason",
+                     "task_count_at_assignment", "completed_at"}
         assert cols == expected
 
     def test_admin_telegram_id_is_bigint(self):

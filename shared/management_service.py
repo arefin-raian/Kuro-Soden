@@ -19,11 +19,12 @@ ORM object outside its session.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 
 from kurosoden.shared.admin_assignment import (
+    ACTIVE_STATUSES,
     AdminAssignment,
     AdminAvailability,
 )
@@ -70,10 +71,10 @@ class ManagementService:
 
     async def _active_count(self, session, admin_id: int) -> int:
         return int((await session.execute(
-            select(func.count(AdminAssignment.id)).where(
-                AdminAssignment.admin_telegram_id == admin_id,
-                AdminAssignment.status.in_(["assigned", "in_progress"]),
-            )
+                select(func.count(AdminAssignment.id)).where(
+                    AdminAssignment.admin_telegram_id == admin_id,
+                    AdminAssignment.status.in_(ACTIVE_STATUSES),
+                )
         )).scalar() or 0)
 
     @staticmethod
@@ -90,7 +91,7 @@ class ManagementService:
         return None
 
     async def _view(self, session, a: AdminAvailability) -> AdminView:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         brk = self._current_break(a, now)
         return AdminView(
             telegram_id=a.admin_telegram_id,
@@ -243,7 +244,7 @@ class ManagementService:
                              reason: str = "", start: datetime | None = None,
                              _session=None) -> AdminView | None:
         """Add a break window starting now (or ``start``) for ``hours`` hours."""
-        start = start or datetime.now(timezone.utc)
+        start = start or datetime.now(UTC)
         end = start + timedelta(hours=max(0.1, hours))
         async with self._maybe_session(_session) as session:
             a = (await session.execute(
@@ -365,7 +366,7 @@ class ManagementService:
                 select(AdminAssignment).where(
                     AdminAssignment.request_code == request_code,
                     AdminAssignment.stage == stage,
-                    AdminAssignment.status.in_(["assigned", "in_progress"]),
+                    AdminAssignment.status.in_(ACTIVE_STATUSES),
                 ).with_for_update()
             )).scalar_one_or_none()
             if row is None:
@@ -374,11 +375,19 @@ class ManagementService:
                     request_code=request_code,
                     stage=stage,
                     status="assigned",
+                    assignment_mode="duty",
+                    offer_attempt=0,
                 )
                 session.add(row)
             else:
                 row.admin_telegram_id = to_admin
                 row.status = "assigned"
+                row.assignment_mode = "duty"
+                row.offer_attempt = 0
+                row.offered_at = None
+                row.expires_at = None
+                row.responded_at = None
+                row.decision_reason = None
             if _session is None:
                 await session.commit()
             return True
@@ -392,7 +401,7 @@ class ManagementService:
         These are the candidates the idle-nudge job pings when work is waiting —
         anyone off-shift, on break, or already busy is left alone.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         out: list[AdminView] = []
         for v in await self.list_admins(stage=stage, _session=_session):
             if not v.is_available or v.on_break or v.active_tasks > 0:

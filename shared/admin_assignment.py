@@ -1,91 +1,77 @@
-"""Admin assignment engine — balanced workload distribution.
+"""Admin assignment engine - balanced, slot-aware workload distribution.
 
-Each pipeline stage has a pool of admins. When a new task arrives, the engine
-picks the best admin using these rules (in priority order):
+Pipeline stages use a single routing ladder:
 
-    1. Prefer admins who are AVAILABLE (not on break, not unavailable).
-    2. Prefer admins with ZERO current tasks.
-    3. Among free admins, prefer the one who completed FEWER total tasks.
-    4. Ignore admins marked as unavailable or on scheduled break.
+1. Admins inside their preferred local slot receive a duty assignment.
+2. Admins outside slot but recently active in-bot receive a one-hour offer.
+3. If nobody can be offered live, the closest upcoming slot receives fallback duty.
 
-Admin state is stored in a new ``admin_assignments`` table in PostgreSQL.
+Profile-less admins keep the original always-on behavior. Existing active task
+queries still only return ``assigned`` and ``in_progress`` rows; ``offered`` rows
+stay separate until accepted.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, select, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from nekofetch.infrastructure.database.postgres.base import Base, PKMixin, TimestampMixin
 
+ACTIVE_STATUSES = ("assigned", "in_progress")
+OPEN_STATUSES = ("assigned", "in_progress", "offered")
+OFFER_TIMEOUT_MINUTES = 60
+RECENT_ACTIVITY_MINUTES = 15
+_DAY_MINUTES = 24 * 60
 
-# ── ORM Model ─────────────────────────────────────────────────────────────────
 
 class AdminAssignment(Base, PKMixin, TimestampMixin):
-    """Tracks which admin is assigned to which pipeline task."""
+    """Tracks which admin owns, has been offered, or closed a pipeline task."""
 
     __tablename__ = "admin_assignments"
 
     admin_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     request_code: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     stage: Mapped[str] = mapped_column(String(32), nullable=False)
-    # "lelouch" | "levi" | "senku" | "gojo"
     status: Mapped[str] = mapped_column(String(16), default="assigned", nullable=False)
-    # "assigned" | "in_progress" | "completed" | "rejected"
+    # "offered" | "assigned" | "in_progress" | "completed" | "skipped" | "rejected"
+    assignment_mode: Mapped[str] = mapped_column(String(16), default="duty", nullable=False)
+    # "duty" | "offer" | "fallback"
+    offer_attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    offered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(String(64))
     task_count_at_assignment: Mapped[int] = mapped_column(Integer, default=0)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AdminAvailability(Base, PKMixin, TimestampMixin):
-    """Tracks admin availability, breaks, and bot assignments."""
+    """Tracks admin availability, breaks, bot assignments, and profile slots."""
 
     __tablename__ = "admin_availability"
 
-    admin_telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    admin_telegram_id: Mapped[int] = mapped_column(
+        BigInteger, unique=True, index=True, nullable=False
+    )
     admin_name: Mapped[str | None] = mapped_column(String(128))
     is_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    # Which bots (pipeline stages) this admin works on.
     assigned_bots: Mapped[list[str] | None] = mapped_column(JSONB)
-    # e.g. ["lelouch", "levi", "senku", "gojo"]
-    # Scheduled breaks: list of {start, end, reason} dicts.
     scheduled_breaks: Mapped[list | None] = mapped_column(JSONB)
     total_tasks_completed: Mapped[int] = mapped_column(Integer, default=0)
-    # Assignment weight: higher = more tasks routed here (a trusted admin can be
-    # weighted up). Effective load is active_tasks / weight, so weight 2 lets an
-    # admin carry twice the queue before they're passed over.
     weight: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    # Working window as {"start": 0-23, "end": 0-23} in UTC, or NULL for always-on.
-    # Wraps past midnight when start > end (e.g. 22→6). Honoured by assignment +
-    # the idle nudge so no one is roused off the clock.
     working_hours: Mapped[dict | None] = mapped_column(JSONB)
-    # IANA timezone name (e.g. "Asia/Dhaka") for THIS admin. Drives how they
-    # enter and read scheduled-post times; NULL → the global display timezone.
-    # Deliberately does NOT affect ``working_hours`` (which stays UTC).
     timezone: Mapped[str | None] = mapped_column(String(64))
-    # ── Admin profile (self-service) ────────────────────────────────────────
-    # Free-text country the admin is in (e.g. "Bangladesh"). Timezone is the
-    # authoritative field for scheduling; country is context the owner collects
-    # and can be used to suggest a timezone.
     country: Mapped[str | None] = mapped_column(String(64))
-    # Soft cap on hours/day an admin wants to contribute (e.g. 3). Used by the
-    # slot-aware assignment engine to bound how far past a slot's start we may
-    # still hand them work. NULL → no cap (their slots bound them instead).
     max_hours_per_day: Mapped[int | None] = mapped_column(Integer)
-    # Preferred time slots, expressed in the admin's OWN timezone as a list of
-    # ``[start_min, end_min]`` minute-of-day pairs (0–1439). ``end < start`` means
-    # the slot wraps past midnight (e.g. 22:30→00:30). Separate weekday/weekend
-    # sets because admins often keep different weekend hours. Empty/NULL → the
-    # admin has no preferred slot (falls to the always-on/offer path).
     slots_weekday: Mapped[list | None] = mapped_column(JSONB)
     slots_weekend: Mapped[list | None] = mapped_column(JSONB)
 
-
-# ── Assignment Engine ─────────────────────────────────────────────────────────
 
 @dataclass
 class AssignmentResult:
@@ -93,10 +79,23 @@ class AssignmentResult:
     admin_name: str | None
     tasks_active: int
     tasks_completed: int
+    status: str = "assigned"
+    assignment_mode: str = "duty"
+    expires_at: datetime | None = None
+
+
+@dataclass
+class OfferExpiry:
+    request_code: str
+    stage: str
+    admin_telegram_id: int
+    final_status: str
+    decision_reason: str
+    reassigned_to: int | None = None
 
 
 class AdminAssignmentEngine:
-    """Picks the best admin for a pipeline task using balanced distribution."""
+    """Picks the best admin for a pipeline task using the slot-aware ladder."""
 
     def __init__(self, sessionmaker):
         self._sm = sessionmaker
@@ -105,6 +104,7 @@ class AdminAssignmentEngine:
         """Context manager: yields ``_session`` if provided, else a new session."""
         if _session is not None:
             from contextlib import nullcontext
+
             return nullcontext(_session)
         return self._sm()
 
@@ -114,112 +114,375 @@ class AdminAssignmentEngine:
         stage: str,
         *,
         preferred_admin: int | None = None,
+        now: datetime | None = None,
+        second_pass: bool = False,
+        excluded_admin_ids: set[int] | None = None,
         _session=None,
     ) -> AssignmentResult | None:
-        """Assign a request to the best available admin for the given stage.
-
-        Uses a single transaction with row-level locking to prevent races
-        where two concurrent assigns pick the same admin.
-
-        Args:
-            request_code: The REQ-XXXX code to assign.
-            stage: Pipeline stage ("lelouch" | "levi" | "senku" | "gojo").
-            preferred_admin: Optional Telegram ID to force-assign to.
-            _session: Optional existing session (caller manages transaction).
-
-        Returns:
-            AssignmentResult if an admin was found, None if no admin is available.
-        """
-        from sqlalchemy import func
-
+        """Assign or offer a request to the best available admin for the stage."""
+        clock = self._utc(now)
+        excluded = set(excluded_admin_ids or set())
         async with self._maybe_session(_session) as session:
-            # Only begin a new transaction if we opened our own session.
             if _session is None:
                 async with session.begin():
-                    return await self._assign_impl(session, request_code, stage, preferred_admin)
-            else:
-                return await self._assign_impl(session, request_code, stage, preferred_admin)
+                    return await self._assign_impl(
+                        session,
+                        request_code,
+                        stage,
+                        preferred_admin,
+                        clock,
+                        second_pass=second_pass,
+                        excluded_admin_ids=excluded,
+                    )
+            return await self._assign_impl(
+                session,
+                request_code,
+                stage,
+                preferred_admin,
+                clock,
+                second_pass=second_pass,
+                excluded_admin_ids=excluded,
+            )
 
-    async def _assign_impl(self, session, request_code: str, stage: str,
-                           preferred_admin: int | None):
-        """Core assignment logic — caller manages the transaction."""
-        from sqlalchemy import func
+    async def _assign_impl(
+        self,
+        session,
+        request_code: str,
+        stage: str,
+        preferred_admin: int | None,
+        now: datetime,
+        *,
+        second_pass: bool,
+        excluded_admin_ids: set[int],
+    ) -> AssignmentResult | None:
+        existing = await self._existing_open_result(session, request_code, stage)
+        if existing is not None:
+            return existing
 
-        # If a specific admin is forced and available, use them.
-        if preferred_admin:
-            avail = (
+        if preferred_admin is not None:
+            forced = (
                 await session.execute(
                     select(AdminAvailability).where(
                         AdminAvailability.admin_telegram_id == preferred_admin
                     ).with_for_update()
                 )
             ).scalar_one_or_none()
-            if avail and avail.is_available:
+            if (
+                forced is not None
+                and forced.is_available
+                and forced.admin_telegram_id not in excluded_admin_ids
+                and self._stage_enabled(forced, stage)
+                and not self._is_on_break(forced, now)
+                and self._within_hours(forced, now)
+            ):
                 return await self._create_assignment(
-                    session, preferred_admin, request_code, stage, avail
+                    session,
+                    forced.admin_telegram_id,
+                    request_code,
+                    stage,
+                    forced,
+                    status="assigned",
+                    assignment_mode="duty",
+                    now=now,
                 )
-            # preferred_admin not found or unavailable — fall through to
-            # the normal best-admin selection below.
 
-        # Find the best admin for this stage.
-        best = await self._find_best_admin(session, stage)
-        if best is None:
+        candidates = await self._stage_candidates(
+            session, stage, now, request_code, second_pass, excluded_admin_ids
+        )
+        if not candidates:
             return None
 
+        duty = await self._best_by_load(
+            session, [a for a in candidates if self._in_duty_slot(a, now)]
+        )
+        if duty is not None:
+            return await self._create_assignment(
+                session,
+                duty.admin_telegram_id,
+                request_code,
+                stage,
+                duty,
+                status="assigned",
+                assignment_mode="duty",
+                now=now,
+            )
+
+        users = await self._users_by_telegram_id(
+            session, [a.admin_telegram_id for a in candidates]
+        )
+        offerable = [
+            a for a in candidates
+            if self._recently_active(users.get(a.admin_telegram_id), now)
+        ]
+        offer = await self._best_by_load(session, offerable, slot_distance=True, now=now)
+        if offer is not None:
+            attempt = await self._next_offer_attempt(
+                session, request_code, stage, offer.admin_telegram_id
+            )
+            return await self._create_assignment(
+                session,
+                offer.admin_telegram_id,
+                request_code,
+                stage,
+                offer,
+                status="offered",
+                assignment_mode="offer",
+                offer_attempt=attempt,
+                now=now,
+                expires_at=now + timedelta(minutes=OFFER_TIMEOUT_MINUTES),
+            )
+
+        fallback = await self._best_by_load(session, candidates, slot_distance=True, now=now)
+        if fallback is None:
+            return None
         return await self._create_assignment(
-            session, best.admin_telegram_id, request_code, stage, best
+            session,
+            fallback.admin_telegram_id,
+            request_code,
+            stage,
+            fallback,
+            status="assigned",
+            assignment_mode="fallback",
+            now=now,
         )
 
-    async def _find_best_admin(self, session, stage: str) -> AdminAvailability | None:
-        """Find the best available admin for a stage using balanced strategy.
+    async def _find_best_admin(
+        self, session, stage: str, now: datetime | None = None
+    ) -> AdminAvailability | None:
+        """Compatibility helper: return the best in-slot/always-on admin."""
+        clock = self._utc(now)
+        candidates = await self._stage_candidates(session, stage, clock, None, False, set())
+        return await self._best_by_load(
+            session, [a for a in candidates if self._in_duty_slot(a, clock)]
+        )
 
-        Uses FOR UPDATE to lock the availability rows during the transaction.
-        """
-        from sqlalchemy import func
-
-        # Get all admins assigned to this stage who are available.
+    async def _stage_candidates(
+        self,
+        session,
+        stage: str,
+        now: datetime,
+        request_code: str | None,
+        second_pass: bool,
+        excluded_admin_ids: set[int],
+    ) -> list[AdminAvailability]:
         result = await session.execute(
             select(AdminAvailability).where(
                 AdminAvailability.is_available.is_(True),
             ).with_for_update()
         )
-        candidates = result.scalars().all()
-
-        # Filter by stage assignment.
-        stage_candidates = [
-            a for a in candidates
-            if a.assigned_bots and stage in a.assigned_bots
+        rows = list(result.scalars().all())
+        blocked = await self._blocked_admin_ids(session, stage, now, second_pass)
+        if request_code is not None:
+            blocked |= await self._request_blocked_admin_ids(
+                session, request_code, stage, second_pass
+            )
+        blocked |= excluded_admin_ids
+        return [
+            a for a in rows
+            if self._stage_enabled(a, stage)
+            and a.admin_telegram_id not in blocked
+            and not self._is_on_break(a, now)
+            and self._within_hours(a, now)
         ]
-        if not stage_candidates:
-            return None
 
-        # Skip admins on scheduled break or off their working hours.
-        now = datetime.now(timezone.utc)
-        active_candidates = [
-            a for a in stage_candidates
-            if not self._is_on_break(a, now) and self._within_hours(a, now)
-        ]
-        if not active_candidates:
-            return None
+    async def _best_by_load(
+        self,
+        session,
+        candidates: list[AdminAvailability],
+        *,
+        slot_distance: bool = False,
+        now: datetime | None = None,
+    ) -> AdminAvailability | None:
+        from sqlalchemy import func
 
-        # Count active tasks, then score by *weighted* load so a higher-weighted
-        # admin absorbs more of the queue before being passed over.
-        scored: list[tuple[float, int, AdminAvailability]] = []
-        for a in active_candidates:
+        if not candidates:
+            return None
+        scored: list[tuple[float, int, int, AdminAvailability]] = []
+        for a in candidates:
             active_count = (
                 await session.execute(
                     select(func.count(AdminAssignment.id)).where(
                         AdminAssignment.admin_telegram_id == a.admin_telegram_id,
-                        AdminAssignment.status.in_(["assigned", "in_progress"]),
+                        AdminAssignment.status.in_(ACTIVE_STATUSES),
                     )
                 )
             ).scalar() or 0
             weight = max(1, a.weight or 1)
-            scored.append((active_count / weight, a.total_tasks_completed, a))
+            distance = self._minutes_until_next_slot(a, now) if slot_distance else 0
+            scored.append((active_count / weight, distance, a.total_tasks_completed, a))
+        scored.sort(key=lambda x: (x[0], x[1], x[2]))
+        return scored[0][3]
 
-        # Sort: lowest weighted load first, then fewest total completed.
-        scored.sort(key=lambda x: (x[0], x[1]))
-        return scored[0][2]
+    async def _create_assignment(
+        self,
+        session,
+        admin_id: int,
+        request_code: str,
+        stage: str,
+        avail: AdminAvailability,
+        *,
+        status: str,
+        assignment_mode: str,
+        now: datetime,
+        offer_attempt: int = 0,
+        expires_at: datetime | None = None,
+    ) -> AssignmentResult:
+        from sqlalchemy import func
+
+        active_count = (
+            await session.execute(
+                select(func.count(AdminAssignment.id)).where(
+                    AdminAssignment.admin_telegram_id == admin_id,
+                    AdminAssignment.status.in_(ACTIVE_STATUSES),
+                )
+            )
+        ).scalar() or 0
+
+        assignment = AdminAssignment(
+            admin_telegram_id=admin_id,
+            request_code=request_code,
+            stage=stage,
+            status=status,
+            assignment_mode=assignment_mode,
+            offer_attempt=offer_attempt,
+            offered_at=now if status == "offered" else None,
+            expires_at=expires_at,
+            task_count_at_assignment=active_count,
+        )
+        session.add(assignment)
+        await session.flush()
+
+        result_active = active_count + (1 if status in ACTIVE_STATUSES else 0)
+        return AssignmentResult(
+            admin_telegram_id=admin_id,
+            admin_name=avail.admin_name,
+            tasks_active=result_active,
+            tasks_completed=avail.total_tasks_completed,
+            status=status,
+            assignment_mode=assignment_mode,
+            expires_at=expires_at,
+        )
+
+    async def _existing_open_result(
+        self, session, request_code: str, stage: str
+    ) -> AssignmentResult | None:
+        row = (
+            await session.execute(
+                select(AdminAssignment).where(
+                    AdminAssignment.request_code == request_code,
+                    AdminAssignment.stage == stage,
+                    AdminAssignment.status.in_(OPEN_STATUSES),
+                ).order_by(AdminAssignment.created_at.desc())
+            )
+        ).scalars().first()
+        if row is None:
+            return None
+        avail = (
+            await session.execute(
+                select(AdminAvailability).where(
+                    AdminAvailability.admin_telegram_id == row.admin_telegram_id
+                )
+            )
+        ).scalar_one_or_none()
+        active = await self._active_count(session, row.admin_telegram_id)
+        return AssignmentResult(
+            admin_telegram_id=row.admin_telegram_id,
+            admin_name=avail.admin_name if avail else None,
+            tasks_active=active,
+            tasks_completed=avail.total_tasks_completed if avail else 0,
+            status=row.status,
+            assignment_mode=row.assignment_mode,
+            expires_at=row.expires_at,
+        )
+
+    async def _active_count(self, session, admin_id: int) -> int:
+        from sqlalchemy import func
+
+        return int((
+            await session.execute(
+                select(func.count(AdminAssignment.id)).where(
+                    AdminAssignment.admin_telegram_id == admin_id,
+                    AdminAssignment.status.in_(ACTIVE_STATUSES),
+                )
+            )
+        ).scalar() or 0)
+
+    async def _next_offer_attempt(
+        self, session, request_code: str, stage: str, admin_id: int
+    ) -> int:
+        from sqlalchemy import func
+
+        prior = (
+            await session.execute(
+                select(func.count(AdminAssignment.id)).where(
+                    AdminAssignment.request_code == request_code,
+                    AdminAssignment.stage == stage,
+                    AdminAssignment.admin_telegram_id == admin_id,
+                    AdminAssignment.status.in_(["offered", "skipped", "rejected"]),
+                )
+            )
+        ).scalar() or 0
+        return int(prior) + 1
+
+    async def _blocked_admin_ids(
+        self, session, stage: str, now: datetime, second_pass: bool
+    ) -> set[int]:
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        rows = (
+            await session.execute(
+                select(AdminAssignment.admin_telegram_id, AdminAssignment.status).where(
+                    AdminAssignment.stage == stage,
+                    AdminAssignment.status.in_(["skipped", "rejected"]),
+                    AdminAssignment.created_at >= day_start,
+                )
+            )
+        ).all()
+        blocked: set[int] = set()
+        for admin_id, status in rows:
+            if status == "rejected" or (status == "skipped" and not second_pass):
+                blocked.add(int(admin_id))
+        return blocked
+
+    async def _request_blocked_admin_ids(
+        self, session, request_code: str, stage: str, second_pass: bool
+    ) -> set[int]:
+        rows = (
+            await session.execute(
+                select(AdminAssignment.admin_telegram_id, AdminAssignment.status).where(
+                    AdminAssignment.request_code == request_code,
+                    AdminAssignment.stage == stage,
+                    AdminAssignment.status.in_(["skipped", "rejected"]),
+                )
+            )
+        ).all()
+        blocked: set[int] = set()
+        for admin_id, status in rows:
+            if status == "rejected" or (status == "skipped" and not second_pass):
+                blocked.add(int(admin_id))
+        return blocked
+
+    async def _users_by_telegram_id(self, session, telegram_ids: list[int]) -> dict[int, object]:
+        if not telegram_ids:
+            return {}
+        from nekofetch.infrastructure.database.postgres.models import User
+
+        rows = (
+            await session.execute(
+                select(User).where(User.telegram_id.in_(telegram_ids))
+            )
+        ).scalars().all()
+        return {int(u.telegram_id): u for u in rows}
+
+    @staticmethod
+    def _stage_enabled(avail: AdminAvailability, stage: str) -> bool:
+        return bool(avail.assigned_bots and stage in avail.assigned_bots)
+
+    @classmethod
+    def _recently_active(cls, user: object | None, now: datetime) -> bool:
+        last_seen = getattr(user, "last_seen_at", None)
+        if last_seen is None:
+            return False
+        return cls._utc(last_seen) >= now - timedelta(minutes=RECENT_ACTIVITY_MINUTES)
 
     @staticmethod
     def _is_on_break(avail: AdminAvailability, now: datetime) -> bool:
@@ -228,8 +491,8 @@ class AdminAssignmentEngine:
             return False
         for b in avail.scheduled_breaks:
             try:
-                start = datetime.fromisoformat(b["start"])
-                end = datetime.fromisoformat(b["end"])
+                start = AdminAssignmentEngine._utc(datetime.fromisoformat(b["start"]))
+                end = AdminAssignmentEngine._utc(datetime.fromisoformat(b["end"]))
                 if start <= now <= end:
                     return True
             except (KeyError, ValueError, TypeError):
@@ -238,11 +501,7 @@ class AdminAssignmentEngine:
 
     @staticmethod
     def _within_hours(avail: AdminAvailability, now: datetime) -> bool:
-        """True when ``now`` (UTC) falls in the admin's working window.
-
-        No window set ⇒ always on. A window that wraps midnight (start > end,
-        e.g. 22→6) is treated as spanning the boundary.
-        """
+        """True when ``now`` (UTC) falls in the admin's working window."""
         wh = avail.working_hours
         if not wh:
             return True
@@ -253,45 +512,285 @@ class AdminAssignmentEngine:
             return True
         hour = now.hour
         if start == end:
-            return True  # degenerate/full-day window
+            return True
         if start < end:
             return start <= hour < end
-        return hour >= start or hour < end  # wraps midnight
+        return hour >= start or hour < end
 
-    async def _create_assignment(
-        self, session, admin_id: int, request_code: str, stage: str, avail: AdminAvailability
-    ) -> AssignmentResult:
-        """Persist an assignment and return the result."""
-        from sqlalchemy import func
+    @classmethod
+    def _in_duty_slot(cls, avail: AdminAvailability, now: datetime) -> bool:
+        """Profile-less admins are duty-ready; profiled admins must be in-slot."""
+        local_now = cls._local_now(avail, now)
+        slots = cls._slots_for_local_day(avail, local_now)
+        if not slots:
+            return True
+        minute = local_now.hour * 60 + local_now.minute
+        cap = None
+        if avail.max_hours_per_day is not None:
+            cap = max(1, min(int(avail.max_hours_per_day), 24)) * 60
+        for slot in slots:
+            inside_for = cls._minutes_into_slot(minute, slot)
+            if inside_for is None:
+                continue
+            if cap is not None and inside_for >= cap:
+                continue
+            return True
+        return False
 
-        active_count = (
+    @classmethod
+    def _minutes_until_next_slot(
+        cls, avail: AdminAvailability, now: datetime | None
+    ) -> int:
+        if now is None:
+            return 0
+        local_now = cls._local_now(avail, now)
+        slots = cls._slots_for_local_day(avail, local_now)
+        if not slots:
+            return 0
+        minute = local_now.hour * 60 + local_now.minute
+        distances = []
+        for slot in slots:
+            clean = cls._clean_slot(slot)
+            if clean is None:
+                continue
+            start, _end = clean
+            if cls._minutes_into_slot(minute, clean) is not None:
+                distances.append(0)
+            else:
+                distances.append((start - minute) % _DAY_MINUTES)
+        return min(distances) if distances else 0
+
+    @classmethod
+    def _slots_for_local_day(cls, avail: AdminAvailability, local_now: datetime) -> list[list[int]]:
+        raw = avail.slots_weekend if local_now.weekday() >= 5 else avail.slots_weekday
+        slots: list[list[int]] = []
+        for slot in raw or []:
+            clean = cls._clean_slot(slot)
+            if clean is not None:
+                slots.append(clean)
+        return slots
+
+    @staticmethod
+    def _clean_slot(slot: object) -> list[int] | None:
+        try:
+            start = int(slot[0])  # type: ignore[index]
+            end = int(slot[1])  # type: ignore[index]
+        except (TypeError, ValueError, IndexError):
+            return None
+        if start == end:
+            return None
+        if not (0 <= start < _DAY_MINUTES and 0 <= end < _DAY_MINUTES):
+            return None
+        return [start, end]
+
+    @staticmethod
+    def _minutes_into_slot(minute: int, slot: list[int]) -> int | None:
+        start, end = slot
+        if start <= end:
+            if start <= minute < end:
+                return minute - start
+            return None
+        if minute >= start or minute < end:
+            return (minute - start) % _DAY_MINUTES
+        return None
+
+    @staticmethod
+    def _local_now(avail: AdminAvailability, now: datetime) -> datetime:
+        tz_name = avail.timezone or "UTC"
+        try:
+            tz = ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError:
+            tz = UTC
+        return now.astimezone(tz)
+
+    @staticmethod
+    def _utc(value: datetime | None) -> datetime:
+        if value is None:
+            return datetime.now(UTC)
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    async def accept_offer(
+        self, request_code: str, stage: str, admin_telegram_id: int, *, _session=None
+    ) -> AssignmentResult | None:
+        """Turn an unexpired offer into a duty assignment."""
+        now = self._utc(None)
+        async with self._maybe_session(_session) as session:
+            if _session is None:
+                async with session.begin():
+                    return await self._accept_offer_impl(
+                        session, request_code, stage, admin_telegram_id, now
+                    )
+            return await self._accept_offer_impl(
+                session, request_code, stage, admin_telegram_id, now
+            )
+
+    async def _accept_offer_impl(
+        self, session, request_code: str, stage: str, admin_telegram_id: int, now: datetime
+    ) -> AssignmentResult | None:
+        row = (
             await session.execute(
-                select(func.count(AdminAssignment.id)).where(
-                    AdminAssignment.admin_telegram_id == admin_id,
-                    AdminAssignment.status.in_(["assigned", "in_progress"]),
+                select(AdminAssignment).where(
+                    AdminAssignment.request_code == request_code,
+                    AdminAssignment.stage == stage,
+                    AdminAssignment.admin_telegram_id == admin_telegram_id,
+                    AdminAssignment.status == "offered",
+                ).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if row is None or (row.expires_at and self._utc(row.expires_at) <= now):
+            return None
+        active_count = await self._active_count(session, admin_telegram_id)
+        row.status = "assigned"
+        row.assignment_mode = "duty"
+        row.responded_at = now
+        row.decision_reason = "accepted_offer"
+        row.task_count_at_assignment = active_count
+        row.expires_at = None
+        avail = (
+            await session.execute(
+                select(AdminAvailability).where(
+                    AdminAvailability.admin_telegram_id == admin_telegram_id
                 )
             )
-        ).scalar() or 0
-
-        assignment = AdminAssignment(
-            admin_telegram_id=admin_id,
-            request_code=request_code,
-            stage=stage,
+        ).scalar_one_or_none()
+        return AssignmentResult(
+            admin_telegram_id=admin_telegram_id,
+            admin_name=avail.admin_name if avail else None,
+            tasks_active=active_count + 1,
+            tasks_completed=avail.total_tasks_completed if avail else 0,
             status="assigned",
-            task_count_at_assignment=active_count,
+            assignment_mode="duty",
         )
-        session.add(assignment)
+
+    async def reject_offer(
+        self,
+        request_code: str,
+        stage: str,
+        admin_telegram_id: int,
+        *,
+        reason: str = "manual_reject",
+        _session=None,
+    ) -> bool:
+        """Reject an offer and exclude that admin from the stage for the day."""
+        now = self._utc(None)
+        async with self._maybe_session(_session) as session:
+            if _session is None:
+                async with session.begin():
+                    return await self._reject_offer_impl(
+                        session, request_code, stage, admin_telegram_id, reason, now
+                    )
+            return await self._reject_offer_impl(
+                session, request_code, stage, admin_telegram_id, reason, now
+            )
+
+    async def _reject_offer_impl(
+        self,
+        session,
+        request_code: str,
+        stage: str,
+        admin_telegram_id: int,
+        reason: str,
+        now: datetime,
+    ) -> bool:
+        row = (
+            await session.execute(
+                select(AdminAssignment).where(
+                    AdminAssignment.request_code == request_code,
+                    AdminAssignment.stage == stage,
+                    AdminAssignment.admin_telegram_id == admin_telegram_id,
+                    AdminAssignment.status == "offered",
+                ).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return False
+        row.status = "rejected"
+        row.responded_at = now
+        row.decision_reason = reason[:64]
+        row.expires_at = None
+        return True
+
+    async def expire_offers(
+        self,
+        *,
+        now: datetime | None = None,
+        reassign: bool = True,
+        _session=None,
+    ) -> list[OfferExpiry]:
+        """Expire stale offers and optionally advance the ladder.
+
+        First silent timeout becomes ``skipped`` and the engine tries the next
+        candidate. If nobody else is viable, it reoffers the same admin as the
+        second pass. A second silent timeout becomes ``rejected`` for the day.
+        """
+        clock = self._utc(now)
+        async with self._maybe_session(_session) as session:
+            if _session is None:
+                async with session.begin():
+                    return await self._expire_offers_impl(session, clock, reassign)
+            return await self._expire_offers_impl(session, clock, reassign)
+
+    async def _expire_offers_impl(
+        self, session, now: datetime, reassign: bool
+    ) -> list[OfferExpiry]:
+        rows = (
+            await session.execute(
+                select(AdminAssignment).where(
+                    AdminAssignment.status == "offered",
+                    AdminAssignment.expires_at.is_not(None),
+                    AdminAssignment.expires_at <= now,
+                ).with_for_update()
+            )
+        ).scalars().all()
+
+        expired: list[OfferExpiry] = []
+        for row in rows:
+            second_silence = int(row.offer_attempt or 0) >= 2
+            row.status = "rejected" if second_silence else "skipped"
+            row.responded_at = now
+            row.decision_reason = "second_silent_timeout" if second_silence else "silent_timeout"
+            row.expires_at = None
+            expired.append(
+                OfferExpiry(
+                    request_code=row.request_code,
+                    stage=row.stage,
+                    admin_telegram_id=row.admin_telegram_id,
+                    final_status=row.status,
+                    decision_reason=row.decision_reason,
+                )
+            )
         await session.flush()
 
-        return AssignmentResult(
-            admin_telegram_id=admin_id,
-            admin_name=avail.admin_name,
-            tasks_active=active_count + 1,
-            tasks_completed=avail.total_tasks_completed,
-        )
+        if not reassign:
+            return expired
 
-    async def complete_task(self, request_code: str, stage: str,
-                            _session=None) -> None:
+        for item in expired:
+            result = await self._assign_impl(
+                session,
+                item.request_code,
+                item.stage,
+                None,
+                now,
+                second_pass=False,
+                excluded_admin_ids={item.admin_telegram_id},
+            )
+            if result is None and item.final_status == "skipped":
+                result = await self._assign_impl(
+                    session,
+                    item.request_code,
+                    item.stage,
+                    None,
+                    now,
+                    second_pass=True,
+                    excluded_admin_ids=set(),
+                )
+            if result is not None:
+                item.reassigned_to = result.admin_telegram_id
+        return expired
+
+    async def complete_task(self, request_code: str, stage: str, _session=None) -> None:
         """Mark a task as completed and increment the admin's counter."""
         async with self._maybe_session(_session) as session:
             assignment = (
@@ -299,17 +798,15 @@ class AdminAssignmentEngine:
                     select(AdminAssignment).where(
                         AdminAssignment.request_code == request_code,
                         AdminAssignment.stage == stage,
-                        AdminAssignment.status == "assigned",
+                        AdminAssignment.status.in_(ACTIVE_STATUSES),
                     )
                 )
             ).scalar_one_or_none()
             if assignment is None:
                 return
             assignment.status = "completed"
-            assignment.completed_at = datetime.now(timezone.utc)
+            assignment.completed_at = datetime.now(UTC)
 
-            # Atomic increment — a Python read-then-write loses counts
-            # when two admins complete tasks concurrently.
             from sqlalchemy import update
 
             await session.execute(
@@ -318,24 +815,40 @@ class AdminAssignmentEngine:
                 .values(total_tasks_completed=AdminAvailability.total_tasks_completed + 1)
             )
 
-            await session.commit()
+            if _session is None:
+                await session.commit()
 
-    async def get_active_tasks(self, admin_telegram_id: int,
-                                _session=None) -> list[AdminAssignment]:
-        """Get all active tasks for an admin."""
+    async def get_active_tasks(
+        self, admin_telegram_id: int, _session=None
+    ) -> list[AdminAssignment]:
+        """Get all duty tasks for an admin."""
         async with self._maybe_session(_session) as session:
             result = await session.execute(
                 select(AdminAssignment).where(
                     AdminAssignment.admin_telegram_id == admin_telegram_id,
-                    AdminAssignment.status.in_(["assigned", "in_progress"]),
+                    AdminAssignment.status.in_(ACTIVE_STATUSES),
                 ).order_by(AdminAssignment.created_at.asc())
             )
             return list(result.scalars().all())
 
-    # ── per-admin timezone ─────────────────────────────────────────────────────
+    async def get_pending_offers(
+        self, admin_telegram_id: int, *, now: datetime | None = None, _session=None
+    ) -> list[AdminAssignment]:
+        """Get unexpired pending offers for an admin."""
+        clock = self._utc(now)
+        async with self._maybe_session(_session) as session:
+            result = await session.execute(
+                select(AdminAssignment).where(
+                    AdminAssignment.admin_telegram_id == admin_telegram_id,
+                    AdminAssignment.status == "offered",
+                    AdminAssignment.expires_at.is_not(None),
+                    AdminAssignment.expires_at > clock,
+                ).order_by(AdminAssignment.expires_at.asc())
+            )
+            return list(result.scalars().all())
 
     async def get_timezone(self, admin_telegram_id: int, _session=None) -> str | None:
-        """The admin's IANA timezone name, or ``None`` (→ global default)."""
+        """The admin's IANA timezone name, or ``None`` for global default."""
         async with self._maybe_session(_session) as session:
             row = (
                 await session.execute(
@@ -347,8 +860,12 @@ class AdminAssignmentEngine:
             return row.timezone if row else None
 
     async def set_timezone(
-        self, admin_telegram_id: int, tz_name: str, *,
-        admin_name: str | None = None, _session=None,
+        self,
+        admin_telegram_id: int,
+        tz_name: str,
+        *,
+        admin_name: str | None = None,
+        _session=None,
     ) -> None:
         """Set the admin's IANA timezone, creating their availability row if new."""
         async with self._maybe_session(_session) as session:

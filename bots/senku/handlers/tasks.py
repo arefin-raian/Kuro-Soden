@@ -12,10 +12,8 @@ from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import CallbackQuery, Message
 
-from nekofetch.bots.fsm import FSM
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
-from nekofetch.localization.messages import t
 from nekofetch.ui.components import cb, keyboard
 from nekofetch.ui.screens import Screen, send_screen
 
@@ -25,8 +23,6 @@ STATE_CHANNEL_USERNAME = "senku:await_channel_username"
 
 
 def register(client: Client, container: Container) -> None:
-    fsm = FSM(container.redis, bot="senku")
-
     # ── /tasks — View assigned distribution tasks ────────────────────────────
     @client.on_message(filters.command("tasks"))
     async def _tasks(_: Client, message: Message) -> None:
@@ -38,12 +34,13 @@ def register(client: Client, container: Container) -> None:
 
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         active = await engine.get_active_tasks(message.from_user.id)
+        offers = await engine.get_pending_offers(message.from_user.id)
 
         from kurosoden.shared import senku_voice as V
         from nekofetch.ui.artwork import pick_artwork
-        from nekofetch.ui.screens import Screen, card, send_screen
+        from nekofetch.ui.screens import card, send_screen
 
-        if not active:
+        if not active and not offers:
             await send_screen(
                 client, message.chat.id,
                 card(V.TASKS_EMPTY, image=pick_artwork("senku"), bot_name="senku"),
@@ -51,6 +48,19 @@ def register(client: Client, container: Container) -> None:
             return
 
         rows: list[list[tuple[str, str]]] = []
+        for a in offers[:5]:
+            title = a.request_code
+            try:
+                async with session_scope(container.pg_sessionmaker) as s:
+                    req = await RequestRepository(s).get_by_code(a.request_code)
+                    if req:
+                        title = req.anime_title
+            except Exception:
+                pass
+            rows.append([(f"Accept - {title}"[:60],
+                          cb("senku", "offer", "accept", a.request_code))])
+            rows.append([(f"Reject - {title}"[:60],
+                          cb("senku", "offer", "reject", a.request_code))])
         for a in active[:10]:
             title = a.request_code
             try:
@@ -64,11 +74,34 @@ def register(client: Client, container: Container) -> None:
             label = f"{icon} {title}"[:60]
             rows.append([(label, cb("senku", "wiz", "open", a.request_code))])
 
+        caption = V.tasks_title(len(active))
+        if offers:
+            caption = f"<b>Pending offers:</b> {len(offers)}\n\n{caption}"
         await send_screen(
             client, message.chat.id,
-            card(V.tasks_title(len(active)), image=pick_artwork("senku"),
+            card(caption, image=pick_artwork("senku"),
                  bot_name="senku", buttons=rows),
         )
+
+    @client.on_callback_query(filters.regex(r"^senku\|offer\|"))
+    async def _offer_cb(_: Client, q: CallbackQuery) -> None:
+        if q.from_user is None:
+            await q.answer()
+            return
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
+
+        parts = (q.data or "").split("|", 3)
+        action = parts[2] if len(parts) > 2 else ""
+        code = parts[3] if len(parts) > 3 else ""
+        engine = AdminAssignmentEngine(container.pg_sessionmaker)
+        if action == "accept":
+            result = await engine.accept_offer(code, "senku", q.from_user.id)
+            await q.answer("Accepted. Open /tasks.", show_alert=result is None)
+        elif action == "reject":
+            ok = await engine.reject_offer(code, "senku", q.from_user.id)
+            await q.answer("Rejected." if ok else "Offer expired.", show_alert=not ok)
+        else:
+            await q.answer()
 
     # ── /create — handled by the channel-creation wizard (handlers/wizard.py) ──
 

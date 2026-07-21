@@ -40,8 +40,9 @@ def register(client: Client, container: Container) -> None:
 
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         active = await engine.get_active_tasks(admin_id)
+        offers = await engine.get_pending_offers(admin_id)
 
-        if not active:
+        if not active and not offers:
             screen = Screen(
                 caption=(
                     "<b>⚔️ No download tasks right now.</b>\n\n"
@@ -59,7 +60,7 @@ def register(client: Client, container: Container) -> None:
         try:
             async with session_scope(container.pg_sessionmaker) as s:
                 repo = RequestRepository(s)
-                for a in active[:10]:
+                for a in [*offers[:5], *active[:10]]:
                     req = await repo.get_by_code(a.request_code)
                     titles[a.request_code] = req.anime_title if req else a.request_code
         except Exception:  # noqa: BLE001 - fall back to codes; never blank the list
@@ -67,6 +68,18 @@ def register(client: Client, container: Container) -> None:
 
         lines = ["<b>⚔️ Your Download Tasks</b>", ""]
         rows: list[tuple[str, str]] = []
+        if offers:
+            lines.append("<b>Pending offers</b>")
+            for a in offers[:5]:
+                title = titles.get(a.request_code, a.request_code)
+                lines.append(f"Offer  <b>{title}</b>  <code>{a.request_code}</code>")
+                rows.append((f"Accept - {title[:26]}",
+                             cb("levi", "offer", "accept", a.request_code)))
+                rows.append((f"Reject - {title[:26]}",
+                             cb("levi", "offer", "reject", a.request_code)))
+            lines.append("")
+        if active:
+            lines.append("<b>Assigned</b>")
         for a in active[:10]:
             icon = "🔄" if a.status == "in_progress" else "⏳"
             title = titles.get(a.request_code, a.request_code)
@@ -99,4 +112,25 @@ def register(client: Client, container: Container) -> None:
             await q.answer()
             return
         await q.answer()
+        await _render_tasks(q.message.chat.id, q.from_user.id, old_msg=q.message)
+
+    @client.on_callback_query(filters.regex(r"^levi\|offer\|"))
+    async def _offer_cb(_: Client, q: CallbackQuery) -> None:
+        if q.message is None or q.from_user is None:
+            await q.answer()
+            return
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
+
+        parts = (q.data or "").split("|", 3)
+        action = parts[2] if len(parts) > 2 else ""
+        code = parts[3] if len(parts) > 3 else ""
+        engine = AdminAssignmentEngine(container.pg_sessionmaker)
+        if action == "accept":
+            result = await engine.accept_offer(code, "levi", q.from_user.id)
+            await q.answer("Accepted." if result else "Offer expired.", show_alert=result is None)
+        elif action == "reject":
+            ok = await engine.reject_offer(code, "levi", q.from_user.id)
+            await q.answer("Rejected." if ok else "Offer expired.", show_alert=not ok)
+        else:
+            await q.answer()
         await _render_tasks(q.message.chat.id, q.from_user.id, old_msg=q.message)

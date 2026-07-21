@@ -149,8 +149,9 @@ def register(client: Client, container: Container) -> None:
 
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         active = await engine.get_active_tasks(message.from_user.id)
+        offers = await engine.get_pending_offers(message.from_user.id)
 
-        if not active:
+        if not active and not offers:
             await message.reply(
                 "<b>🔮 No active publishing tasks.</b>\n\n"
                 "No anime assigned to you for publishing right now.",
@@ -159,6 +160,23 @@ def register(client: Client, container: Container) -> None:
             return
 
         lines = ["<b>🔮 Your Publishing Tasks</b>\n"]
+        rows: list[list[tuple[str, str]]] = []
+        for a in offers[:5]:
+            title = a.request_code
+            try:
+                async with session_scope(container.pg_sessionmaker) as s:
+                    req = await RequestRepository(s).get_by_code(a.request_code)
+                    if req:
+                        title = req.anime_title
+            except Exception:
+                pass
+            lines.append(f"Offer <code>{a.request_code}</code> - <b>{title}</b>")
+            rows.append([(f"Accept - {title}"[:60],
+                          cb("gojo", "offer", "accept", a.request_code))])
+            rows.append([(f"Reject - {title}"[:60],
+                          cb("gojo", "offer", "reject", a.request_code))])
+        if active:
+            lines.append("\n<b>Assigned</b>")
         for a in active[:10]:
             status_icon = "🔄" if a.status == "in_progress" else "⏳"
             title = a.request_code
@@ -170,9 +188,33 @@ def register(client: Client, container: Container) -> None:
             except Exception:
                 pass
             lines.append(f"{status_icon} <code>{a.request_code}</code> — <b>{title}</b>")
-        await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
+        await message.reply(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard(*rows) if rows else None,
+        )
 
     # ── Callback handlers (registered ONCE, not dynamically) ────────────────
+    @client.on_callback_query(filters.regex(r"^gojo\|offer\|"))
+    async def _offer_cb(_: Client, q: CallbackQuery) -> None:
+        if q.from_user is None:
+            await q.answer()
+            return
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
+
+        parts = (q.data or "").split("|", 3)
+        action = parts[2] if len(parts) > 2 else ""
+        code = parts[3] if len(parts) > 3 else ""
+        engine = AdminAssignmentEngine(container.pg_sessionmaker)
+        if action == "accept":
+            result = await engine.accept_offer(code, "gojo", q.from_user.id)
+            await q.answer("Accepted. Run /tasks.", show_alert=result is None)
+        elif action == "reject":
+            ok = await engine.reject_offer(code, "gojo", q.from_user.id)
+            await q.answer("Rejected." if ok else "Offer expired.", show_alert=not ok)
+        else:
+            await q.answer()
+
     @client.on_callback_query(filters.regex(r"^gojo\|publish_confirm\|"))
     async def _cb_publish(_: Client, q: CallbackQuery) -> None:
         _, _, code = q.data.split("|", 2)

@@ -6,12 +6,14 @@ whitelist always wins), and answers permission checks used by the bot middleware
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from nekofetch.core.config import EnvSettings
 from nekofetch.core.container import Container
 from nekofetch.core.exceptions import PermissionDenied
 from nekofetch.domain.enums import ROLE_PERMISSIONS, Permission, Role
-from nekofetch.infrastructure.database.postgres.session import session_scope
 from nekofetch.infrastructure.database.postgres.models import User
+from nekofetch.infrastructure.database.postgres.session import session_scope
 from nekofetch.infrastructure.repositories.user_repo import UserRepository
 
 
@@ -31,6 +33,7 @@ class AuthService:
             # Admin whitelist from env is authoritative.
             if telegram_id in self._env.admin_ids and user.role != Role.ADMIN:
                 user.role = Role.ADMIN
+            user.last_seen_at = datetime.now(UTC)
             await session.flush()
             session.expunge(user)
             return user
