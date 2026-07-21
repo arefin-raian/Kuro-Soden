@@ -41,12 +41,16 @@ async def handoff_download_to_distribution(
 
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         await engine.complete_task(code, "levi")
-        await engine.assign(code, "senku")
+        assignment = await engine.assign(code, "senku")
     except Exception as exc:  # noqa: BLE001
         log.warning("handoff.assign.failed", code=code, error=str(exc))
+        assignment = None
+    if assignment is None:
+        log.info("handoff.deferred_or_unassigned", code=code, stage="senku")
+        return
 
     # ── 2. DM every admin via Senku (the stage that acts next) ─────────────
-    admin_ids = list(getattr(container.env, "admin_ids", []) or [])
+    admin_ids = [assignment.admin_telegram_id]
     if not admin_ids:
         log.warning("handoff.no_admins", code=code)
         return
@@ -114,12 +118,16 @@ async def handoff_distribution_to_publish(
 
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         await engine.complete_task(code, "senku")
-        await engine.assign(code, "gojo")
+        assignment = await engine.assign(code, "gojo")
     except Exception as exc:  # noqa: BLE001
         log.warning("handoff.publish.assign.failed", code=code, error=str(exc))
+        assignment = None
+    if assignment is None:
+        log.info("handoff.publish.deferred_or_unassigned", code=code, stage="gojo")
+        return
 
     # ── 2. DM every admin via Gojo (the stage that acts next) ──────────────
-    admin_ids = list(getattr(container.env, "admin_ids", []) or [])
+    admin_ids = [assignment.admin_telegram_id]
     if not admin_ids:
         log.warning("handoff.publish.no_admins", code=code)
         return

@@ -27,6 +27,8 @@ ACTIVE_STATUSES = ("assigned", "in_progress")
 OPEN_STATUSES = ("assigned", "in_progress", "offered")
 OFFER_TIMEOUT_MINUTES = 60
 RECENT_ACTIVITY_MINUTES = 15
+QUIET_START_MINUTE = 4 * 60
+QUIET_END_MINUTE = 8 * 60
 _DAY_MINUTES = 24 * 60
 
 
@@ -174,6 +176,7 @@ class AdminAssignmentEngine:
                 and self._stage_enabled(forced, stage)
                 and not self._is_on_break(forced, now)
                 and self._within_hours(forced, now)
+                and not self._in_quiet_hours(forced, now)
             ):
                 return await self._create_assignment(
                     session,
@@ -232,7 +235,10 @@ class AdminAssignmentEngine:
                 expires_at=now + timedelta(minutes=OFFER_TIMEOUT_MINUTES),
             )
 
-        fallback = await self._best_by_load(session, candidates, slot_distance=True, now=now)
+        fallback_candidates = [a for a in candidates if not self._in_quiet_hours(a, now)]
+        fallback = await self._best_by_load(
+            session, fallback_candidates, slot_distance=True, now=now
+        )
         if fallback is None:
             return None
         return await self._create_assignment(
@@ -256,6 +262,22 @@ class AdminAssignmentEngine:
             session, [a for a in candidates if self._in_duty_slot(a, clock)]
         )
 
+    async def has_quiet_candidates(self, stage: str, *, now: datetime | None = None) -> bool:
+        """True when qualified admins exist but are inside their local quiet window."""
+        clock = self._utc(now)
+        async with self._maybe_session() as session:
+            result = await session.execute(
+                select(AdminAvailability).where(AdminAvailability.is_available.is_(True))
+            )
+            rows = list(result.scalars().all())
+            return any(
+                self._stage_enabled(a, stage)
+                and not self._is_on_break(a, clock)
+                and self._within_hours(a, clock)
+                and self._in_quiet_hours(a, clock)
+                for a in rows
+            )
+
     async def _stage_candidates(
         self,
         session,
@@ -271,10 +293,13 @@ class AdminAssignmentEngine:
             ).with_for_update()
         )
         rows = list(result.scalars().all())
-        blocked = await self._blocked_admin_ids(session, stage, now, second_pass)
+        availability_by_id = {int(a.admin_telegram_id): a for a in rows}
+        blocked = await self._blocked_admin_ids(
+            session, stage, now, second_pass, availability_by_id
+        )
         if request_code is not None:
             blocked |= await self._request_blocked_admin_ids(
-                session, request_code, stage, second_pass
+                session, request_code, stage, now, second_pass, availability_by_id
             )
         blocked |= excluded_admin_ids
         return [
@@ -347,6 +372,11 @@ class AdminAssignmentEngine:
             offer_attempt=offer_attempt,
             offered_at=now if status == "offered" else None,
             expires_at=expires_at,
+            decision_reason=(
+                "quiet_offer"
+                if status == "offered" and self._in_quiet_hours(avail, now)
+                else "slot_offer" if status == "offered" else None
+            ),
             task_count_at_assignment=active_count,
         )
         session.add(assignment)
@@ -425,12 +455,21 @@ class AdminAssignmentEngine:
         return int(prior) + 1
 
     async def _blocked_admin_ids(
-        self, session, stage: str, now: datetime, second_pass: bool
+        self,
+        session,
+        stage: str,
+        now: datetime,
+        second_pass: bool,
+        availability_by_id: dict[int, AdminAvailability],
     ) -> set[int]:
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         rows = (
             await session.execute(
-                select(AdminAssignment.admin_telegram_id, AdminAssignment.status).where(
+                select(
+                    AdminAssignment.admin_telegram_id,
+                    AdminAssignment.status,
+                    AdminAssignment.decision_reason,
+                ).where(
                     AdminAssignment.stage == stage,
                     AdminAssignment.status.in_(["skipped", "rejected"]),
                     AdminAssignment.created_at >= day_start,
@@ -438,17 +477,35 @@ class AdminAssignmentEngine:
             )
         ).all()
         blocked: set[int] = set()
-        for admin_id, status in rows:
-            if status == "rejected" or (status == "skipped" and not second_pass):
-                blocked.add(int(admin_id))
+        for admin_id, status, reason in rows:
+            admin_id = int(admin_id)
+            if status == "skipped" and not second_pass:
+                blocked.add(admin_id)
+            elif status == "rejected":
+                if reason == "quiet_reject":
+                    avail = availability_by_id.get(admin_id)
+                    if avail is not None and self._in_quiet_hours(avail, now):
+                        blocked.add(admin_id)
+                else:
+                    blocked.add(admin_id)
         return blocked
 
     async def _request_blocked_admin_ids(
-        self, session, request_code: str, stage: str, second_pass: bool
+        self,
+        session,
+        request_code: str,
+        stage: str,
+        now: datetime,
+        second_pass: bool,
+        availability_by_id: dict[int, AdminAvailability],
     ) -> set[int]:
         rows = (
             await session.execute(
-                select(AdminAssignment.admin_telegram_id, AdminAssignment.status).where(
+                select(
+                    AdminAssignment.admin_telegram_id,
+                    AdminAssignment.status,
+                    AdminAssignment.decision_reason,
+                ).where(
                     AdminAssignment.request_code == request_code,
                     AdminAssignment.stage == stage,
                     AdminAssignment.status.in_(["skipped", "rejected"]),
@@ -456,9 +513,17 @@ class AdminAssignmentEngine:
             )
         ).all()
         blocked: set[int] = set()
-        for admin_id, status in rows:
-            if status == "rejected" or (status == "skipped" and not second_pass):
-                blocked.add(int(admin_id))
+        for admin_id, status, reason in rows:
+            admin_id = int(admin_id)
+            if status == "skipped" and not second_pass:
+                blocked.add(admin_id)
+            elif status == "rejected":
+                if reason == "quiet_reject":
+                    avail = availability_by_id.get(admin_id)
+                    if avail is not None and self._in_quiet_hours(avail, now):
+                        blocked.add(admin_id)
+                else:
+                    blocked.add(admin_id)
         return blocked
 
     async def _users_by_telegram_id(self, session, telegram_ids: list[int]) -> dict[int, object]:
@@ -520,6 +585,8 @@ class AdminAssignmentEngine:
     @classmethod
     def _in_duty_slot(cls, avail: AdminAvailability, now: datetime) -> bool:
         """Profile-less admins are duty-ready; profiled admins must be in-slot."""
+        if cls._in_quiet_hours(avail, now):
+            return False
         local_now = cls._local_now(avail, now)
         slots = cls._slots_for_local_day(avail, local_now)
         if not slots:
@@ -536,6 +603,12 @@ class AdminAssignmentEngine:
                 continue
             return True
         return False
+
+    @classmethod
+    def _in_quiet_hours(cls, avail: AdminAvailability, now: datetime) -> bool:
+        local_now = cls._local_now(avail, now)
+        minute = local_now.hour * 60 + local_now.minute
+        return QUIET_START_MINUTE <= minute < QUIET_END_MINUTE
 
     @classmethod
     def _minutes_until_next_slot(
@@ -708,7 +781,11 @@ class AdminAssignmentEngine:
             return False
         row.status = "rejected"
         row.responded_at = now
-        row.decision_reason = reason[:64]
+        row.decision_reason = (
+            "quiet_reject"
+            if reason == "manual_reject" and row.decision_reason == "quiet_offer"
+            else reason[:64]
+        )
         row.expires_at = None
         return True
 

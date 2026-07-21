@@ -370,9 +370,6 @@ class TestAdminAssignmentEngineDB:
 
     @pytest.mark.asyncio
     async def test_complete_task_increments_counter(self, engine, session, admin_assignment, admin_availability):
-        from sqlalchemy import select
-        from kurosoden.shared.admin_assignment import AdminAvailability
-
         prev = admin_availability.total_tasks_completed
         await engine.complete_task("REQ-0001", "levi")
         await session.refresh(admin_availability)
@@ -659,3 +656,92 @@ class TestSlotAwareAssignment:
         assert expired[0].final_status == "rejected"
         assert row.status == "rejected"
         assert row.decision_reason == "second_silent_timeout"
+
+    @pytest.mark.asyncio
+    async def test_quiet_hours_turn_in_slot_admin_into_offer_when_active(self, engine, session):
+        from sqlalchemy import select
+        from kurosoden.shared.admin_assignment import AdminAssignment
+        from kurosoden.tests.helpers import _create_admin_availability, _create_user
+
+        now = datetime(2026, 7, 21, 4, 30, tzinfo=timezone.utc)
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=880,
+            admin_name="NightActive",
+            timezone="UTC",
+            slots_weekday=[[4 * 60, 6 * 60]],
+            slots_weekend=[],
+        )
+        await _create_user(session, telegram_id=880, role="staff",
+                           username="night", last_seen_at=now - timedelta(minutes=2))
+
+        result = await engine.assign("REQ-QUIET-OFFER", "levi", now=now)
+
+        assert result is not None
+        assert result.admin_telegram_id == 880
+        assert result.status == "offered"
+        row = (await session.execute(
+            select(AdminAssignment).where(AdminAssignment.request_code == "REQ-QUIET-OFFER")
+        )).scalar_one()
+        assert row.decision_reason == "quiet_offer"
+
+    @pytest.mark.asyncio
+    async def test_quiet_hours_do_not_assign_inactive_admin(self, engine, session):
+        from kurosoden.tests.helpers import _create_admin_availability
+
+        now = datetime(2026, 7, 21, 4, 30, tzinfo=timezone.utc)
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=881,
+            admin_name="NightInactive",
+            timezone="UTC",
+            slots_weekday=[[4 * 60, 6 * 60]],
+            slots_weekend=[],
+        )
+
+        result = await engine.assign("REQ-QUIET-FALLBACK", "levi", now=now)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_quiet_reject_blocks_until_8am_then_slot_can_assign(self, engine, session):
+        from kurosoden.shared.admin_assignment import AdminAssignment
+        from kurosoden.tests.helpers import _create_admin_availability
+
+        quiet = datetime(2026, 7, 21, 4, 30, tzinfo=timezone.utc)
+        after_start = datetime(2026, 7, 21, 8, 30, tzinfo=timezone.utc)
+        await _create_admin_availability(
+            session,
+            admin_telegram_id=882,
+            admin_name="Morning",
+            timezone="UTC",
+            slots_weekday=[[8 * 60, 10 * 60]],
+            slots_weekend=[],
+        )
+        row = AdminAssignment(
+            admin_telegram_id=882,
+            request_code="REQ-QUIET-REJECT",
+            stage="levi",
+            status="offered",
+            assignment_mode="offer",
+            offer_attempt=1,
+            offered_at=quiet,
+            expires_at=quiet + timedelta(hours=1),
+            decision_reason="quiet_offer",
+        )
+        session.add(row)
+        await session.commit()
+
+        assert await engine.reject_offer("REQ-QUIET-REJECT", "levi", 882) is True
+        await session.refresh(row)
+        assert row.status == "rejected"
+        assert row.decision_reason == "quiet_reject"
+
+        blocked = await engine.assign("REQ-QUIET-NEW", "levi", now=quiet)
+        assert blocked is None
+
+        released = await engine.assign("REQ-MORNING-NEW", "levi", now=after_start)
+        assert released is not None
+        assert released.admin_telegram_id == 882
+        assert released.status == "assigned"
+        assert released.assignment_mode == "duty"

@@ -24,6 +24,7 @@ from pyrogram.types import CallbackQuery, Message
 from nekofetch.bots.fsm import FSM
 from nekofetch.core.container import Container
 from nekofetch.core.exceptions import NekoFetchError
+from nekofetch.core.logging import get_logger
 from nekofetch.domain.enums import DownloadScope, RequestStatus
 from nekofetch.localization.messages import M, t
 from nekofetch.ui.components import cb, lock_buttons
@@ -58,6 +59,8 @@ from nekofetch.bots.admin.handlers.requests import (
 # ── Lelouch-specific additions ───────────────────────────────────────────────
 from kurosoden.shared.admin_assignment import AdminAssignmentEngine
 from kurosoden.shared.dedup import DedupService
+
+log = get_logger(__name__)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -507,9 +510,14 @@ def register(client: Client, container: Container) -> None:
         # or on break) it returns None and writes NO row; we then pin the task to
         # the owner via ``reassign`` (which creates a row when none exists) so the
         # work is always visible to a human and never silently dropped.
+        assignment_result = None
+        deferred_for_quiet_hours = False
         try:
             result = await assignment.assign(receipt.code, "levi")
+            assignment_result = result
             if result is None:
+                deferred_for_quiet_hours = await assignment.has_quiet_candidates("levi")
+            if result is None and not deferred_for_quiet_hours:
                 from kurosoden.shared.management_service import ManagementService
                 from kurosoden.shared.owner_seed import _owner_id
 
@@ -535,12 +543,15 @@ def register(client: Client, container: Container) -> None:
         # so nothing ever reached a human. We DM every configured admin via the
         # downloader bot (Levi) — the stage that acts next — falling back to
         # this (Lelouch) client if Levi isn't running.
-        await _notify_admins_new_request(receipt.code, title, user_name, user_id,
-                                         franchise_json)
+        if deferred_for_quiet_hours:
+            log.info("lelouch.assign.deferred_quiet_hours", code=receipt.code)
+        else:
+            await _notify_admins_new_request(receipt.code, title, user_name, user_id,
+                                             franchise_json, assignment_result)
 
     async def _notify_admins_new_request(
         code: str, title: str, requester: str, requester_id: int,
-        franchise_json: dict,
+        franchise_json: dict, assignment_result=None,
     ) -> None:
         """DM every configured admin about a freshly-submitted request.
 
@@ -550,7 +561,11 @@ def register(client: Client, container: Container) -> None:
         """
         from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-        admin_ids = list(getattr(container.env, "admin_ids", []) or [])
+        admin_ids = (
+            [assignment_result.admin_telegram_id]
+            if assignment_result is not None
+            else list(getattr(container.env, "admin_ids", []) or [])
+        )
         if not admin_ids:
             log.warning("lelouch.notify.no_admins", code=code)
             return
@@ -608,7 +623,7 @@ def register(client: Client, container: Container) -> None:
                         admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
                     )
                 sent += 1
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 # A bad image URL shouldn't cost the admin their ping — retry once
                 # as plain text before giving up on this admin.
                 try:
