@@ -256,27 +256,37 @@ def batch_none_found(skipped: list[str] | None = None) -> str:
 
 # ── Admin panel / management ────────────────────────────────────────────────
 
-def admin_panel(mode: str, requests_open: bool, pending: int, work_open: int) -> str:
+def admin_panel(mode: str, requests_open: bool, total: int, working: int) -> str:
+    """Command — the War Table. Deliberately lean: the gate, the tempo, and the
+    single figure that matters at a glance (total requests ever). The rich
+    breakdown lives on The Board."""
     gate = ("🟢 <b>Accepting requests</b>" if requests_open
             else "🔴 <b>Requests paused</b>")
     return (
         f"{ICON} <b>Command — Lelouch's War Table</b>\n\n"
         f"{gate}\n"
         f"<b>Mode</b> : {esc(mode)}\n"
-        f"<b>Pending requests</b> : {pending}\n"
-        f"<b>Work in line</b> : {work_open}\n\n"
+        f"<b>Total requests</b> : {total}\n"
+        f"<b>Currently working</b> : {working}\n\n"
         "<i>Every piece answers to you here. Set the tempo, marshal the ranks, "
-        "and the board bends to your design.</i>"
+        "and open the Board when you want the whole picture.</i>"
     )
 
 
-def queue_view(pending: int, work_open: int) -> str:
+def queue_view(stats, admins_total: int = 0, admins_on: int = 0) -> str:
+    """The Board — every real statistic at a glance. ``stats`` is a
+    :class:`RequestStats`; ``admins_*`` summarise the pool."""
     return (
         f"{ICON} <b>The Board</b>\n\n"
-        f"<b>Requests pending</b> : {pending}\n"
-        f"<b>Work in the line</b> : {work_open}\n\n"
-        "<i>Everything in motion, at a glance. Nothing here stalls the "
-        "downloaders — a stalled stage never freezes the queue.</i>"
+        f"<b>Total requests</b> : {stats.total}\n"
+        f"<b>⏳ Awaiting review</b> : {stats.pending}\n"
+        f"<b>⚙️ Working</b> : {stats.working}\n"
+        f"<b>✅ Published</b> : {stats.published}\n"
+        f"<b>🚫 Rejected</b> : {stats.rejected}\n"
+        f"<b>💥 Failed</b> : {stats.failed}\n\n"
+        f"<b>👥 Ranks</b> : {admins_on}/{admins_total} on the field\n\n"
+        "<i>Everything in motion, at a glance. A stalled stage never freezes "
+        "the queue — the board keeps turning.</i>"
     )
 
 

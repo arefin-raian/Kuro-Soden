@@ -25,6 +25,24 @@ class RequestReceipt:
     status: str
 
 
+@dataclass(slots=True)
+class RequestStats:
+    """Real request counters for the Command / Board panels.
+
+    ``pending`` deliberately means *awaiting staff review* only (status PENDING) —
+    not "in the pipeline". Most requests are accepted immediately, so the headline
+    figure operators actually care about is ``total``; the pipeline breakdown
+    (working / published / rejected) is what fills the detailed Board.
+    """
+
+    total: int = 0
+    pending: int = 0            # awaiting review (status PENDING)
+    working: int = 0            # queued → downloading → processing → ready
+    published: int = 0
+    rejected: int = 0           # rejected (incl. duplicate-of-existing)
+    failed: int = 0
+
+
 class RequestService:
     def __init__(self, container: Container) -> None:
         self._c = container
@@ -362,3 +380,27 @@ class RequestService:
             if req is None:
                 raise NotFound(code)
             req.franchise_data = data
+
+    async def stats(self) -> RequestStats:
+        """Real request counters, grouped for the Command / Board panels.
+
+        One GROUP BY over ``requests`` — cheap enough to call on every panel open.
+        The pipeline buckets fold the several in-flight statuses into one
+        ``working`` figure so the Board reads plainly instead of listing every
+        internal status.
+        """
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            by_status = await RequestRepository(session).counts_by_status()
+        working_statuses = (
+            RequestStatus.QUEUED, RequestStatus.DOWNLOADING,
+            RequestStatus.PROCESSING, RequestStatus.READY,
+            RequestStatus.APPROVED,
+        )
+        return RequestStats(
+            total=sum(by_status.values()),
+            pending=by_status.get(RequestStatus.PENDING, 0),
+            working=sum(by_status.get(s, 0) for s in working_statuses),
+            published=by_status.get(RequestStatus.PUBLISHED, 0),
+            rejected=by_status.get(RequestStatus.REJECTED, 0),
+            failed=by_status.get(RequestStatus.FAILED, 0),
+        )

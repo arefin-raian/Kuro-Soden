@@ -499,16 +499,36 @@ def register(client: Client, container: Container) -> None:
         )
         await send_screen(client, card_msg.chat.id, screen, old_msg=card_msg)
 
-        # ── Best-effort DB assignment (records who owns the download stage) ──
+        # ── DB assignment (records who owns the download stage) ──
+        # CRITICAL: a task row MUST exist or Levi's task list (which reads
+        # AdminAssignment rows) shows "no download tasks" even though the request
+        # sits QUEUED — the exact bug the owner-seed + this fallback close. If
+        # ``assign`` finds no qualifying admin (nobody covers "levi", all off-hours
+        # or on break) it returns None and writes NO row; we then pin the task to
+        # the owner via ``reassign`` (which creates a row when none exists) so the
+        # work is always visible to a human and never silently dropped.
         try:
-            await assignment.assign(receipt.code, "levi")
+            result = await assignment.assign(receipt.code, "levi")
+            if result is None:
+                from kurosoden.shared.management_service import ManagementService
+                from kurosoden.shared.owner_seed import _owner_id
+
+                owner_id = _owner_id(container)
+                if owner_id is not None:
+                    await ManagementService(container.pg_sessionmaker).reassign(
+                        receipt.code, "levi", owner_id
+                    )
+                    log.warning("lelouch.assign.fallback_owner",
+                                code=receipt.code, owner=owner_id)
+                else:
+                    log.error("lelouch.assign.no_owner_no_admin", code=receipt.code)
             async with session_scope(container.pg_sessionmaker) as session:
                 repo = RequestRepository(session)
                 req = await repo.get_by_code(receipt.code)
                 if req is not None:
                     req.status = RS.QUEUED
-        except Exception:
-            pass  # Assignment is best-effort; request still succeeded.
+        except Exception as exc:  # noqa: BLE001
+            log.error("lelouch.assign.failed", code=receipt.code, error=str(exc))
 
         # ── Notify admins DIRECTLY by DM (no log channel in Kurosōden) ──────
         # This is the piece that was missing: the old code only wrote a DB row,
@@ -565,18 +585,42 @@ def register(client: Client, container: Container) -> None:
             [InlineKeyboardButton("⚔️ Open Downloader", callback_data=cb("levi", "tasks"))],
         ])
 
+        # The Levi card must carry the anime's backdrop — the EN-tagged one we
+        # already resolved at request time (``_backdrop_url``), else the first of
+        # the textless ``backdrops`` gallery we seeded. Both are full URLs stored
+        # on the request's franchise JSON, so no extra TMDB call is needed. If we
+        # have neither, fall back to a plain text DM rather than dropping the ping.
+        backdrop = franchise_json.get("_backdrop_url")
+        if not backdrop:
+            gallery = franchise_json.get("backdrops") or []
+            backdrop = gallery[0] if gallery else None
+
         sent = 0
         for admin_id in admin_ids:
             try:
-                await notifier.send_message(
-                    admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
-                )
+                if backdrop:
+                    await notifier.send_photo(
+                        admin_id, backdrop, caption=caption,
+                        parse_mode=ParseMode.HTML, reply_markup=kb,
+                    )
+                else:
+                    await notifier.send_message(
+                        admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
+                    )
                 sent += 1
             except Exception as exc:  # noqa: BLE001
-                # An admin who never /start-ed the notifier bot can't be DMed —
-                # log and keep going so the others still get pinged.
-                log.warning("lelouch.notify.dm_failed", admin=admin_id,
-                            code=code, error=str(exc))
+                # A bad image URL shouldn't cost the admin their ping — retry once
+                # as plain text before giving up on this admin.
+                try:
+                    await notifier.send_message(
+                        admin_id, caption, parse_mode=ParseMode.HTML, reply_markup=kb,
+                    )
+                    sent += 1
+                except Exception as exc2:  # noqa: BLE001
+                    # An admin who never /start-ed the notifier bot can't be DMed —
+                    # log and keep going so the others still get pinged.
+                    log.warning("lelouch.notify.dm_failed", admin=admin_id,
+                                code=code, error=str(exc2))
         log.info("lelouch.notify.sent", code=code, admins=len(admin_ids), delivered=sent)
 
     # ── My Requests ───────────────────────────────────────────────────────────

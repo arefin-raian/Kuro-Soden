@@ -57,30 +57,29 @@ def register_all(client: Client, container: Container) -> None:
 
     # ── Lelouch's settings panel (lelouch|set|…) — shared human-friendly engine ─
     # Registered before the app.py `lelouch|` dispatcher so every settings tap is
-    # handled here. Lelouch owns the request-intake side of the config: whether
-    # requests are accepted, the request-bot join gate, request queue sizing, and
-    # request-rate limits.
+    # handled here. Lelouch owns only the request-intake side of the config: the
+    # force-join gate and request queue sizing.
     #
-    # `features`, `security` and `queue` are SHARED global sections that also hold
-    # download/distribution/owner fields Lelouch has no business showing. The
-    # `fields` allow-list mounts only the request-relevant slice of each, so the
-    # request bot never leaks watermarking / distribution / owner-id at the
-    # operator. Evicted fields keep living in their sections, edited from the bots
-    # that own them.
+    # `features` is deliberately NOT mounted — its one Lelouch-relevant field
+    # (accept requests on/off) is the Pause/Resume toggle on Command, so exposing
+    # it in Settings too was redundant and confusing. `security` and `queue` are
+    # SHARED global sections that also hold download/distribution/owner fields
+    # Lelouch has no business showing, so the `fields` allow-list mounts only the
+    # request-relevant slice of each. Evicted fields keep living in their sections,
+    # edited from the bots that own them.
     from kurosoden.shared.settings_ui import register_settings
 
     register_settings(
         client, container, "lelouch",
-        ["features", "security", "queue"],
+        ["security", "queue"],
         title="Lelouch — Request Settings",
         blurb=(
-            "The request desk — whether new requests are accepted, whether "
-            "users must join your channels first, and how many requests wait "
-            "in line. On/off switches flip in place; the join-channel list has "
-            "its own add/remove manager; numbers open a simple editor."
+            "The request desk — whether users must join your channels first, and "
+            "how many requests wait in line. Whether requests are accepted at all "
+            "is the Pause/Resume switch on Command. The join-channel list has its "
+            "own add/remove manager; numbers open a simple editor."
         ),
         fields={
-            "features": ["request_system"],
             "security": [
                 "force_subscribe",
                 "force_subscribe_channels",

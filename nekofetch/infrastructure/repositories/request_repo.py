@@ -53,6 +53,25 @@ class RequestRepository(BaseRepository[Request]):
         )
         return list(result.scalars().all())
 
+    async def counts_by_status(self) -> dict[str, int]:
+        """Map of ``status → row count`` across all requests.
+
+        One grouped query drives every request statistic the Command/Board
+        surfaces show, so the numbers are real (live DB) rather than the old
+        misleading "pending" label. Statuses absent from the table are simply
+        missing from the dict — callers use ``.get(status, 0)``.
+        """
+        result = await self.session.execute(
+            select(Request.status, func.count(Request.id)).group_by(Request.status)
+        )
+        return {str(status): int(count) for status, count in result.all()}
+
+    async def total_count(self) -> int:
+        """Total number of requests ever submitted."""
+        return int(
+            (await self.session.execute(select(func.count(Request.id)))).scalar() or 0
+        )
+
     # Idempotent create-and-seed for ``request_code_seq``. Runs as a single
     # atomic DO block so a fresh sequence starts just past the highest existing
     # ``REQ-<n>`` (never reissuing a live code) and an existing one is left

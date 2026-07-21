@@ -39,9 +39,9 @@ def home(name: str, *, is_staff: bool = False, is_admin: bool = False) -> Screen
     return card(caption, bot_name=BOT, buttons=rows)
 
 
-def admin_panel(*, mode: str, requests_open: bool, pending: int,
-                work_open: int) -> Screen:
-    caption = V.admin_panel(mode, requests_open, pending, work_open)
+def admin_panel(*, mode: str, requests_open: bool, total: int,
+                working: int) -> Screen:
+    caption = V.admin_panel(mode, requests_open, total, working)
     toggle = (V.BTN_PAUSE, cb(BOT, "reqtoggle")) if requests_open \
         else (V.BTN_RESUME, cb(BOT, "reqtoggle"))
     rows = [
@@ -57,8 +57,9 @@ def admin_panel(*, mode: str, requests_open: bool, pending: int,
     return card(caption, bot_name=BOT, buttons=rows)
 
 
-def queue(*, pending: int, work_open: int, back: str = "home") -> Screen:
-    caption = V.queue_view(pending, work_open)
+def queue(*, stats, admins_total: int = 0, admins_on: int = 0,
+          back: str = "home") -> Screen:
+    caption = V.queue_view(stats, admins_total=admins_total, admins_on=admins_on)
     return card(caption, bot_name=BOT,
                 buttons=[[(V.BTN_HOME if back == "home" else V.BTN_BACK_ADMIN,
                            cb(BOT, back))]])

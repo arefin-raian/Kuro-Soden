@@ -108,6 +108,16 @@ class Container:
         from nekofetch.services.index_channel_service import seed_index_sections
         await seed_index_sections(self.pg_sessionmaker)
 
+        # Seed the owner as a full-coverage pool admin (idempotent). Without this
+        # the owner is a plain user and — critically — absent from the admin pool,
+        # so AssignmentEngine.assign finds nobody and writes no task row, leaving
+        # Levi's task list empty even for a QUEUED request.
+        try:
+            from kurosoden.shared.owner_seed import seed_owner
+            await seed_owner(self)
+        except Exception as exc:  # noqa: BLE001 — never block startup on seeding
+            log.warning("owner_seed.failed", error=str(exc))
+
         try:
             # On Render, MongoDB Atlas M0 free-tier clusters sometimes reject TLS
             # handshakes due to CA-certificate mismatches in the Docker slim image.

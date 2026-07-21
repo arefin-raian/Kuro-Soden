@@ -96,6 +96,25 @@ def build_lelouch(container: Container, token: str) -> Client:
         from nekofetch.services.request_service import RequestService
         return RequestService(container)
 
+    async def _request_stats():
+        """Real request counters for Command/Board — never raises."""
+        try:
+            return await _request_service().stats()
+        except Exception:  # noqa: BLE001 — stats are decorative, never fatal
+            from nekofetch.services.request_service import RequestStats
+            return RequestStats()
+
+    async def _admin_counts() -> tuple[int, int]:
+        """(admins in pool, admins currently on the field) — best effort."""
+        try:
+            from kurosoden.shared.management_service import ManagementService
+            admins = await ManagementService(container.pg_sessionmaker).list_admins()
+            total = len(admins)
+            on = sum(1 for a in admins if a.is_available and not a.on_break)
+            return total, on
+        except Exception:  # noqa: BLE001
+            return 0, 0
+
     async def _render_home(chat_id: int, obj, old_msg: Message | None = None) -> None:
         role = _role(obj)
         screen = S.home(
@@ -108,9 +127,9 @@ def build_lelouch(container: Container, token: str) -> Client:
     async def _render_admin(chat_id: int, old_msg: Message | None = None) -> None:
         is_open = await requests_open(container)
         mode = await get_mode(container)
-        pending, work_open = await _counts()
+        stats = await _request_stats()
         screen = S.admin_panel(mode=mode, requests_open=is_open,
-                               pending=pending, work_open=work_open)
+                               total=stats.total, working=stats.working)
         await send_screen(client, chat_id, screen, old_msg=old_msg)
 
     # ── Main menu dispatcher — every lelouch|<action> resolves here ───────────
@@ -153,10 +172,11 @@ def build_lelouch(container: Container, token: str) -> Client:
             return
 
         if action == "queue":
-            pending, work_open = await _counts()
+            stats = await _request_stats()
+            atotal, aon = await _admin_counts()
             await send_screen(client, chat_id,
-                              S.queue(pending=pending, work_open=work_open,
-                                      back="admin"),
+                              S.queue(stats=stats, admins_total=atotal,
+                                      admins_on=aon, back="admin"),
                               old_msg=q.message)
             await q.answer()
             return
@@ -232,10 +252,11 @@ def build_lelouch(container: Container, token: str) -> Client:
         if _role(q) not in (Role.STAFF, Role.ADMIN):
             await q.answer("🔒 Command is staff only.", show_alert=True)
             return
-        pending, work_open = await _counts()
+        stats = await _request_stats()
+        atotal, aon = await _admin_counts()
         await send_screen(client, q.message.chat.id,
-                          S.queue(pending=pending, work_open=work_open,
-                                  back="home"),
+                          S.queue(stats=stats, admins_total=atotal,
+                                  admins_on=aon, back="home"),
                           old_msg=q.message)
         await q.answer()
 

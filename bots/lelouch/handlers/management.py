@@ -193,7 +193,18 @@ def register(client: Client, container: Container) -> None:
                 "them in — they'll cover no stages until you assign them.\n\n"
                 "<i>Choose who fights, and where.</i>"
             )
-            rows = [[(f"➕ {aid}", cb("mg", "addid", aid))] for aid in candidates]
+            # Show each candidate by NAME, not raw id — everyone has a name, not
+            # everyone a username. Best-effort lookup via the bot; the callback
+            # still carries the id (that's what we write).
+            rows = []
+            for aid in candidates:
+                label = str(aid)
+                try:
+                    u = await client.get_users(aid)
+                    label = (u.first_name or "") or (u.username or str(aid))
+                except Exception:  # noqa: BLE001 — fall back to id if unreachable
+                    pass
+                rows.append([(f"➕ {V.esc(label)[:28]}", cb("mg", "addid", aid))])
             rows.append([(V.BTN_BACK_MANAGE, cb("mg", "roster"))])
         await send_screen(client, q.message.chat.id,
                           card(caption, image=_art(), bot_name=BOT, buttons=rows),
