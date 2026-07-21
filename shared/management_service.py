@@ -46,6 +46,12 @@ class AdminView:
     break_until: str | None
     active_tasks: int
     total_completed: int
+    # ── Profile (self-service) ──
+    timezone: str | None = None
+    country: str | None = None
+    max_hours_per_day: int | None = None
+    slots_weekday: list | None = None
+    slots_weekend: list | None = None
 
 
 class ManagementService:
@@ -97,6 +103,11 @@ class ManagementService:
             break_until=brk,
             active_tasks=await self._active_count(session, a.admin_telegram_id),
             total_completed=int(a.total_tasks_completed or 0),
+            timezone=a.timezone,
+            country=a.country,
+            max_hours_per_day=a.max_hours_per_day,
+            slots_weekday=list(a.slots_weekday or []),
+            slots_weekend=list(a.slots_weekend or []),
         )
 
     async def list_admins(self, *, stage: str | None = None,
@@ -268,6 +279,77 @@ class ManagementService:
         if start is not None and end is not None:
             wh = {"start": int(start) % 24, "end": int(end) % 24}
         return await self._patch(admin_id, working_hours=wh, _session=_session)
+
+    # ── Profile (self-service) ──────────────────────────────────────────────────
+
+    async def set_country(self, admin_id: int, country: str | None, *,
+                          _session=None) -> AdminView | None:
+        return await self._patch(admin_id, country=(country or None),
+                                 _session=_session)
+
+    async def set_timezone(self, admin_id: int, tz_name: str | None, *,
+                           _session=None) -> AdminView | None:
+        return await self._patch(admin_id, timezone=(tz_name or None),
+                                 _session=_session)
+
+    async def set_max_hours(self, admin_id: int, hours: int | None, *,
+                            _session=None) -> AdminView | None:
+        """Daily-hours soft cap (1–24), or None to clear."""
+        val = None
+        if hours is not None:
+            val = max(1, min(int(hours), 24))
+        return await self._patch(admin_id, max_hours_per_day=val, _session=_session)
+
+    async def set_slots(self, admin_id: int, kind: str, slots: list, *,
+                        _session=None) -> AdminView | None:
+        """Replace an admin's weekday or weekend slot list.
+
+        ``kind`` is ``"weekday"`` or ``"weekend"``; ``slots`` is a list of
+        ``[start_min, end_min]`` pairs (already parsed by ``admin_profile``).
+        An unknown ``kind`` is a no-op read."""
+        column = {"weekday": "slots_weekday", "weekend": "slots_weekend"}.get(kind)
+        if column is None:
+            return await self.get_admin(admin_id, _session=_session)
+        return await self._patch(admin_id, **{column: list(slots or [])},
+                                 _session=_session)
+
+    async def set_profile(self, admin_id: int, *, name: str | None = None,
+                          country: str | None = None, timezone: str | None = None,
+                          max_hours_per_day: int | None = None,
+                          slots_weekday: list | None = None,
+                          slots_weekend: list | None = None,
+                          _session=None) -> AdminView | None:
+        """Bulk profile set (used by the owner's guided muster flow). Only the
+        provided fields are written; ``None`` means "leave unchanged" EXCEPT for
+        name where a value only fills a blank (never overwrites)."""
+        patch: dict = {}
+        if country is not None:
+            patch["country"] = country or None
+        if timezone is not None:
+            patch["timezone"] = timezone or None
+        if max_hours_per_day is not None:
+            patch["max_hours_per_day"] = max(1, min(int(max_hours_per_day), 24))
+        if slots_weekday is not None:
+            patch["slots_weekday"] = list(slots_weekday)
+        if slots_weekend is not None:
+            patch["slots_weekend"] = list(slots_weekend)
+        async with self._maybe_session(_session) as session:
+            a = (await session.execute(
+                select(AdminAvailability).where(
+                    AdminAvailability.admin_telegram_id == admin_id
+                ).with_for_update()
+            )).scalar_one_or_none()
+            if a is None:
+                return None
+            for k, val in patch.items():
+                setattr(a, k, val)
+            if name and not a.admin_name:
+                a.admin_name = name
+            await session.flush()
+            view = await self._view(session, a)
+            if _session is None:
+                await session.commit()
+            return view
 
     # ── Reassignment ───────────────────────────────────────────────────────────
 

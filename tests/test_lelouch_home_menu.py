@@ -1,12 +1,12 @@
-"""Lelouch home-menu layout — the four-button contract (redesign).
+"""Lelouch home-menu layout — the owner/admin/user split.
 
-The request bot's start screen must show exactly the four top-level buttons the
-operator asked for — **New Request · My Requests** for everyone, plus **Batch
-Work · Command** for admins only — and must NOT surface Settings or the Board at
-the top level (Settings lives inside the Command panel, so it appears once).
+The request bot's start screen shows exactly the right buttons per audience:
+  • plain user  → New Request · My Requests
+  • non-owner admin → + Batch Work · My Profile (NOT Command)
+  • owner        → + Batch Work · Command (the full war table)
 
-These assert against the real ``screens.home`` builder, so a regression in the
-button set or the admin gating fails here.
+Settings/Command/Profile never both appear, and none surface for a plain user.
+These assert against the real ``screens.home`` builder.
 """
 
 from __future__ import annotations
@@ -30,28 +30,37 @@ def test_home_user_sees_only_request_buttons():
     # A plain user must never see admin-only surfaces.
     assert V.BTN_BATCH not in labels
     assert V.BTN_ADMIN not in labels
-    # Settings and the Board are no longer top-level (Settings lives in Command).
+    assert V.BTN_PROFILE not in labels
+    # Settings and the Board are not top-level.
     assert V.BTN_SETTINGS not in labels
     assert V.BTN_QUEUE not in labels
 
 
-def test_home_admin_sees_four_buttons():
-    screen = S.home("Lelouch", is_staff=True, is_admin=True)
+def test_home_owner_sees_command():
+    screen = S.home("Lelouch", is_staff=True, is_admin=True, is_owner=True)
     labels = _labels(screen)
     assert labels == [V.BTN_REQUEST, V.BTN_MY_REQUESTS, V.BTN_BATCH, V.BTN_ADMIN]
-    # Still no top-level Settings — it is reached through Command.
+    # The owner gets Command, not the personal Profile button.
+    assert V.BTN_PROFILE not in labels
     assert V.BTN_SETTINGS not in labels
 
 
+def test_home_nonowner_admin_sees_profile_not_command():
+    # A non-owner admin gets Batch + their personal Profile, never Command.
+    screen = S.home("Kallen", is_staff=True, is_admin=True, is_owner=False)
+    labels = _labels(screen)
+    assert labels == [V.BTN_REQUEST, V.BTN_MY_REQUESTS, V.BTN_BATCH, V.BTN_PROFILE]
+    assert V.BTN_ADMIN not in labels
+
+
 def test_home_staff_non_admin_does_not_get_batch_or_command():
-    # Batch Work and Command are admin-only per the redesign (previously Batch
-    # leaked to any staff). A staff-but-not-admin user sees only the two request
-    # buttons.
-    screen = S.home("Kallen", is_staff=True, is_admin=False)
+    # Staff who aren't admins see only the two request buttons.
+    screen = S.home("Nunnally", is_staff=True, is_admin=False)
     labels = _labels(screen)
     assert labels == [V.BTN_REQUEST, V.BTN_MY_REQUESTS]
     assert V.BTN_BATCH not in labels
     assert V.BTN_ADMIN not in labels
+    assert V.BTN_PROFILE not in labels
 
 
 def test_home_request_button_routes_to_new_request():

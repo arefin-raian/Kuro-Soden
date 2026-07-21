@@ -17,25 +17,32 @@ from kurosoden.shared import lelouch_voice as V
 BOT = "lelouch"
 
 
-def home(name: str, *, is_staff: bool = False, is_admin: bool = False) -> Screen:
+def home(name: str, *, is_staff: bool = False, is_admin: bool = False,
+         is_owner: bool = False) -> Screen:
     """The request bot's front door — exactly the buttons the viewer needs.
 
-    Regular users see only the two request actions. Admins get two extra:
-    Batch Work and Command (the admin panel, where settings, the board, ranks,
-    availability and hours all live). Settings and the board are NOT surfaced at
-    the top level — they belong inside Command, so a normal user's home stays a
-    clean two-button request desk and nothing appears twice.
+    Three audiences:
+      • Regular user → the two request actions only.
+      • Non-owner admin → Batch Work + **Settings** (their personal profile and
+        the Board). They do NOT get Command — admin management (pausing requests,
+        managing ranks, force-sub) is the owner's alone.
+      • Owner → Batch Work + **Command** (the full war table: stats, ranks,
+        availability, hours, config settings).
 
-    ``is_admin`` gates the admin row; ``is_staff`` no longer unlocks Batch/Command
-    on its own (those are admin-only, per the pipeline's separation of duties).
+    Settings/Command are never both shown, and neither appears at the top level
+    for a plain user, so the request desk stays clean.
     """
     caption = f"{V.home_title(name)}\n\n{V.HOME_BODY}"
     rows = [[(V.BTN_REQUEST, cb("req", "new")),
              (V.BTN_MY_REQUESTS, cb("req", "mine", 0))]]
-    if is_admin:
+    if is_owner:
         caption += f"\n\n{V.HOME_ADMIN_TAG}"
         rows.append([(V.BTN_BATCH, cb("batch", "new")),
                      (V.BTN_ADMIN, cb(BOT, "admin"))])
+    elif is_admin:
+        caption += f"\n\n{V.HOME_ADMIN_TAG}"
+        rows.append([(V.BTN_BATCH, cb("batch", "new")),
+                     (V.BTN_PROFILE, cb(BOT, "profile"))])
     return card(caption, bot_name=BOT, buttons=rows)
 
 

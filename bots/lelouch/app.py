@@ -74,6 +74,16 @@ def build_lelouch(container: Container, token: str) -> Client:
         user = getattr(obj, "nf_user", None)
         return Role(user.role) if user else Role.USER
 
+    def _is_owner(obj) -> bool:
+        from nekofetch.services.auth_service import AuthService
+        user = getattr(obj, "nf_user", None)
+        if user is None:
+            return False
+        try:
+            return AuthService(container).is_owner(user)
+        except Exception:  # noqa: BLE001
+            return False
+
     def _first_name(obj) -> str:
         u = getattr(obj, "from_user", None)
         return (u.first_name if u else "") or ""
@@ -121,6 +131,7 @@ def build_lelouch(container: Container, token: str) -> Client:
             _first_name(obj),
             is_staff=role in (Role.STAFF, Role.ADMIN),
             is_admin=role is Role.ADMIN,
+            is_owner=_is_owner(obj),
         )
         await send_screen(client, chat_id, screen, old_msg=old_msg)
 
@@ -156,6 +167,20 @@ def build_lelouch(container: Container, token: str) -> Client:
         # ── Everything below is staff-only ──
         if not staff:
             await q.answer("🔒 Command is staff only.", show_alert=True)
+            return
+
+        # Non-owner admins get their personal profile, never Command.
+        if action == "profile":
+            from kurosoden.bots.lelouch.handlers.profile import render_profile
+            await render_profile(client, container, chat_id, q.from_user.id, q.message)
+            await q.answer()
+            return
+
+        # ── Admin management is OWNER-ONLY (pause requests, ranks, hours) ──
+        owner = _is_owner(q)
+        _owner_only = {"admin", "reqtoggle", "manage", "avail", "hours"}
+        if action in _owner_only and not owner:
+            await q.answer("🔒 That's the owner's console.", show_alert=True)
             return
 
         if action == "admin":
@@ -270,6 +295,7 @@ def build_lelouch(container: Container, token: str) -> Client:
             _first_name(message),
             is_staff=role in (Role.STAFF, Role.ADMIN),
             is_admin=role is Role.ADMIN,
+            is_owner=_is_owner(message),
         )
         await send_rich_welcome(client, container, message, screen, bot_name="lelouch")
 

@@ -40,6 +40,16 @@ def register_all(client: Client, container: Container) -> None:
 
     register_management(client, container)
 
+    # ── Admin self-service profile (pr| surface) + timezone picker ──────
+    # Non-owner admins edit their own country/tz/hours/slots here; the owner's
+    # muster flow seeds the same fields. The shared timezone picker is mounted on
+    # Lelouch too so the profile's Timezone button (lelouch|tz|home) resolves.
+    from kurosoden.bots.lelouch.handlers.profile import register as register_profile
+    from kurosoden.shared.timezone_ui import register_timezone_ui
+
+    register_profile(client, container)
+    register_timezone_ui(client, container, "lelouch")
+
     # ── Lelouch request handlers ─────────────────────────────────────────
     from kurosoden.bots.lelouch.handlers.requests import register as register_requests
 

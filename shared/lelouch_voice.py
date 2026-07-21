@@ -475,6 +475,7 @@ BTN_REQUEST = "🎬 Request Anime"
 BTN_MY_REQUESTS = "📥 My Requests"
 BTN_SETTINGS = "⚙️ Settings"
 BTN_ADMIN = "🛡 Command"
+BTN_PROFILE = "👤 My Profile"
 BTN_BATCH = "📦 Batch Work"
 BTN_QUEUE = "📋 The Board"
 BTN_HOME = "⇐ Home"
@@ -502,3 +503,64 @@ BTN_BACK_AVAIL = "⇐ Back to Availability"
 BTN_MODE_NORMAL = "⚔️ Normal"
 BTN_MODE_CATCHUP = "🏃 Catch-up"
 BTN_MODE_PAUSED = "🛑 Halt"
+
+
+# ── Admin self-service profile ────────────────────────────────────────────────
+# Non-owner admins get a personal profile they can read and edit: the country,
+# timezone, daily-hours cap and preferred time slots the assignment engine uses
+# to route work to them at the right local time.
+
+def _tz_label(tz_name: str | None) -> str:
+    from nekofetch.core.timefmt import tz_offset_label
+    return tz_offset_label(tz_name) if tz_name else "not set"
+
+
+def profile_card(v, *, weekday_str: str, weekend_str: str) -> str:
+    """The admin's own profile view. ``v`` is a ManagementService AdminView."""
+    name = esc(v.name or str(v.telegram_id))
+    country = esc(v.country) if v.country else "—"
+    tz = f"{esc(v.timezone)} ({_tz_label(v.timezone)})" if v.timezone else "—"
+    hours = f"{v.max_hours_per_day}h/day" if v.max_hours_per_day else "—"
+    return (
+        f"{ICON} <b>My Profile — {name}</b>\n\n"
+        f"🌍 <b>Country</b> : {country}\n"
+        f"🕎 <b>Timezone</b> : {tz}\n"
+        f"⏰ <b>Hours/day</b> : {hours}\n\n"
+        f"🕒 <b>Weekday slots</b>\n<blockquote>{esc(weekday_str)}</blockquote>\n"
+        f"🕒 <b>Weekend slots</b>\n<blockquote>{esc(weekend_str)}</blockquote>\n"
+        "<i>These decide when — and in whose local time — work is routed to you. "
+        "Keep them honest and I'll keep your rest sacred.</i>"
+    )
+
+
+PROFILE_ASK_COUNTRY = (
+    f"{ICON} <b>Your country</b>\n\n"
+    "Send the country you're in — like <code>Bangladesh</code>. I'll use it for "
+    "context and to suggest your timezone.\n\n<code>/cancel</code> to keep it."
+)
+PROFILE_ASK_HOURS = (
+    f"{ICON} <b>Hours per day</b>\n\n"
+    "How many hours a day do you want to take work? Send a number, like "
+    "<code>3</code> (1–24).\n\n<code>/cancel</code> to keep it."
+)
+
+
+def profile_ask_slots(kind: str) -> str:
+    when = "weekday" if kind == "weekday" else "weekend"
+    return (
+        f"{ICON} <b>Your {when} time slots</b>\n\n"
+        "Send your available times in <b>your own local clock</b>, one slot per "
+        "line. For example:\n"
+        "<blockquote>6:00 PM - 8:00 PM\n10:30 PM - 12:30 AM</blockquote>\n"
+        "I'll read 12-hour (6pm) or 24-hour (18:00), and a slot may cross "
+        "midnight. Send <code>none</code> to clear them, or <code>/cancel</code> "
+        "to keep them."
+    )
+
+
+BTN_EDIT_COUNTRY = "🌍 Country"
+BTN_EDIT_TIMEZONE = "🕎 Timezone"
+BTN_EDIT_HOURS = "⏰ Hours/day"
+BTN_EDIT_WEEKDAY = "🕒 Weekday slots"
+BTN_EDIT_WEEKEND = "🕒 Weekend slots"
+BTN_VIEW_BOARD = "📋 The Board"

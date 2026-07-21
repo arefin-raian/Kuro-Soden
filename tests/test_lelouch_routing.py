@@ -99,6 +99,10 @@ EMITTED_CALLBACKS = [
     "lelouch|home", "lelouch|admin", "lelouch|settings", "lelouch|set|source",
     "lelouch|reqtoggle", "lelouch|queue", "lelouch|manage",
     "lelouch|avail", "lelouch|hours", "lelouch|pending",
+    # admin self-service profile
+    "lelouch|profile", "lelouch|pr|home", "lelouch|pr|country",
+    "lelouch|pr|hours", "lelouch|pr|slots|weekday", "lelouch|pr|slots|weekend",
+    "lelouch|tz|home", "lelouch|tz|set|Asia/Dhaka", "lelouch|tz|type",
     # request flow
     "req|new", "req|mine|0",
     # reused NekoFetch review board (pending screen's "Open Review Board")

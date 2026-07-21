@@ -156,7 +156,9 @@ class TestAdminAvailabilityColumns:
         expected = {"id", "created_at", "updated_at", "admin_telegram_id",
                      "admin_name", "is_available", "assigned_bots",
                      "scheduled_breaks", "total_tasks_completed",
-                     "weight", "working_hours", "timezone"}
+                     "weight", "working_hours", "timezone",
+                     "country", "max_hours_per_day",
+                     "slots_weekday", "slots_weekend"}
         assert cols == expected
 
     def test_is_available_is_boolean(self):

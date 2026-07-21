@@ -67,6 +67,22 @@ class AdminAvailability(Base, PKMixin, TimestampMixin):
     # enter and read scheduled-post times; NULL → the global display timezone.
     # Deliberately does NOT affect ``working_hours`` (which stays UTC).
     timezone: Mapped[str | None] = mapped_column(String(64))
+    # ── Admin profile (self-service) ────────────────────────────────────────
+    # Free-text country the admin is in (e.g. "Bangladesh"). Timezone is the
+    # authoritative field for scheduling; country is context the owner collects
+    # and can be used to suggest a timezone.
+    country: Mapped[str | None] = mapped_column(String(64))
+    # Soft cap on hours/day an admin wants to contribute (e.g. 3). Used by the
+    # slot-aware assignment engine to bound how far past a slot's start we may
+    # still hand them work. NULL → no cap (their slots bound them instead).
+    max_hours_per_day: Mapped[int | None] = mapped_column(Integer)
+    # Preferred time slots, expressed in the admin's OWN timezone as a list of
+    # ``[start_min, end_min]`` minute-of-day pairs (0–1439). ``end < start`` means
+    # the slot wraps past midnight (e.g. 22:30→00:30). Separate weekday/weekend
+    # sets because admins often keep different weekend hours. Empty/NULL → the
+    # admin has no preferred slot (falls to the always-on/offer path).
+    slots_weekday: Mapped[list | None] = mapped_column(JSONB)
+    slots_weekend: Mapped[list | None] = mapped_column(JSONB)
 
 
 # ── Assignment Engine ─────────────────────────────────────────────────────────
