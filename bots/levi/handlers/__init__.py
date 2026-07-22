@@ -24,10 +24,10 @@ def register_all(client: Client, container: Container) -> None:
     queue flow lives in NekoFetch's admin ``review`` handler. That admin bot is
     never started in the Kuro Sōden pipeline, so the flow would otherwise be dead
     code — we mount it directly onto Levi (the downloader stage that owns source
-    selection) and route Levi's task cards into it via ``staff|rdetail|<code>``.
-    Its callbacks use ``staff|`` / ``franchise|`` / ``anizone|`` prefixes and its
-    message handlers use explicit ``group=`` slots, so nothing collides with
-    Levi's own ``levi|`` menu or default-group photo handler.
+    selection), then put Levi-native request cards in front of it. Its callbacks
+    use ``staff|`` / ``franchise|`` / ``anizone|`` prefixes and its message
+    handlers use explicit ``group=`` slots, so nothing collides with Levi's own
+    ``levi|`` menu or default-group photo handler.
     """
 
     # ── Auth middleware ────────────────────────────────────────────────────

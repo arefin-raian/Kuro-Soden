@@ -13,7 +13,6 @@ import re
 
 import pytest
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Lelouch — Request Bot helpers
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -177,10 +176,12 @@ class TestHasPendingRequest:
         assert len(rows) == 0
 
     @pytest.mark.asyncio
-    async def test_has_pending_when_pending_exists(self, sessionmaker, session, user, pending_request):
+    async def test_has_pending_when_pending_exists(
+        self, sessionmaker, session, user, pending_request
+    ):
         container = await self._make_container(sessionmaker)
-        from nekofetch.services.request_service import RequestService
         from nekofetch.domain.enums import RequestStatus
+        from nekofetch.services.request_service import RequestService
         rows = await RequestService(container).list_for_user(user.telegram_id, limit=5)
         active = [r for r in rows if r.status in {
             RequestStatus.PENDING, RequestStatus.APPROVED, RequestStatus.QUEUED,
@@ -189,10 +190,12 @@ class TestHasPendingRequest:
         assert len(active) >= 1
 
     @pytest.mark.asyncio
-    async def test_no_pending_when_only_published(self, sessionmaker, session, user, published_request):
+    async def test_no_pending_when_only_published(
+        self, sessionmaker, session, user, published_request
+    ):
         container = await self._make_container(sessionmaker)
-        from nekofetch.services.request_service import RequestService
         from nekofetch.domain.enums import RequestStatus
+        from nekofetch.services.request_service import RequestService
         rows = await RequestService(container).list_for_user(user.telegram_id, limit=5)
         active = [r for r in rows if r.status in {
             RequestStatus.PENDING, RequestStatus.QUEUED, RequestStatus.DOWNLOADING,
@@ -210,8 +213,8 @@ class TestLeviTaskList:
 
     The old CLI (``/assign``, ``/sources``, ``/header`` + per-bot FSM states and
     the ``_assign_source_and_queue`` / ``_generate_header`` clones) was removed:
-    Levi now mounts NekoFetch's admin ``review`` flow and its task cards route
-    into it via ``staff|rdetail|<code>``. These tests pin the new contract."""
+    Levi now mounts NekoFetch's admin ``review`` flow, but task cards open a
+    Levi-native request surface first. These tests pin that contract."""
 
     def test_register_callable(self):
         from kurosoden.bots.levi.handlers.tasks import register
@@ -221,6 +224,7 @@ class TestLeviTaskList:
         # register_all wires the shared review flow onto Levi's client so the
         # source-pick → report → franchise → queue machinery is live.
         import inspect
+
         from kurosoden.bots.levi.handlers import register_all
         src = inspect.getsource(register_all)
         assert "review" in src
@@ -234,15 +238,38 @@ class TestLeviTaskList:
             assert not hasattr(levi_tasks, dead), f"{dead} should be gone"
 
 
-class TestLeviRdetailRouting:
-    """Task cards open the shared flow with a staff|rdetail callback."""
+class TestLeviTaskRouting:
+    """Task cards open Levi's request card before shared source callbacks."""
 
-    def test_rdetail_callback_shape(self):
-        data = "staff|rdetail|REQ-0001"
+    def test_task_callback_shape(self):
+        data = "levi|task|REQ-0001"
         parts = data.split("|", 2)
-        assert parts[0] == "staff"
-        assert parts[1] == "rdetail"
+        assert parts[0] == "levi"
+        assert parts[1] == "task"
         assert parts[2] == "REQ-0001"
+
+    def test_progress_card_uses_transfer_layout(self):
+        from nekofetch.ui.progress import download_card_html
+
+        html = download_card_html(
+            title="Takopi's Original Sin",
+            job_id=7,
+            status="running",
+            progress=12,
+            season=1,
+            current_episode=2,
+            resolution="720p",
+            audio="dub",
+            speed_bps=1_300_000,
+            downloaded_bytes=16_000_000,
+            total_bytes=123_200_000,
+            eta_seconds=82,
+            elapsed_seconds=11,
+        )
+
+        assert "‣ Status" in html
+        assert "[■□□□□□□□□□] 12%" in html
+        assert "Transfer" in html
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -427,16 +454,25 @@ class TestMessageFormatting:
 
     def test_levi_tasks_empty_message(self):
         """The 'no tasks' message should be valid HTML."""
-        msg = "<b>⚔️ No active download tasks.</b>\n\nNo anime assigned to you for downloading right now."
+        msg = (
+            "<b>⚔️ No active download tasks.</b>\n\n"
+            "No anime assigned to you for downloading right now."
+        )
         # Should have no unmatched tags.
         assert msg.count("<b>") == msg.count("</b>")
 
     def test_senku_tasks_empty_message(self):
-        msg = "<b>🧪 No active distribution tasks.</b>\n\nNo anime assigned to you for distribution right now."
+        msg = (
+            "<b>🧪 No active distribution tasks.</b>\n\n"
+            "No anime assigned to you for distribution right now."
+        )
         assert msg.count("<b>") == msg.count("</b>")
 
     def test_gojo_tasks_empty_message(self):
-        msg = "<b>🔮 No active publishing tasks.</b>\n\nNo anime assigned to you for publishing right now."
+        msg = (
+            "<b>🔮 No active publishing tasks.</b>\n\n"
+            "No anime assigned to you for publishing right now."
+        )
         assert msg.count("<b>") == msg.count("</b>")
 
     def test_levi_source_list_message(self):

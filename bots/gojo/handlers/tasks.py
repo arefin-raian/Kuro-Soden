@@ -9,19 +9,19 @@ Key principle: Gojo does NOT reimplement publishing. It delegates to:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import CallbackQuery, Message
 
+from kurosoden.shared import gojo_voice as V
 from nekofetch.bots.fsm import FSM
 from nekofetch.core.container import Container
 from nekofetch.core.logging import get_logger
-from nekofetch.ui.components import cb, keyboard
 from nekofetch.ui.artwork import pick_artwork
+from nekofetch.ui.components import cb, keyboard
 from nekofetch.ui.screens import Screen, send_screen
-from kurosoden.shared import gojo_voice as V
 
 log = get_logger(__name__)
 
@@ -152,14 +152,18 @@ def register(client: Client, container: Container) -> None:
         offers = await engine.get_pending_offers(message.from_user.id)
 
         if not active and not offers:
-            await message.reply(
-                "<b>🔮 No active publishing tasks.</b>\n\n"
-                "No anime assigned to you for publishing right now.",
-                parse_mode=ParseMode.HTML,
+            await send_screen(
+                client,
+                message.chat.id,
+                Screen(
+                    caption=V.TASKS_EMPTY,
+                    image=pick_artwork("gojo"),
+                    keyboard=keyboard([(V.BTN_HOME, cb("gojo", "home"))]),
+                ),
             )
             return
 
-        lines = ["<b>🔮 Your Publishing Tasks</b>\n"]
+        lines = [V.tasks_title(len(active) + len(offers)), ""]
         rows: list[list[tuple[str, str]]] = []
         for a in offers[:5]:
             title = a.request_code
@@ -170,7 +174,9 @@ def register(client: Client, container: Container) -> None:
                         title = req.anime_title
             except Exception:
                 pass
-            lines.append(f"Offer <code>{a.request_code}</code> - <b>{title}</b>")
+            lines.append(
+                f"<blockquote><b>Offer</b>\n{V.task_row(a.request_code, title)}</blockquote>"
+            )
             rows.append([(f"Accept - {title}"[:60],
                           cb("gojo", "offer", "accept", a.request_code))])
             rows.append([(f"Reject - {title}"[:60],
@@ -178,7 +184,6 @@ def register(client: Client, container: Container) -> None:
         if active:
             lines.append("\n<b>Assigned</b>")
         for a in active[:10]:
-            status_icon = "🔄" if a.status == "in_progress" else "⏳"
             title = a.request_code
             try:
                 async with session_scope(container.pg_sessionmaker) as s:
@@ -187,11 +192,21 @@ def register(client: Client, container: Container) -> None:
                         title = req.anime_title
             except Exception:
                 pass
-            lines.append(f"{status_icon} <code>{a.request_code}</code> — <b>{title}</b>")
-        await message.reply(
-            "\n".join(lines),
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard(*rows) if rows else None,
+            lines.append(
+                V.task_row(a.request_code, title, in_progress=a.status == "in_progress")
+            )
+            rows.append([
+                (f"Publish · {title}"[:60], cb("gojo", "publish_open", a.request_code)),
+            ])
+        rows.append([(V.BTN_HOME, cb("gojo", "home"))])
+        await send_screen(
+            client,
+            message.chat.id,
+            Screen(
+                caption="\n".join(lines),
+                image=pick_artwork("gojo"),
+                keyboard=keyboard(*rows),
+            ),
         )
 
     # ── Callback handlers (registered ONCE, not dynamically) ────────────────
@@ -208,12 +223,23 @@ def register(client: Client, container: Container) -> None:
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         if action == "accept":
             result = await engine.accept_offer(code, "gojo", q.from_user.id)
-            await q.answer("Accepted. Run /tasks.", show_alert=result is None)
+            await q.answer("Accepted." if result else "Offer expired.", show_alert=result is None)
+            if result and q.message is not None:
+                await _review_for_publish(client, container, q.message, code, fsm)
         elif action == "reject":
             ok = await engine.reject_offer(code, "gojo", q.from_user.id)
             await q.answer("Rejected." if ok else "Offer expired.", show_alert=not ok)
         else:
             await q.answer()
+
+    @client.on_callback_query(filters.regex(r"^gojo\|publish_open\|"))
+    async def _publish_open(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        code = (q.data or "").split("|", 2)[2]
+        await q.answer()
+        await _review_for_publish(client, container, q.message, code, fsm)
 
     @client.on_callback_query(filters.regex(r"^gojo\|publish_confirm\|"))
     async def _cb_publish(_: Client, q: CallbackQuery) -> None:
@@ -653,8 +679,9 @@ def register(client: Client, container: Container) -> None:
             await fsm.clear(message.from_user.id)
             await _schedule_publish(client, container, message, code, when_utc, tz_name)
         elif state == STATE_EDIT_FOOTER:
-            from kurosoden.shared.settings_ui import parse_user_markup
             from nekofetch.services.footer_service import FooterService
+
+            from kurosoden.shared.settings_ui import parse_user_markup
 
             html = parse_user_markup(message)
             await fsm.clear(message.from_user.id)
@@ -969,14 +996,13 @@ def _parse_schedule(raw: str, tz_name: str | None) -> datetime | None:
     Returns ``None`` if unparseable or already in the past (compared in UTC), so
     the caller can show the "bad time" prompt.
     """
-    from datetime import timezone as _tz
 
     from nekofetch.core.timefmt import parse_local
 
     when_utc = parse_local(raw, tz_name)
     if when_utc is None:
         return None
-    if when_utc <= datetime.now(_tz.utc):
+    if when_utc <= datetime.now(UTC):
         return None
     return when_utc
 
@@ -1152,14 +1178,16 @@ def make_monthly_update_notify_job(container: Container):
 
     async def _tick() -> None:
         try:
-            from nekofetch.core.redis_safe import safe_redis_set
             from nekofetch.services.maintenance_service import MaintenanceService
+
+            from nekofetch.core.redis_safe import safe_redis_set
 
             # Stamp the sweep time so the Stats screen shows when it last ran,
             # even when the sweep finds nothing.
             await safe_redis_set(
-                container.redis, "nf:maint:last_update_check",
-                datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                container.redis,
+                "nf:maint:last_update_check",
+                datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             )
             results = await MaintenanceService(container).scan_updates()
             if not results:
@@ -1203,13 +1231,15 @@ def make_monthly_bancheck_job(container: Container):
     """
     async def _tick() -> None:
         try:
-            from nekofetch.core.redis_safe import safe_redis_set
-            from nekofetch.services.bot_orchestrator import BotOrchestratorService
             from nekofetch.services.maintenance_service import MaintenanceService
 
+            from nekofetch.core.redis_safe import safe_redis_set
+            from nekofetch.services.bot_orchestrator import BotOrchestratorService
+
             await safe_redis_set(
-                container.redis, "nf:maint:last_ban_check",
-                datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                container.redis,
+                "nf:maint:last_ban_check",
+                datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             )
             result = await MaintenanceService(container).probe_channels()
             if not result.banned:

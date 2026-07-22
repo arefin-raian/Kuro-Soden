@@ -45,7 +45,7 @@ class _Entry:
         self.relation = rel
 
 
-def test_flatten_update_rows_shape():
+async def test_flatten_update_rows_shape():
     results = [
         _Result("doc1", "Attack on Titan", [
             _Entry(1, "TV", "AoT S2", 2, 12, "SEQUEL"),

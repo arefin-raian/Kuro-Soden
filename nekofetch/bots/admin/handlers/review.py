@@ -20,15 +20,15 @@ from nekofetch.bots.channel_reply import peek as _peek_reply
 from nekofetch.bots.fsm import FSM
 from nekofetch.core.container import Container
 from nekofetch.core.exceptions import NekoFetchError
+from nekofetch.core.logging import get_logger
 from nekofetch.domain.enums import Permission
 from nekofetch.localization.messages import M, t
 from nekofetch.services.auth_service import AuthService
 from nekofetch.services.franchise_flow import FranchiseFlowService
 from nekofetch.ui.components import cb, keyboard, lock_buttons, paginate
 from nekofetch.ui.franchise_screens import franchise_map_selection
-from nekofetch.ui.typography import user_label
-from nekofetch.core.logging import get_logger
 from nekofetch.ui.screens import show
+from nekofetch.ui.typography import user_label
 
 log = get_logger(__name__)
 
@@ -84,7 +84,9 @@ async def _anime_backdrop(container, req) -> str | None:
     (and seeds the pool) when the request predates artwork persistence.
     """
     from nekofetch.ui.artwork import (
-        ensure_anime_art, key_for_franchise, next_anime_art,
+        ensure_anime_art,
+        key_for_franchise,
+        next_anime_art,
     )
     franchise = req.franchise_data or {}
     title = franchise.get("title") or req.anime_title
@@ -772,9 +774,10 @@ def register(client: Client, container: Container) -> None:
         selection buttons. AniZone is intentionally skipped here — its title
         format is incompatible with AniList-based matching, so it has its own
         slug-mapping flow."""
+        from nekofetch.core.redis_safe import safe_redis_get, safe_redis_set
+        from nekofetch.services.request_service import RequestService
         from nekofetch.services.website_report import build_website_report
         from nekofetch.ui.website_report import render_report
-        from nekofetch.services.request_service import RequestService
 
         req = await RequestService(container).get(code)
         franchise = req.franchise_data or {}
@@ -783,6 +786,25 @@ def register(client: Client, container: Container) -> None:
         msg = src.message if isinstance(src, CallbackQuery) else src
 
         back = keyboard([(L(M.BTN_BACK), cb("staff", "rdetail", code))])
+        kb = keyboard(
+            [(L(M.SITE_BTN_MIRURO_PRIMARY),
+              cb("staff", "rsiteprio", code, "miruro", "anikoto", "kickassanime"))],
+            [(L(M.SITE_BTN_ANIKOTO_PRIMARY),
+              cb("staff", "rsiteprio", code, "anikoto", "miruro", "kickassanime"))],
+            [(L(M.SITE_BTN_KICKASS_PRIMARY),
+              cb("staff", "rsiteprio", code, "kickassanime", "miruro", "anikoto"))],
+            [(L(M.BTN_BACK), cb("staff", "rdetail", code))],
+        )
+        cache_key = f"nf:website_report:html:{code}"
+        cached = await safe_redis_get(
+            container.redis, cache_key, label="website_report.cache_get"
+        )
+        if isinstance(cached, bytes):
+            cached = cached.decode()
+        if cached:
+            await show(client, msg, cached, kb)
+            return
+
         loading = await show(client, msg, L(M.WEB_REPORT_LOADING, title=title), back)
         try:
             # Always skip anizone in the regular website report — it has its own flow.
@@ -790,16 +812,15 @@ def register(client: Client, container: Container) -> None:
                 container, title=title, franchise=franchise,
                 skip_anizone=True,
             )
-            kb = keyboard(
-                [(L(M.SITE_BTN_MIRURO_PRIMARY),
-                  cb("staff", "rsiteprio", code, "miruro", "anikoto", "kickassanime"))],
-                [(L(M.SITE_BTN_ANIKOTO_PRIMARY),
-                  cb("staff", "rsiteprio", code, "anikoto", "miruro", "kickassanime"))],
-                [(L(M.SITE_BTN_KICKASS_PRIMARY),
-                  cb("staff", "rsiteprio", code, "kickassanime", "miruro", "anikoto"))],
-                [(L(M.BTN_BACK), cb("staff", "rdetail", code))],
+            rendered = render_report(report)
+            await safe_redis_set(
+                container.redis,
+                cache_key,
+                rendered,
+                label="website_report.cache_set",
+                ex=6 * 60 * 60,
             )
-            await show(client, loading, render_report(report), kb)
+            await show(client, loading, rendered, kb)
         except Exception as exc:
             from nekofetch.core.logging import get_logger
             get_logger(__name__).warning(
@@ -811,7 +832,6 @@ def register(client: Client, container: Container) -> None:
     async def _tg_mode(_: Client, q: CallbackQuery) -> None:
         if not await _guard(q, Permission.QUEUE_DOWNLOADS):
             return
-        from nekofetch.services.queue_service import QueueService
         from nekofetch.services.request_service import RequestService
 
         parts = q.data.split("|", 3)
@@ -826,7 +846,6 @@ def register(client: Client, container: Container) -> None:
                 await q.answer(L(M.ERR_GENERIC), show_alert=True)
                 return
             fr = req.franchise_data or {}
-            title = fr.get("title") or req.anime_title
             ff = FranchiseFlowService(container)
             franchise_entries = await _walk_franchise_for_mapping(
                 container, fr, req.anime_doc_id or ""
@@ -1176,9 +1195,7 @@ def register(client: Client, container: Container) -> None:
         elif message.from_user:
             await fsm.update(message.from_user.id, mapping=stored_mapping)
 
-        # Rebuild and show the updated mapping
-        mapping = FranchiseFlowService.dict_to_mapping(stored_mapping)
-        from nekofetch.ui.franchise_screens import franchise_map_selection
+        # Rebuild marker state and acknowledge the applied edit.
         await message.reply(
             "✅ Edit applied! Refreshing the mapping view…",
             parse_mode=ParseMode.HTML,
@@ -1477,14 +1494,26 @@ def register(client: Client, container: Container) -> None:
                     eps = await src.get_episodes(slug, ep_type=ep_type)
                     if eps:
                         entry["anizone_episodes"] = len(eps)
-                        _log.info("anizone.slug.mapped", slug=slug, ep_type=ep_type, episodes=len(eps))
+                        _log.info(
+                            "anizone.slug.mapped",
+                            slug=slug,
+                            ep_type=ep_type,
+                            episodes=len(eps),
+                        )
                 else:
                     all_eps = await src.get_episodes(slug)
                     reg_eps = await src.get_episodes(slug, ep_type="regular")
                     if all_eps:
                         entry["anizone_episodes"] = len(all_eps)
-                        entry["anizone_regular_episodes"] = len(reg_eps) if reg_eps else len(all_eps)
-                        _log.info("anizone.slug.mapped", slug=slug, episodes=len(all_eps), regular=len(reg_eps) if reg_eps else 0)
+                        entry["anizone_regular_episodes"] = (
+                            len(reg_eps) if reg_eps else len(all_eps)
+                        )
+                        _log.info(
+                            "anizone.slug.mapped",
+                            slug=slug,
+                            episodes=len(all_eps),
+                            regular=len(reg_eps) if reg_eps else 0,
+                        )
             except Exception as exc:
                 _log.warning("anizone.slug.failed", slug=slug, error=str(exc))
 
@@ -2123,14 +2152,16 @@ def register(client: Client, container: Container) -> None:
         # Save file to temp dir
         from pathlib import Path
 
-        work_dir = Path(container.env.storage_path) / "work" / "_manual" / code / f"batch_{batch_idx}"
+        work_dir = (
+            Path(container.env.storage_path) / "work" / "_manual" / code / f"batch_{batch_idx}"
+        )
         work_dir.mkdir(parents=True, exist_ok=True)
         orig_name = getattr(media, "file_name", "") or f"file_{len(paths) + 1}.mkv"
         dest = work_dir / orig_name
         try:
             saved = await message.download(file_name=str(dest))
             paths.append(str(saved))
-        except Exception as exc:
+        except Exception:
             await message.reply(
                 L(M.MANUAL_INVALID_FILE),
                 parse_mode=ParseMode.HTML,
@@ -2342,7 +2373,7 @@ def register(client: Client, container: Container) -> None:
                 # Files arrive in episode order (file #1 = E01, …).
                 for i, src in enumerate(paths):
                     src_path = Path(src)
-                    if not src_path.exists():
+                    if not await asyncio.to_thread(src_path.exists):
                         continue
                     ext = src_path.suffix.lstrip(".") or "mkv"
                     fname = (f"{safe_title} - S{season:02d}E{i + 1:03d}{tag} "

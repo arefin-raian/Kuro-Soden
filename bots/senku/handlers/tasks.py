@@ -74,7 +74,7 @@ def register(client: Client, container: Container) -> None:
             label = f"{icon} {title}"[:60]
             rows.append([(label, cb("senku", "wiz", "open", a.request_code))])
 
-        caption = V.tasks_title(len(active))
+        caption = V.tasks_title(len(active) + len(offers))
         if offers:
             caption = f"<b>Pending offers:</b> {len(offers)}\n\n{caption}"
         await send_screen(
@@ -96,7 +96,26 @@ def register(client: Client, container: Container) -> None:
         engine = AdminAssignmentEngine(container.pg_sessionmaker)
         if action == "accept":
             result = await engine.accept_offer(code, "senku", q.from_user.id)
-            await q.answer("Accepted. Open /tasks.", show_alert=result is None)
+            await q.answer("Accepted." if result else "Offer expired.", show_alert=result is None)
+            if result and q.message is not None:
+                from nekofetch.ui.artwork import pick_artwork
+
+                await send_screen(
+                    client,
+                    q.message.chat.id,
+                    Screen(
+                        caption=(
+                            "🧪 <b>Offer accepted.</b>\n\n"
+                            f"<code>{code}</code>\n"
+                            "<i>Open the distribution build and continue the lab work.</i>"
+                        ),
+                        keyboard=keyboard([
+                            ("🧪 Open Distribution", cb("senku", "wiz", "open", code)),
+                        ]),
+                        image=pick_artwork("senku"),
+                    ),
+                    old_msg=q.message,
+                )
         elif action == "reject":
             ok = await engine.reject_offer(code, "senku", q.from_user.id)
             await q.answer("Rejected." if ok else "Offer expired.", show_alert=not ok)
@@ -157,10 +176,11 @@ async def _generate_content_for_request(
     client: Client, container: Container, message: Message, request_code: str,
 ) -> None:
     """Generate distribution content by reusing NekoFetch's BotContentService."""
-    from nekofetch.infrastructure.database.postgres.session import session_scope
-    from nekofetch.infrastructure.database.postgres.models import DistributionBot
-    from nekofetch.infrastructure.repositories.request_repo import RequestRepository
     from sqlalchemy import select
+
+    from nekofetch.infrastructure.database.postgres.models import DistributionBot
+    from nekofetch.infrastructure.database.postgres.session import session_scope
+    from nekofetch.infrastructure.repositories.request_repo import RequestRepository
 
     async with session_scope(container.pg_sessionmaker) as session:
         req = await RequestRepository(session).get_by_code(request_code)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from pathlib import Path
 
 from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -76,12 +77,13 @@ async def notify_stage_assignment(
         stage, assignment, code, title, requester, requester_id, franchise_json
     )
     keyboard = _stage_keyboard(stage, assignment, code)
-    image = await _stage_art(container, code, title, franchise_json)
+    image = await _stage_art(container, stage, code, title, franchise_json)
+    photo = str(image) if isinstance(image, Path) else image
 
     try:
-        if image is not None:
+        if photo is not None:
             await notifier.send_photo(
-                admin_id, image, caption=caption,
+                admin_id, photo, caption=caption,
                 parse_mode=ParseMode.HTML, reply_markup=keyboard,
             )
         else:
@@ -218,20 +220,29 @@ def _franchise_bits(franchise_json: dict) -> str:
 
 
 async def _stage_art(
-    container: Container, code: str, title: str, franchise_json: dict | None
-) -> str | None:
+    container: Container, stage: str, code: str, title: str, franchise_json: dict | None
+) -> str | Path | None:
     if franchise_json:
-        direct = franchise_json.get("_backdrop_url") or franchise_json.get("banner_url")
-        if isinstance(direct, str) and direct:
-            return direct
-        gallery = franchise_json.get("backdrops") or []
-        for item in gallery:
-            if isinstance(item, str) and item:
-                return item
-    return await _handoff_art(container, code, title)
+        try:
+            from nekofetch.ui.artwork import ensure_anime_art, key_for_franchise, next_anime_art
+
+            art_title = franchise_json.get("title") or franchise_json.get("english") or title
+            key = key_for_franchise(franchise_json, title=art_title)
+            await ensure_anime_art(
+                key,
+                tmdb=container.tmdb,
+                title=art_title,
+                franchise=franchise_json,
+            )
+            return next_anime_art(key, fallback_bot=stage)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("handoff.stage_art.failed", code=code, stage=stage, error=str(exc))
+    return await _handoff_art(container, stage, code, title)
 
 
-async def _handoff_art(container: Container, code: str, title: str) -> str | None:
+async def _handoff_art(
+    container: Container, stage: str, code: str, title: str
+) -> str | Path | None:
     """Resolve this anime's rotating artwork for the handoff card."""
     try:
         from nekofetch.services.request_service import RequestService
@@ -243,8 +254,7 @@ async def _handoff_art(container: Container, code: str, title: str) -> str | Non
         key = key_for_franchise(franchise, title=art_title)
         await ensure_anime_art(key, tmdb=container.tmdb, title=art_title,
                                franchise=franchise)
-        art = next_anime_art(key)
-        return art if isinstance(art, str) else None
+        return next_anime_art(key, fallback_bot=stage)
     except Exception as exc:  # noqa: BLE001
         log.warning("handoff.art.failed", code=code, error=str(exc))
         return None

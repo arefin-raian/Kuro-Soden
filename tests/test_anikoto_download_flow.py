@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from nekofetch.sources.miruro import MiruroSource
 
@@ -5,6 +7,23 @@ from nekofetch.domain.enums import AudioType
 from nekofetch.services.download_service import DownloadWorker
 from nekofetch.sources.anikoto import AnikotoSource
 from nekofetch.sources.base import Episode, VideoVariant
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.store = {}
+        self.ttls = {}
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def set(self, key, value, *, ex=None):
+        self.store[key] = value
+        self.ttls[key] = ex
+
+    async def delete(self, key):
+        self.store.pop(key, None)
+        self.ttls.pop(key, None)
 
 
 @pytest.mark.asyncio
@@ -61,6 +80,24 @@ async def test_best_variant_honors_requested_resolution():
 
     missing = await worker._best_variant(chain, 1, AudioType.DUBBED, "480p")
     assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_source_abort_flag_stops_job_without_reusing_skip_flag():
+    redis = _FakeRedis()
+    worker = object.__new__(DownloadWorker)
+    worker._c = SimpleNamespace(redis=redis)
+
+    await worker.request_source_abort(44)
+
+    assert await worker._source_abort_requested(44) is True
+    assert redis.store["nf:job:44:source_abort"] == "1"
+    assert redis.ttls["nf:job:44:source_abort"] == 300
+    assert "nf:job:44:skip" not in redis.store
+
+    await worker._clear_source_abort(44)
+
+    assert await worker._source_abort_requested(44) is False
 
 
 @pytest.mark.asyncio

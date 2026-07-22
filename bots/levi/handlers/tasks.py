@@ -3,12 +3,13 @@
 Levi does NOT reimplement the download flow. The real machinery — source pick,
 website coverage report, seeders-ranked torrent picker, franchise-entry mapping,
 and queueing — lives in NekoFetch's admin ``review`` handler, which
-``register_all`` mounts onto this same client. This module only lists the tasks
-assigned to the admin and hands each one to that flow via ``staff|rdetail|<code>``.
+``register_all`` mounts onto this same client. This module owns the visible task
+cards and drops confirmed source choices into that shared machinery.
 
 So the flow the user sees is:
 
-    Open a task  →  Pick source (Website / Torrent / Telegram-manual)
+    Open a task  →  Levi-native request card
+                 →  Pick source (Website / Torrent / Telegram-manual)
                  →  Read the source report / seeders list
                  →  Pick which franchise entries to pull
                  →  It queues; the background worker downloads + processes.
@@ -137,10 +138,8 @@ def register(client: Client, container: Container) -> None:
             for a in offers[:5]:
                 title = titles.get(a.request_code, a.request_code)
                 lines.append(f"Offer  <b>{title}</b>  <code>{a.request_code}</code>")
-                rows.append((f"Accept - {title[:26]}",
-                             cb("levi", "offer", "accept", a.request_code)))
-                rows.append((f"Reject - {title[:26]}",
-                             cb("levi", "offer", "reject", a.request_code)))
+                rows.append((f"⚔️ Review offer · {title[:26]}",
+                             cb("levi", "task", a.request_code)))
             lines.append("")
         if active:
             lines.append("<b>Assigned</b>")
@@ -168,6 +167,13 @@ def register(client: Client, container: Container) -> None:
 
         async with session_scope(container.pg_sessionmaker) as session:
             return await RequestRepository(session).get_by_code(code)
+
+    async def _has_pending_offer(admin_id: int, code: str) -> bool:
+        from kurosoden.shared.admin_assignment import AdminAssignmentEngine
+
+        engine = AdminAssignmentEngine(container.pg_sessionmaker)
+        offers = await engine.get_pending_offers(admin_id)
+        return any(a.request_code == code for a in offers)
 
     async def _anime_image(req) -> object:
         franchise = req.franchise_data or {}
@@ -202,7 +208,6 @@ def register(client: Client, container: Container) -> None:
         else:
             kb = keyboard(
                 [(V.BTN_REPORT, cb("staff", "rsource", code, "website"))],
-                [("🌐 Website sources", cb("staff", "rsource", code, "website"))],
                 [(V.BTN_SRC_TELEGRAM, cb("staff", "rsource", code, "telegram"))],
                 [(V.BTN_SRC_TORRENT, cb("staff", "rsource", code, "torrent"))],
                 [("I can't take this", cb("levi", "decline", code))],
@@ -233,12 +238,13 @@ def register(client: Client, container: Container) -> None:
 
     @client.on_callback_query(filters.regex(r"^levi\|task\|"))
     async def _task_cb(_: Client, q: CallbackQuery) -> None:
-        if q.message is None:
+        if q.message is None or q.from_user is None:
             await q.answer()
             return
         code = (q.data or "").split("|", 2)[2]
+        offered = await _has_pending_offer(q.from_user.id, code)
         await q.answer()
-        await _render_detail(q.message.chat.id, code, old_msg=q.message)
+        await _render_detail(q.message.chat.id, code, old_msg=q.message, offered=offered)
 
     @client.on_callback_query(filters.regex(r"^levi\|offer\|"))
     async def _offer_cb(_: Client, q: CallbackQuery) -> None:

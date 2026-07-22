@@ -52,6 +52,14 @@ class _SkipEpisode(Exception):
     """Raised internally when an admin Stops the currently-downloading episode."""
 
 
+class _AbortSourceAttempt(BaseException):
+    """Raised internally when an admin backs out of the current source attempt.
+
+    This differs from ``_CancelJob``: the download job stops, but the request is
+    returned to APPROVED so Levi can pick another source without owner action.
+    """
+
+
 class _CancelJob(BaseException):
     """Raised internally when an admin Cancels the entire job.
 
@@ -171,6 +179,7 @@ class DownloadWorker:
         code = req.code
         title = req.anime_title
         await self._clear_skip(job_id)
+        await self._clear_source_abort(job_id)
 
         # Quality-first order (least → most): 360p → 480p → 720p → 1080p.
         # Probe the first episode to discover available resolutions.
@@ -188,18 +197,24 @@ class DownloadWorker:
 
         try:
             for resolution in resolutions:
+                if await self._source_abort_requested(job_id):
+                    raise _AbortSourceAttempt()
                 if await self._cancel_requested(job_id):
                     raise _CancelJob()
 
                 chunks = self._chunk_episodes(episodes, resolution, folder)
 
                 for chunk in chunks:
+                    if await self._source_abort_requested(job_id):
+                        raise _AbortSourceAttempt()
                     if await self._cancel_requested(job_id):
                         raise _CancelJob()
 
                     # Download every episode in this chunk.
                     failed: list[dict] = []
                     for ep in chunk:
+                        if await self._source_abort_requested(job_id):
+                            raise _AbortSourceAttempt()
                         if await self._cancel_requested(job_id):
                             raise _CancelJob()
                         await self._download_episode(
@@ -210,6 +225,8 @@ class DownloadWorker:
                     # Retry failed units for this chunk — fresh tokens/hosts.
                     remaining: list[dict] = []
                     for spec in failed:
+                        if await self._source_abort_requested(job_id):
+                            raise _AbortSourceAttempt()
                         if await self._cancel_requested(job_id):
                             raise _CancelJob()
                         retried = await self._retry_unit(
@@ -221,6 +238,9 @@ class DownloadWorker:
                         all_failed.extend(remaining)
 
                     # Cancel check before processing/uploading this chunk.
+                    if await self._source_abort_requested(job_id):
+                        await self._finalize_source_aborted(job_id)
+                        return
                     if await self._cancel_requested(job_id):
                         await self._finalize_cancelled(job_id)
                         return
@@ -232,8 +252,14 @@ class DownloadWorker:
         except _CancelJob:
             await self._finalize_cancelled(job_id)
             return
+        except _AbortSourceAttempt:
+            await self._finalize_source_aborted(job_id)
+            return
 
         # Final cancel check before completing the job.
+        if await self._source_abort_requested(job_id):
+            await self._finalize_source_aborted(job_id)
+            return
         if await self._cancel_requested(job_id):
             await self._finalize_cancelled(job_id)
             return
@@ -433,15 +459,23 @@ class DownloadWorker:
         ))
         while True:
             cancel = await self._cancel_requested(job_id)
-            if cancel or await self._skip_requested(job_id):
+            abort_source = await self._source_abort_requested(job_id)
+            skip = await self._skip_requested(job_id)
+            if cancel or abort_source or skip:
                 task.cancel()
-                if not cancel:
+                if skip:
                     await self._clear_skip(job_id)
+                if abort_source:
+                    await self._clear_source_abort(job_id)
                 try:
                     await task
                 except BaseException:  # noqa: BLE001 - swallow whatever the cancel surfaces
                     pass
-                raise _CancelJob() if cancel else _SkipEpisode()
+                if cancel:
+                    raise _CancelJob()
+                if abort_source:
+                    raise _AbortSourceAttempt()
+                raise _SkipEpisode()
             try:
                 return await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
             except TimeoutError:
@@ -641,6 +675,37 @@ class DownloadWorker:
             await safe_redis_set(self._c.redis, self._skip_key(job_id), "1",
                                   label="download.request_skip", ex=300)
 
+    # ── Abort-current-source flag ────────────────────────────────────────────────
+    @staticmethod
+    def _source_abort_key(job_id: int) -> str:
+        return f"nf:job:{job_id}:source_abort"
+
+    async def _source_abort_requested(self, job_id: int) -> bool:
+        return bool(await safe_redis_get(
+            self._c.redis,
+            self._source_abort_key(job_id),
+            label="download.source_abort_requested",
+        ))
+
+    async def _clear_source_abort(self, job_id: int) -> None:
+        if self._c.redis:
+            await safe_redis_delete(
+                self._c.redis,
+                self._source_abort_key(job_id),
+                label="download.clear_source_abort",
+            )
+
+    async def request_source_abort(self, job_id: int) -> None:
+        """Public: stop this job's current source attempt without failing the request."""
+        if self._c.redis:
+            await safe_redis_set(
+                self._c.redis,
+                self._source_abort_key(job_id),
+                "1",
+                label="download.request_source_abort",
+                ex=300,
+            )
+
     # ── Cancel-whole-job flag ────────────────────────────────────────────────────
     @staticmethod
     def _cancel_key(job_id: int) -> str:
@@ -680,6 +745,32 @@ class DownloadWorker:
                                                 anime=title, code=code)
 
     # ── startup recovery / resume ────────────────────────────────────────────────
+    async def _finalize_source_aborted(self, job_id: int) -> None:
+        """Stop this job but leave the request alive for another source pick."""
+        async with session_scope(self._c.pg_sessionmaker) as session:
+            job = await session.get(DownloadJob, job_id)
+            title = code = ""
+            if job is not None:
+                job.status = JobStatus.CANCELLED
+                job.finished_at = _now()
+                req = await RequestRepository(session).get(job.request_id)
+                if req is not None:
+                    req.status = RequestStatus.APPROVED
+                    title, code = req.anime_title, req.code
+        if self._c.progress:
+            await self._c.progress.delete(job_id)
+        await self._clear_skip(job_id)
+        await self._clear_source_abort(job_id)
+        log.info("download.source_aborted", job_id=job_id)
+        from nekofetch.services.log_channel_service import LogChannelService
+        await LogChannelService(self._c).event(
+            "queue",
+            "source_aborted",
+            job=job_id,
+            anime=title,
+            code=code,
+        )
+
     async def recover_on_startup(self) -> None:
         """At process start NOTHING is downloading yet, so any job left RUNNING/PAUSED
         was orphaned by a crash or kill. Re-queue it so the worker resumes (the loop
@@ -704,6 +795,7 @@ class DownloadWorker:
                 await self._c.progress.delete(jid)
             await self._clear_skip(jid)
             await self._clear_cancel(jid)
+            await self._clear_source_abort(jid)
         if ids:
             log.info("download.recover", orphaned=ids, resume=resume)
 

@@ -118,7 +118,7 @@ async def _job_view(container: Container, job_id: int) -> dict | None:
 def _live_keyboard(job_id: int, view: dict) -> InlineKeyboardMarkup:
     """Controls shown while Levi is working a source attempt."""
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton(t(M.CC_BTN_CANCEL_JOB), callback_data=cb("levi", "dlcancel", job_id))
+        InlineKeyboardButton("↩️ Change source", callback_data=cb("levi", "dlcancel", job_id))
     ]])
 
 
@@ -250,7 +250,7 @@ async def _paint_terminal(client: Client, container: Container, job_id: int,
 
 
 def register(client: Client, container: Container) -> None:
-    """Mount the live-card action handlers (skip current ep / cancel / abandon).
+    """Mount the live-card action handlers (skip current ep / source abort / abandon).
 
     The Retry/Switch/Provide recovery buttons reuse the shared ``staff|a*``
     handlers already mounted by the review handler — we only add the Levi-owned
@@ -280,7 +280,7 @@ def register(client: Client, container: Container) -> None:
             return
         job_id = int(q.data.split("|")[2])
         from nekofetch.services.download_service import DownloadWorker
-        await DownloadWorker(container).request_skip(job_id)
+        await DownloadWorker(container).request_source_abort(job_id)
         view = await _job_view(container, job_id) or {}
         code = view.get("code")
         if q.message is not None and code:
@@ -311,7 +311,7 @@ def register(client: Client, container: Container) -> None:
                 )
             except Exception:  # noqa: BLE001
                 pass
-        await q.answer(t(M.TOAST_CANCELLING), show_alert=True)
+        await q.answer("Source stopped. Pick another route.", show_alert=True)
 
     @client.on_callback_query(filters.regex(r"^levi\|dlretry\|"))
     async def _dl_retry(_: Client, q: CallbackQuery) -> None:
