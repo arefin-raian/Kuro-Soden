@@ -182,61 +182,44 @@ def download_card_html(
     retry_reason: str | None = None,
     low_disk: bool = False,
 ) -> str:
-    """Mobile-first live download card shown through Levi (no log channel here).
-
-    One short fact per line so nothing wraps on a narrow phone: title+job, the
-    episode, the variant, a stage line (Downloading / Retrying N/M), a 10-cell
-    bar, then speed/size and ETA/elapsed paired two-per-line.
-    """
-    lines: list[str] = [t(M.DL_CARD_TITLE, title=_esc(title), job=job_id)]
-
-    # Episode line — "S01E005 · 5 / 24"
+    """Live Levi transfer card for download, retry, processing, and upload stages."""
+    title_bits = [_esc(title)]
     if current_episode is not None:
-        of = ""
-        if episode_index and total_episodes:
-            of = f"  ·  {episode_index} / {total_episodes}"
-        lines.append(t(M.DL_CARD_EP, season=(season or 1),
-                       episode=current_episode, of=of))
+        title_bits.append(f"[S{(season or 1):02d}E{int(current_episode):02d}]")
+    variant_bits = [b for b in (resolution, (audio or "").upper() or None) if b]
+    if variant_bits:
+        title_bits.append(f"[{_esc(' · '.join(variant_bits))}]")
 
-    # Variant line — "1080p · DUAL"
-    ver_bits = [b for b in (resolution, (audio or "").upper() or None) if b]
-    if ver_bits:
-        lines.append(t(M.DL_CARD_VER, ver=_esc(" · ".join(ver_bits))))
-
-    lines.append("")  # blank spacer
-
-    # Stage line — retrying takes priority so a stall is never silent.
     if retry_attempt and retry_max:
         reason = f" · {_esc(retry_reason)}" if retry_reason else ""
-        lines.append(t(M.DL_CARD_STAGE_RETRYING, attempt=retry_attempt,
-                       max=retry_max, reason=reason))
+        stage_label = f"Retrying {retry_attempt}/{retry_max}{reason}"
     elif stage and stage.lower() not in ("downloading", "download"):
-        lines.append(t(M.DL_CARD_STAGE_GENERIC, stage=_esc(stage)))
+        stage_label = _esc(stage).replace("_", " ").title()
     else:
-        lines.append(t(M.DL_CARD_STAGE_DOWNLOADING))
+        stage_label = "Downloading"
 
-    lines.append(f"<b>{bar(progress)}</b>")
-
-    # speed · size  (only the parts we actually know)
-    row1: list[str] = []
-    if speed_bps > 0:
-        row1.append(t(M.DL_CARD_STAT_SPEED, speed=_esc(human_speed(speed_bps))))
     if total_bytes > 0:
-        row1.append(t(M.DL_CARD_STAT_SIZE, done=_esc(human_bytes(downloaded_bytes)),
-                      total=_esc(human_bytes(total_bytes))))
-    if row1:
-        lines.append("   ·   ".join(row1))
+        size = f"{human_bytes(downloaded_bytes)} / {human_bytes(total_bytes)}"
+    elif downloaded_bytes > 0:
+        size = human_bytes(downloaded_bytes)
+    else:
+        size = "—"
+    speed = human_speed(speed_bps) if speed_bps > 0 else "—"
+    eta = human_eta(eta_seconds) if eta_seconds is not None else "—"
+    elapsed = human_elapsed(elapsed_seconds)
+    percent = int(max(0.0, min(100.0, progress)))
+    filled = round(percent / 100 * 10)
+    cells = "■" * filled + "□" * (10 - filled)
+    warning = f"\n\n<blockquote>{t(M.DL_CARD_LOW_DISK)}</blockquote>" if low_disk else ""
 
-    # eta · elapsed
-    row2: list[str] = []
-    if eta_seconds is not None:
-        row2.append(t(M.DL_CARD_STAT_ETA, eta=_esc(human_eta(eta_seconds))))
-    if elapsed_seconds is not None:
-        row2.append(t(M.DL_CARD_STAT_ELAPSED, elapsed=_esc(human_elapsed(elapsed_seconds))))
-    if row2:
-        lines.append("   ·   ".join(row2))
-
-    if low_disk:
-        lines.append(t(M.DL_CARD_LOW_DISK))
-
-    return "\n".join(lines)
+    return (
+        f"<blockquote><b>{' '.join(title_bits)}</b> <b>@AniXWeebs</b></blockquote>\n"
+        f"<blockquote><b><u>‣ Status : </u></b><i><u>{stage_label}</u></i>\n"
+        f"<b>[{cells}] {percent}%</b></blockquote>\n"
+        f"<blockquote><b><u>Transfer</u>\n"
+        f"├─ ⚡ Speed             </b> {speed}\n"
+        f"<b>├─ Downloaded        </b> {size}\n"
+        f"<b>├─ ⌛ ETA               </b> {eta}\n"
+        f"<b>└─ ⏱️ Elapsed          </b> {elapsed}</blockquote>"
+        f"{warning}"
+    )

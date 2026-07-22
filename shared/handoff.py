@@ -171,15 +171,21 @@ def _stage_caption(
 def _stage_keyboard(stage: str, assignment, code: str) -> InlineKeyboardMarkup:
     is_offer = getattr(assignment, "status", "assigned") == "offered"
     if is_offer:
-        return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("Accept", callback_data=cb(stage, "offer", "accept", code)),
-                InlineKeyboardButton("Reject", callback_data=cb(stage, "offer", "reject", code)),
-            ],
-            [InlineKeyboardButton("📋 Open Tasks", callback_data=cb(stage, "tasks"))],
-        ])
+        rows = [[
+            InlineKeyboardButton("Accept", callback_data=cb(stage, "offer", "accept", code)),
+            InlineKeyboardButton("Reject", callback_data=cb(stage, "offer", "reject", code)),
+        ]]
+        if stage == "levi":
+            rows.append([
+                InlineKeyboardButton("⚔️ Open Offer", callback_data=cb("levi", "task", code))
+            ])
+        rows.append([InlineKeyboardButton("📋 Open Tasks", callback_data=cb(stage, "tasks"))])
+        return InlineKeyboardMarkup(rows)
     if stage == "levi":
-        rows = [[InlineKeyboardButton("📋 Open Download Tasks", callback_data=cb("levi", "tasks"))]]
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚔️ Open Request", callback_data=cb("levi", "task", code))],
+            [InlineKeyboardButton("📋 Open Download Tasks", callback_data=cb("levi", "tasks"))],
+        ])
     elif stage == "senku":
         rows = [[
             InlineKeyboardButton(

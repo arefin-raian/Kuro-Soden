@@ -16,36 +16,15 @@ picker, and submission logic is ALL reused from the existing codebase.
 from __future__ import annotations
 
 import html
+from datetime import UTC
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import CallbackQuery, Message
 
-from nekofetch.bots.fsm import FSM
-from nekofetch.core.container import Container
-from nekofetch.core.exceptions import NekoFetchError
-from nekofetch.core.logging import get_logger
-from nekofetch.domain.enums import DownloadScope, RequestStatus
-from nekofetch.localization.messages import M, t
-from nekofetch.ui.components import lock_buttons
-from nekofetch.ui.progress import SPINNER, animate_until
-from nekofetch.ui.artwork import (
-    anime_art_key,
-    ensure_anime_art,
-    key_for_franchise,
-    next_anime_art,
-    pick_artwork,
-    seed_anime_art,
-)
-from nekofetch.ui.screens import (
-    Screen,
-    ask_title,
-    choose_version,
-    confirm_franchise,
-    request_received,
-    retry_title,
-    send_screen,
-)
+# ── Lelouch-specific additions ───────────────────────────────────────────────
+from kurosoden.shared.admin_assignment import AdminAssignmentEngine
+from kurosoden.shared.dedup import DedupService
 
 # ── REUSED from NekoFetch's existing admin handler ───────────────────────────
 # These are module-level functions in the admin bot's request handler.
@@ -55,10 +34,31 @@ from nekofetch.bots.admin.handlers.requests import (
     apply_franchise_totals,
     enrich_with_tmdb,
 )
-
-# ── Lelouch-specific additions ───────────────────────────────────────────────
-from kurosoden.shared.admin_assignment import AdminAssignmentEngine
-from kurosoden.shared.dedup import DedupService
+from nekofetch.bots.fsm import FSM
+from nekofetch.core.container import Container
+from nekofetch.core.exceptions import NekoFetchError
+from nekofetch.core.logging import get_logger
+from nekofetch.domain.enums import DownloadScope, RequestStatus
+from nekofetch.localization.messages import M, t
+from nekofetch.ui.artwork import (
+    anime_art_key,
+    ensure_anime_art,
+    key_for_franchise,
+    next_anime_art,
+    pick_artwork,
+    seed_anime_art,
+)
+from nekofetch.ui.components import lock_buttons
+from nekofetch.ui.progress import SPINNER, animate_until
+from nekofetch.ui.screens import (
+    Screen,
+    ask_title,
+    choose_version,
+    confirm_franchise,
+    request_received,
+    retry_title,
+    send_screen,
+)
 
 log = get_logger(__name__)
 
@@ -146,9 +146,9 @@ def register(client: Client, container: Container) -> None:
 
         # ── 0. Force-join + global gate + one-at-a-time limit (staff bypass) ──
         if not await _is_staff(message, container):
+            from kurosoden.shared import lelouch_voice as V
             from kurosoden.shared.join_gate import ensure_can_request
             from kurosoden.shared.request_gate import requests_open
-            from kurosoden.shared import lelouch_voice as V
 
             # Force-join: typing a title also requires channel membership.
             if not await ensure_can_request(
@@ -174,6 +174,7 @@ def register(client: Client, container: Container) -> None:
         result = await dedup.check(query)
         if result.exists:
             from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
             from kurosoden.shared import lelouch_voice as V
 
             title = result.title or query
@@ -426,10 +427,10 @@ def register(client: Client, container: Container) -> None:
         *,
         query: str,
     ) -> None:
-        from nekofetch.services.request_service import RequestService
-        from nekofetch.infrastructure.repositories.request_repo import RequestRepository
-        from nekofetch.infrastructure.database.postgres.session import session_scope
         from nekofetch.domain.enums import RequestStatus as RS
+        from nekofetch.infrastructure.database.postgres.session import session_scope
+        from nekofetch.infrastructure.repositories.request_repo import RequestRepository
+        from nekofetch.services.request_service import RequestService
 
         title = franchise_data.get("title", query)
         anilist_id = franchise_data.get("anilist_id")
@@ -489,11 +490,10 @@ def register(client: Client, container: Container) -> None:
         # on them.) The card image swaps to a fresh recurring artwork. The
         # receipt now carries the full detail: code, who + id, when, and a
         # summarized franchise breakdown.
-        from datetime import datetime, timezone
-        requested_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        from datetime import datetime
+        requested_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
         art_key = key_for_franchise(franchise_json, title=title)
-        await ensure_anime_art(art_key, tmdb=container.tmdb, title=title,
-                               franchise=franchise_json)
+        await ensure_anime_art(art_key, franchise=franchise_json)
         screen = request_received(
             user_name, title, queue_pos=receipt.position,
             code=receipt.code, requester_id=user_id,

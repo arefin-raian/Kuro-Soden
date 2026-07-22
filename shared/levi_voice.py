@@ -71,8 +71,8 @@ def request_card(title: str, code: str, requester: str | None = None) -> str:
     if requester:
         lines.append(f"Requested by {esc(requester)}")
     lines.append(
-        "\nTwo ways in. Pull a full <b>source report</b> before you commit, or "
-        "if you already know the terrain, <b>assign a source</b> and go. Your call."
+        "\nReport first if you want the terrain. Pick Website, Torrent, or Telegram "
+        "when you're ready to move. If one source gets dirty, back out and take another."
     )
     return "\n".join(lines)
 
@@ -94,8 +94,8 @@ def franchise_selected_count(n: int, total: int) -> str:
 # ── Source picking ────────────────────────────────────────────────────────────
 
 SOURCE_PICK_BODY = (
-    "One source. No fallback chain — you pick, you commit. Read the report if "
-    "you pulled one; it'll tell you which way is cleanest."
+    "Pick the route. Website opens the report and source order. Torrent is direct. "
+    "Telegram is manual. Backing out changes the route; it never kills the request."
 )
 
 # The fixed manual note for Telegram — always the same, drilled in.

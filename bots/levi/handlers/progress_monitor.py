@@ -116,16 +116,10 @@ async def _job_view(container: Container, job_id: int) -> dict | None:
 
 
 def _live_keyboard(job_id: int, view: dict) -> InlineKeyboardMarkup:
-    """Controls shown while the job is downloading: skip the current episode or
-    cancel the whole job. Both reuse the existing worker Stop/Cancel flags."""
-    rows = []
-    ep = view.get("current_episode")
-    if ep:
-        rows.append([InlineKeyboardButton(t(M.CC_BTN_STOP_EP, ep=ep),
-                                          callback_data=cb("levi", "dlskip", job_id, ep))])
-    rows.append([InlineKeyboardButton(t(M.CC_BTN_CANCEL_JOB),
-                                      callback_data=cb("levi", "dlcancel", job_id))])
-    return InlineKeyboardMarkup(rows)
+    """Controls shown while Levi is working a source attempt."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(t(M.CC_BTN_CANCEL_JOB), callback_data=cb("levi", "dlcancel", job_id))
+    ]])
 
 
 async def _recovery_keyboard(container: Container, code: str) -> InlineKeyboardMarkup:
@@ -142,12 +136,18 @@ async def _recovery_keyboard(container: Container, code: str) -> InlineKeyboardM
         except Exception:  # noqa: BLE001
             pass
 
-    rows = [[InlineKeyboardButton(t(M.CC_BTN_RETRY_EPS), callback_data=cb("staff", "aretry", code))]]
+    rows = [[
+        InlineKeyboardButton(t(M.CC_BTN_RETRY_EPS), callback_data=cb("staff", "aretry", code))
+    ]]
     if alt_source:
         rows.append([InlineKeyboardButton(t(M.CC_BTN_SWITCH_SRC),
                                           callback_data=cb("staff", "aswitch", code))])
-    rows.append([InlineKeyboardButton(t(M.CC_BTN_PROVIDE), callback_data=cb("staff", "aprovide", code))])
-    rows.append([InlineKeyboardButton(t(M.CC_BTN_ABANDON), callback_data=cb("levi", "dlabandon", code))])
+    rows.append([
+        InlineKeyboardButton(t(M.CC_BTN_PROVIDE), callback_data=cb("staff", "aprovide", code))
+    ])
+    rows.append([
+        InlineKeyboardButton(t(M.CC_BTN_ABANDON), callback_data=cb("levi", "dlabandon", code))
+    ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -279,8 +279,38 @@ def register(client: Client, container: Container) -> None:
         if not await _guard(q, Permission.QUEUE_DOWNLOADS):
             return
         job_id = int(q.data.split("|")[2])
-        from nekofetch.services.queue_service import QueueService
-        await QueueService(container).cancel(job_id)
+        from nekofetch.services.download_service import DownloadWorker
+        await DownloadWorker(container).request_skip(job_id)
+        view = await _job_view(container, job_id) or {}
+        code = view.get("code")
+        if q.message is not None and code:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "🌐 Website sources",
+                    callback_data=cb("staff", "rsource", code, "website"),
+                )],
+                [InlineKeyboardButton(
+                    "✈️ Telegram manual",
+                    callback_data=cb("staff", "rsource", code, "telegram"),
+                )],
+                [InlineKeyboardButton(
+                    "🧲 Torrent",
+                    callback_data=cb("staff", "rsource", code, "torrent"),
+                )],
+            ])
+            try:
+                await q.message.edit_text(
+                    (
+                        "⚔️ <b>Source attempt stopped.</b>\n\n"
+                        f"<b>{view.get('title', code)}</b>\n"
+                        f"<code>{code}</code>\n\n"
+                        "<i>Pick another route. The request stays alive.</i>"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=kb,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         await q.answer(t(M.TOAST_CANCELLING), show_alert=True)
 
     @client.on_callback_query(filters.regex(r"^levi\|dlretry\|"))
