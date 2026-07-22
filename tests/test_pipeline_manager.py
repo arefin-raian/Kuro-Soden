@@ -9,6 +9,8 @@ Covers:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constants
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -29,7 +31,7 @@ class TestConstants:
         assert _CONN_RECONNECT_ATTEMPTS >= 1
 
     def test_reconnect_timeout_higher_than_probe(self):
-        from kurosoden.shared.pipeline_manager import _CONN_RECONNECT_TIMEOUT, _CONN_PROBE_TIMEOUT
+        from kurosoden.shared.pipeline_manager import _CONN_PROBE_TIMEOUT, _CONN_RECONNECT_TIMEOUT
         assert _CONN_RECONNECT_TIMEOUT >= _CONN_PROBE_TIMEOUT
 
     def test_reconnect_backoff_positive(self):
@@ -85,10 +87,10 @@ class TestBotNameMapping:
         """Lelouch → Levi → Senku → Gojo (pipeline order)."""
         expected_order = ["lelouch", "levi", "senku", "gojo"]
         # Verify these are the only valid bot names.
-        from kurosoden.shared.pipeline_manager import PipelineManager
-
         # Check _start_bot calls in start() method are in the right order.
         import inspect
+
+        from kurosoden.shared.pipeline_manager import PipelineManager
         source = inspect.getsource(PipelineManager.start)
         indices = [source.find(f'\"{name}\"') for name in expected_order]
         # All should be found and in order.
@@ -99,8 +101,9 @@ class TestBotNameMapping:
 
     def test_assignment_recovery_job_is_registered(self):
         """Offer expiry and quiet-hour recovery must run in the scheduler."""
-        from kurosoden.shared.pipeline_manager import PipelineManager
         import inspect
+
+        from kurosoden.shared.pipeline_manager import PipelineManager
 
         source = inspect.getsource(PipelineManager.start)
         assert "make_assignment_recovery_job" in source
@@ -120,11 +123,29 @@ class TestBotNameMapping:
 
     def test_unknown_name_would_be_handled(self):
         """The _start_bot method has an else clause for unknown names."""
-        from kurosoden.shared.pipeline_manager import PipelineManager
         import inspect
+
+        from kurosoden.shared.pipeline_manager import PipelineManager
         source = inspect.getsource(PipelineManager._start_bot)
         assert "else:" in source
         assert "unknown" in source.lower()
+
+    def test_token_lookup_reads_loaded_env_settings(self):
+        """Pipeline tokens live in EnvSettings, not os.environ."""
+        from kurosoden.shared.pipeline_manager import PipelineManager
+
+        env = SimpleNamespace(
+            request_bot_token="request-token",
+            downloader_bot_token="download-token",
+            distribution_bot_token="distribution-token",
+            publisher_bot_token="publisher-token",
+        )
+        pm = PipelineManager(SimpleNamespace(env=env))
+
+        assert pm._token_from_config("REQUEST_BOT_TOKEN") == "request-token"
+        assert pm._token_from_config("DOWNLOADER_BOT_TOKEN") == "download-token"
+        assert pm._token_from_config("DISTRIBUTION_BOT_TOKEN") == "distribution-token"
+        assert pm._token_from_config("PUBLISHER_BOT_TOKEN") == "publisher-token"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -152,10 +173,10 @@ class TestBotBuilderImports:
 
     def test_all_bots_have_commands(self):
         """Every bot should have a COMMANDS list."""
+        from kurosoden.bots.gojo.app import GOJO_COMMANDS
         from kurosoden.bots.lelouch.app import LELOUCH_COMMANDS
         from kurosoden.bots.levi.app import LEVI_COMMANDS
         from kurosoden.bots.senku.app import SENKU_COMMANDS
-        from kurosoden.bots.gojo.app import GOJO_COMMANDS
 
         assert len(LELOUCH_COMMANDS) > 0
         assert len(LEVI_COMMANDS) > 0
@@ -211,10 +232,10 @@ class TestStopBehavior:
         """Stopping with no running clients should not crash."""
         from kurosoden.shared.pipeline_manager import PipelineManager
         pm = PipelineManager(None)
-        pm.stop  # Just accessing the method — it exists.
         assert callable(pm.stop)
 
     def test_stop_method_exists_and_is_async(self):
-        from kurosoden.shared.pipeline_manager import PipelineManager
         import inspect
+
+        from kurosoden.shared.pipeline_manager import PipelineManager
         assert inspect.iscoroutinefunction(PipelineManager.stop)

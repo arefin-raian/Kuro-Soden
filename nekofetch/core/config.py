@@ -56,6 +56,10 @@ class EnvSettings(BaseSettings):
     telegram_api_hash: str = Field(..., alias="TELEGRAM_API_HASH")
     admin_bot_token: str = Field(..., alias="ADMIN_BOT_TOKEN")
     admin_ids: list[int] = Field(default_factory=list, alias="ADMIN_IDS")
+    request_bot_token: str = Field("", alias="REQUEST_BOT_TOKEN")
+    downloader_bot_token: str = Field("", alias="DOWNLOADER_BOT_TOKEN")
+    distribution_bot_token: str = Field("", alias="DISTRIBUTION_BOT_TOKEN")
+    publisher_bot_token: str = Field("", alias="PUBLISHER_BOT_TOKEN")
 
     # Security
     secret_key: str = Field(..., alias="SECRET_KEY")

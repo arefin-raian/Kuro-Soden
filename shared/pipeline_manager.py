@@ -149,7 +149,7 @@ class PipelineManager:
         """Start a single pipeline bot by name."""
         import os
 
-        token = os.getenv(env_var, "").strip()
+        token = self._token_from_config(env_var) or os.getenv(env_var, "").strip()
         if not token:
             log.warning("kuro-soden.bot.token_missing", bot=name, env_var=env_var,
                         hint=f"Set {env_var} in .env to enable the {name} bot")
@@ -183,6 +183,19 @@ class PipelineManager:
             log.info("kuro-soden.bot.started", bot=name)
         except Exception as exc:
             log.error("kuro-soden.bot.start_failed", bot=name, error=str(exc))
+
+    def _token_from_config(self, env_var: str) -> str:
+        """Read pipeline bot tokens from EnvSettings, where .env is actually loaded."""
+        env = getattr(self._c, "env", None)
+        if env is None:
+            return ""
+        attr = {
+            "REQUEST_BOT_TOKEN": "request_bot_token",
+            "DOWNLOADER_BOT_TOKEN": "downloader_bot_token",
+            "DISTRIBUTION_BOT_TOKEN": "distribution_bot_token",
+            "PUBLISHER_BOT_TOKEN": "publisher_bot_token",
+        }.get(env_var)
+        return str(getattr(env, attr, "") or "").strip() if attr else ""
 
     @property
     def lelouch(self):
