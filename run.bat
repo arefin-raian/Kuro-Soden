@@ -1,57 +1,84 @@
 @echo off
 REM ============================================================
-REM  Kuro Sōden launcher (Windows)
+REM  Kuro Soden launcher (Windows)
 REM  Double-click this file, or run `run.bat` from a terminal.
-REM  Creates the venv + installs deps on first run, then boots
-REM  all four pipeline bots (Lelouch, Levi, Senku, Gojo).
+REM
+REM  Startup order:
+REM    1. Use .venv inside this repo if it already exists.
+REM    2. If missing, clone the parent NekoFetch .venv without downloading deps.
+REM    3. Only if no parent venv exists, try to create a fresh venv.
 REM ============================================================
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-set "VENV_PY=.venv\Scripts\python.exe"
+set "VENV_DIR=.venv"
+set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
+set "PARENT_VENV=..\.venv"
+set "PARENT_VENV_PY=%PARENT_VENV%\Scripts\python.exe"
+set "READY_MARKER=%VENV_DIR%\.kurosoden-ready"
 
 REM --- ensure a virtual environment exists --------------------
 if not exist "%VENV_PY%" (
-    echo [Kuro Sōden] No virtual environment found. Creating .venv ...
-    py -3.12 -m venv .venv 2>nul || python -m venv .venv
+    if exist "%PARENT_VENV_PY%" (
+        echo [Kuro Soden] No local .venv found. Copying parent NekoFetch .venv ...
+        robocopy "%PARENT_VENV%" "%VENV_DIR%" /E /NFL /NDL /NJH /NJS /NP >nul
+        if errorlevel 8 (
+            echo [Kuro Soden] ERROR: could not copy parent virtual environment.
+            pause
+            exit /b 1
+        )
+    ) else (
+        echo [Kuro Soden] No local or parent virtual environment found. Creating .venv ...
+        py -3.12 -m venv "%VENV_DIR%" 2>nul || python -m venv "%VENV_DIR%"
+    )
+
     if not exist "%VENV_PY%" (
-        echo [Kuro Sōden] ERROR: could not create a virtual environment.
-        echo [Kuro Sōden] Install Python 3.12+ from https://python.org and retry.
+        echo [Kuro Soden] ERROR: could not prepare a virtual environment.
+        echo [Kuro Soden] Parent venv was not usable and Python was not found on PATH.
         pause
         exit /b 1
     )
 )
 
-REM --- ensure deps are installed ------------------------------
-echo [Kuro Sōden] Syncing dependencies ...
-"%VENV_PY%" -m pip install --upgrade pip -q
-"%VENV_PY%" -m pip install -e .
-if errorlevel 1 (
-    echo [Kuro Sōden] ERROR: dependency install failed. See the output above.
-    pause
-    exit /b 1
+REM --- register this repo without downloading dependencies -----
+if not exist "%READY_MARKER%" (
+    echo [Kuro Soden] Registering local package without downloading dependencies ...
+    "%VENV_PY%" -m pip install -e . --no-deps
+    if errorlevel 1 (
+        echo [Kuro Soden] ERROR: local package registration failed.
+        echo [Kuro Soden] The copied venv exists, but pip could not install this repo.
+        pause
+        exit /b 1
+    )
+    echo ready>"%READY_MARKER%"
 )
 
 REM --- sanity: secrets file -----------------------------------
 if not exist ".env" (
-    echo [Kuro Sōden] WARNING: .env not found.
-    echo [Kuro Sōden] Copy .env.example to .env and fill in your tokens:
-    echo [Kuro Sōden]     copy .env.example .env
+    echo [Kuro Soden] WARNING: .env not found.
+    echo [Kuro Soden] Copy .env.example to .env and fill in your tokens:
+    echo [Kuro Soden]     copy .env.example .env
     echo.
 )
 
-REM --- run ----------------------------------------------------
-echo [Kuro Sōden] Starting 4-bot pipeline...
-echo [Kuro Sōden]   Lelouch    - Request intake
-echo [Kuro Sōden]   Levi       - Download delegation
-echo [Kuro Sōden]   Senku      - Distribution
-echo [Kuro Sōden]   Gojo       - Publishing
-echo.
-echo [Kuro Sōden] Press Ctrl+C to stop.
+if /I "%~1"=="--check" (
+    echo [Kuro Soden] Launcher check passed.
+    echo [Kuro Soden] Using "%VENV_PY%".
+    exit /b 0
+)
 
-set "PATH=%~dp0.venv\Scripts;%PATH%"
+REM --- run ----------------------------------------------------
+echo [Kuro Soden] Starting 4-bot pipeline...
+echo [Kuro Soden]   Lelouch    - Request intake
+echo [Kuro Soden]   Levi       - Download delegation
+echo [Kuro Soden]   Senku      - Distribution
+echo [Kuro Soden]   Gojo       - Publishing
+echo.
+echo [Kuro Soden] Press Ctrl+C to stop.
+
+set "PATH=%~dp0%VENV_DIR%\Scripts;%PATH%"
 "%VENV_PY%" main.py
 
 echo.
-echo [Kuro Sōden] Process exited.
+echo [Kuro Soden] Process exited.
 pause
