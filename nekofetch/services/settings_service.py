@@ -16,6 +16,7 @@ from nekofetch.core.logging import get_logger
 log = get_logger(__name__)
 
 _OVERRIDES_KEY = "runtime_overrides"
+_DEFAULTS_KEY = "runtime_defaults"
 
 
 class SettingsService:
@@ -35,6 +36,33 @@ class SettingsService:
             {"key": _OVERRIDES_KEY}, {"$set": {"value": value}}, upsert=True
         )
 
+    def _safe_defaults(self) -> dict:
+        hidden = set(self._HIDDEN_FIELDS)
+
+        def clean(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: clean(v) for k, v in value.items() if k not in hidden}
+            if isinstance(value, list):
+                return [clean(v) for v in value]
+            return value
+
+        return clean(self._c.config.model_dump(mode="json"))
+
+    async def seed_defaults(self) -> None:
+        """Persist the config defaults beside overrides so Mongo shows every field.
+
+        Defaults are not overrides. Operators can inspect them in MongoDB, while
+        live edits still write only to ``runtime_overrides`` and keep shadowing
+        config.yaml until cleared.
+        """
+        if self._c.collections is None:
+            return
+        await self._c.collections.settings.update_one(
+            {"key": _DEFAULTS_KEY},
+            {"$set": {"value": self._safe_defaults()}},
+            upsert=True,
+        )
+
     async def apply_overrides(self) -> None:
         """Apply persisted overrides onto the live config (called at startup).
 
@@ -42,6 +70,7 @@ class SettingsService:
         log every shadowed field so a "config.yaml edit isn't taking effect" is
         immediately explained by the log (the override wins until it's cleared).
         """
+        await self.seed_defaults()
         overrides = await self._load_doc()
         applied: list[str] = []
         for section, values in overrides.items():

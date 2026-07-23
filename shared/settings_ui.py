@@ -30,11 +30,11 @@ from __future__ import annotations
 
 import html as _html
 import re
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
-from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from pyrogram.types import CallbackQuery, Message
 
 from nekofetch.bots.fsm import FSM
 from nekofetch.core.container import Container
@@ -50,7 +50,6 @@ from nekofetch.services.settings_service import SettingsService
 from nekofetch.ui.artwork import pick_artwork
 from nekofetch.ui.components import cb, edit_markup, keyboard
 from nekofetch.ui.screens import Screen, send_screen
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Input parsing — accept Telegram-native styling, HTML, or Markdown
@@ -75,7 +74,7 @@ def _markdown_to_html(text: str) -> str:
     #    Stash each span, drop in a placeholder, restore at the very end.
     stash: list[str] = []
 
-    def _stash_code(m: "re.Match[str]") -> str:
+    def _stash_code(m: re.Match[str]) -> str:
         stash.append(m.group(1))
         return f"\x00{len(stash) - 1}\x00"
 
@@ -98,7 +97,7 @@ def _markdown_to_html(text: str) -> str:
     text = re.sub(r"(?<!_)_(?!_)([^_\n]+)_(?!_)", r"<i>\1</i>", text)
 
     # Restore stashed code spans as <code>…</code> (escaped — code is literal).
-    def _restore(m: "re.Match[str]") -> str:
+    def _restore(m: re.Match[str]) -> str:
         return f"<code>{_html.escape(stash[int(m.group(1))])}</code>"
 
     text = re.sub(r"\x00(\d+)\x00", _restore, text)
@@ -391,26 +390,29 @@ def _section_rows(
     if allow is not None:
         by_name = {f: (f, v, k) for f, v, k in fields}
         fields = [by_name[name] for name in allow if name in by_name]
+    buttons: list[tuple[str, str]] = []
     for field, value, kind in fields:
         label = field_label(field, section)
         widget = widget_for(section, field, value)
         if widget == "toggle":
             mark = "🟢" if value else "⚪️"
-            rows.append([(f"{mark}  {label}", cb(bot, "set", "tog", f"{section}.{field}"))])
+            buttons.append((f"{mark}  {label}", cb(bot, "set", "tog", f"{section}.{field}")))
         elif widget == "choice":
             # Fixed value set → open the tap-to-pick screen (no free-text typos).
-            rows.append([(f"{label}  ·  {_shorten(value)}",
-                          cb(bot, "set", "pick", f"{section}.{field}"))])
+            buttons.append((f"{label}  ·  {_shorten(value)}",
+                            cb(bot, "set", "pick", f"{section}.{field}")))
         elif kind == "list":
             # Lists get a full add/remove manager, NOT the replace-only text card —
             # so adding one entry never wipes the rest and each entry is removable.
-            rows.append([(f"{label}  ·  {_shorten(value)}",
-                          cb(bot, "set", "list", f"{section}.{field}"))])
+            buttons.append((f"{label}  ·  {_shorten(value)}",
+                            cb(bot, "set", "list", f"{section}.{field}")))
         else:
             # text / number / template / channel / sticker / timezone all open the
             # edit card, which adapts its capture to the widget.
-            rows.append([(f"{label}  ·  {_shorten(value)}",
-                          cb(bot, "set", "edit", f"{section}.{field}"))])
+            buttons.append((f"{label}  ·  {_shorten(value)}",
+                            cb(bot, "set", "edit", f"{section}.{field}")))
+    for i in range(0, len(buttons), 2):
+        rows.append(buttons[i:i + 2])
     rows.append([("⇐ Back", cb(bot, "set", "home"))])
     return rows
 
@@ -508,6 +510,9 @@ def field_screen(
         parts += ["", "<b>Allowed:</b> " + " · ".join(f"<code>{_html.escape(o)}</code>"
                                                        for o in doc.options)]
 
+    if doc and doc.example and not is_template:
+        parts += ["", f"<b>Example:</b> <code>{_html.escape(str(doc.example))}</code>"]
+
     # Variables you can use, in plain words.
     if doc and doc.placeholders:
         parts += ["", "<b>You can drop in:</b>"]
@@ -574,6 +579,16 @@ def choice_screen(bot: str, section: str, field: str, current: object) -> Screen
         rows.append([(f"{mark}{opt}", cb(bot, "set", "opt", f"{section}.{field}", opt))])
     rows.append([("✗ Cancel", cb(bot, "set", "sec", section))])
     return Screen(caption="\n".join(parts), image=pick_artwork(bot), keyboard=keyboard(*rows))
+
+
+def list_add_screen(
+    bot: str,
+    section: str,
+    field: str,
+    *,
+    widget: str | None = None,
+) -> Screen:
+    return field_screen(bot, section, field, [], "list", widget=widget, mode="append")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

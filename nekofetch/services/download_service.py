@@ -622,8 +622,9 @@ class DownloadWorker:
             season = req.season or 1
             folder = _safe_folder(req)
         ext = src_path.suffix.lstrip(".") or "mkv"
+        resolution = _provided_resolution_bucket(src_path)
         dest = (self._c.env.storage_path / "work" / folder
-                / f"S{season:02d}E{int(episode):03d}_manual.{ext}")
+                / f"S{season:02d}E{int(episode):03d}_{resolution}_manual.{ext}")
         dest.parent.mkdir(parents=True, exist_ok=True)
         if src_path.resolve() != dest.resolve():
             src_path.replace(dest)
@@ -631,7 +632,7 @@ class DownloadWorker:
         async with session_scope(self._c.pg_sessionmaker) as session:
             session.add(MediaFile(
                 job_id=job_id, anime_doc_id=anime_doc_id, season=season,
-                episode=int(episode), resolution="source", audio=audio,
+                episode=int(episode), resolution=resolution, audio=audio,
                 local_path=str(dest), size_bytes=dest.stat().st_size,
                 checksum=hashlib.sha256(dest.read_bytes()).hexdigest(),
                 container=ext, verified=True,
@@ -1363,6 +1364,44 @@ class DownloadWorker:
 
 
 _WEBSITE_SOURCES = ("anikoto", "anizone", "kickassanime", "miruro")
+
+
+def _provided_resolution_bucket(path: Path) -> str:
+    """Classify a hand-provided episode into the release quality bucket.
+
+    The low slot accepts 360p, 480p, or 540p and is stored as 360p so a 480p
+    backup does not get re-encoded just to satisfy the label.
+    """
+    import re
+    import subprocess
+
+    text = path.name.lower()
+    match = re.search(r"(?<!\d)(2160|1440|1080|720|540|480|360)p?(?!\d)", text)
+    height = int(match.group(1)) if match else 0
+    if not height:
+        try:
+            probe = subprocess.run(  # noqa: ASYNC221 - rare manual fallback probe
+                [
+                    "ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=height", "-of", "default=nw=1:nk=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            height = int((probe.stdout or "").strip() or 0)
+        except Exception:  # noqa: BLE001
+            height = 0
+    if height in {360, 480, 540}:
+        return "360p"
+    if height >= 1000:
+        return "1080p"
+    if height >= 650:
+        return "720p"
+    if height > 0:
+        return f"{height}p"
+    return "source"
 
 
 def _alternate_source(source: str) -> str | None:

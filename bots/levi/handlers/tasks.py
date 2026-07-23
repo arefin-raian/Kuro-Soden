@@ -18,6 +18,8 @@ So the flow the user sees is:
 from __future__ import annotations
 
 import html
+import json
+from urllib.parse import quote
 
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
@@ -72,15 +74,26 @@ def _franchise_line(franchise: dict | None) -> str:
     return " · ".join(bits) if bits else "single entry"
 
 
+def _expected_episodes(franchise: dict | None) -> int | None:
+    fr = franchise or {}
+    for key in ("franchise_episodes", "episodes", "episode_count"):
+        val = fr.get(key)
+        try:
+            if val:
+                return int(val)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _request_card(req, *, offered: bool = False) -> str:
     title = (req.franchise_data or {}).get("title") or req.anime_title
-    header = "Optional download detail" if offered else "Download detail assigned"
+    header = "Optional download detail" if offered else "Download detail"
     body = (
         "Quiet-hour offer. Accept it if you're taking the cut now; reject it and the "
         "ladder moves without marking the request dead."
         if offered else
-        "Pick the source from this card. Report first if you want the terrain; source "
-        "selection drops straight into the downloader."
+        "Report first if you want the source readout. Begin now if the job is clear."
     )
     return (
         f"{V.ICON} <b>{header}</b>\n\n"
@@ -90,6 +103,88 @@ def _request_card(req, *, offered: bool = False) -> str:
         f"<b>Contents:</b> {_esc(_franchise_line(req.franchise_data))}\n"
         f"<b>Status:</b> {_esc(getattr(req.status, 'value', req.status))}</blockquote>\n\n"
         f"<i>{body}</i>"
+    )
+
+
+def _source_label(name: str) -> str:
+    return {
+        "kickassanime": "KickAss Anime",
+        "anikoto": "AniKoto",
+        "miruro": "Miruro",
+        "anizone": "AniZone",
+        "nyaa": "Nyaa",
+        "telegram": "Telegram",
+    }.get(name, name.title())
+
+
+def _coverage_line(cov, expected: int | None) -> str:
+    if not getattr(cov, "available", False):
+        note = getattr(cov, "note", "") or "no match"
+        return f"• <b>{_source_label(cov.source)}</b> — unavailable. <i>{_esc(note)}</i>"
+    total = int(getattr(cov, "total_episodes", 0) or 0)
+    sub = int(getattr(cov, "sub_episodes", 0) or 0)
+    dub = int(getattr(cov, "dub_episodes", 0) or 0)
+    dual = int(getattr(cov, "dual_episodes", 0) or 0)
+    if dual:
+        audio = f"{dual} dual"
+    elif sub and dub:
+        audio = f"{sub} sub · {dub} dub"
+    elif dub:
+        audio = f"{dub} dub"
+    else:
+        audio = f"{sub or total} sub"
+    coverage = f"{total} ep"
+    if expected:
+        coverage = f"{total}/{expected} ep"
+    if expected and total < expected:
+        verdict = "partial"
+    elif dual >= (expected or total or 1):
+        verdict = "dual-ready"
+    elif sub and dub:
+        verdict = "backup pair"
+    else:
+        verdict = "single track"
+    return f"• <b>{_source_label(cov.source)}</b> — {coverage} · {audio} · <i>{verdict}</i>"
+
+
+def _report_recommendation(report, torrent_rows: list[dict], expected: int | None) -> str:
+    coverages = list(getattr(report, "coverages", []) or [])
+    full_dual = [
+        c for c in coverages
+        if getattr(c, "available", False)
+        and int(getattr(c, "dual_episodes", 0) or 0) >= (expected or 1)
+    ]
+    if full_dual:
+        return (
+            f"{V.ICON} <b>Levi's call:</b> Use "
+            f"<b>{_source_label(full_dual[0].source)}</b>. Full dual-audio coverage is visible."
+        )
+    paired = [
+        c for c in coverages
+        if getattr(c, "available", False)
+        and int(getattr(c, "sub_episodes", 0) or 0)
+        and int(getattr(c, "dub_episodes", 0) or 0)
+        and (not expected or int(getattr(c, "total_episodes", 0) or 0) >= expected)
+    ]
+    if paired:
+        return (
+            f"{V.ICON} <b>Levi's call:</b> Website route is workable through "
+            f"<b>{_source_label(paired[0].source)}</b>. Sub and dub coverage both show up."
+        )
+    top_seeders = int(torrent_rows[0].get("seeders", 0)) if torrent_rows else 0
+    if top_seeders >= 10:
+        return (
+            f"{V.ICON} <b>Levi's call:</b> Use <b>Torrent</b>. Websites do not show "
+            f"a clean dual backup, and the top Nyaa release has {top_seeders} seeders."
+        )
+    if torrent_rows:
+        return (
+            f"{V.ICON} <b>Levi's call:</b> Torrent is weak here. Top seeders: "
+            f"{top_seeders}. Pick the cleanest website or take Telegram manual backup."
+        )
+    return (
+        f"{V.ICON} <b>Levi's call:</b> No torrent readout. "
+        "Use website first, Telegram if it fails."
     )
 
 
@@ -179,8 +274,207 @@ def register(client: Client, container: Container) -> None:
         franchise = req.franchise_data or {}
         title = franchise.get("title") or req.anime_title
         art_key = key_for_franchise(franchise, title=title)
-        await ensure_anime_art(art_key, franchise=franchise)
+        await ensure_anime_art(art_key, tmdb=container.tmdb, title=title, franchise=franchise)
         return next_anime_art(art_key, fallback_bot="levi")
+
+    async def _nyaa_rows(title: str) -> list[dict]:
+        source = container.sources.get("nyaa")
+        if source is None:
+            return []
+        try:
+            stubs = await source.search(title)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("levi.nyaa_report.failed", title=title, error=str(exc))
+            return []
+        rows: list[dict] = []
+        for stub in stubs[:8]:
+            try:
+                info = json.loads(stub.source_ref)
+            except (TypeError, json.JSONDecodeError):
+                info = {}
+            rows.append({
+                "title": getattr(stub, "title", "") or info.get("title", "release"),
+                "seeders": int(info.get("seeders") or 0),
+                "size": info.get("size_text") or "",
+                "dual": bool(info.get("dual_audio")),
+            })
+        return rows
+
+    async def _build_report_caption(req) -> str:
+        from nekofetch.services.website_report import build_website_report
+
+        franchise = req.franchise_data or {}
+        title = franchise.get("title") or req.anime_title
+        expected = _expected_episodes(franchise)
+        report = await build_website_report(
+            container,
+            title=title,
+            franchise=franchise,
+            skip_anizone=True,
+        )
+        torrents = await _nyaa_rows(title)
+        search_url = f"https://anizone.to/anime?search={quote(title)}"
+
+        lines = [
+            f"{V.ICON} <b>Source Report</b>",
+            "",
+            f"<blockquote><b>{_esc(title)}</b>",
+            f"<code>{_esc(req.code)}</code>",
+            (
+                f"<b>Expected:</b> {_esc(expected or 'unknown')} episode(s) · "
+                f"{_esc(_franchise_line(franchise))}</blockquote>"
+            ),
+            "",
+            "<b>Websites</b>",
+        ]
+        lines.extend(_coverage_line(c, expected) for c in report.coverages)
+        lines += [
+            (
+                f"• <b>AniZone</b> — manual inspection. "
+                f"<a href=\"{_esc(search_url)}\">Click here to view search results</a>; "
+                "the structure is inconsistent, so a human has to verify the right entry."
+            ),
+            "",
+            "<b>Torrent · Nyaa</b>",
+        ]
+        if torrents:
+            lines.append(f"Found <b>{len(torrents)}</b> ranked release(s). Top seeders:")
+            for row in torrents[:5]:
+                badge = "dual" if row["dual"] else "single"
+                lines.append(
+                    f"• <b>{row['seeders']}S</b> · {_esc(row['size'])} · "
+                    f"{badge} · {_esc(row['title'])[:90]}"
+                )
+        else:
+            lines.append("No ranked Nyaa release came back.")
+        lines += [
+            "",
+            "<b>Telegram Manual</b>",
+            "Use it when a website episode is dirty or missing. Send files low to high "
+            "(360/480 bucket, 720, 1080). If only 1080 arrives, processing derives the "
+            "missing lower qualities; 480/540 can satisfy the 360 bucket without re-encode.",
+            "",
+            _report_recommendation(report, torrents, expected),
+        ]
+        return "\n".join(lines)
+
+    async def _render_source_picker(
+        chat_id: int,
+        code: str,
+        old_msg: Message | None = None,
+    ) -> None:
+        req = await _load_request(code)
+        if req is None:
+            await _render_tasks(chat_id, 0, old_msg=old_msg)
+            return
+        title = (req.franchise_data or {}).get("title") or req.anime_title
+        caption = (
+            f"{V.ICON} <b>Pick the route.</b>\n\n"
+            f"<blockquote><b>{_esc(title)}</b>\n<code>{_esc(code)}</code></blockquote>\n\n"
+            "Telegram is manual intake. Website lets you pick KickAss, AniKoto, Miruro, "
+            "or AniZone. Torrent opens the Nyaa release board."
+        )
+        kb = keyboard(
+            [(V.BTN_SRC_TELEGRAM, cb("levi", "telegram", code))],
+            [("🌐 Website", cb("levi", "website", code))],
+            [(V.BTN_SRC_TORRENT, cb("staff", "rsource", code, "torrent"))],
+        )
+        await send_screen(
+            client,
+            chat_id,
+            Screen(caption=caption, image=await _anime_image(req), keyboard=kb),
+            old_msg=old_msg,
+        )
+
+    async def _render_website_picker(
+        chat_id: int,
+        code: str,
+        old_msg: Message | None = None,
+    ) -> None:
+        req = await _load_request(code)
+        if req is None:
+            await _render_tasks(chat_id, 0, old_msg=old_msg)
+            return
+        title = (req.franchise_data or {}).get("title") or req.anime_title
+        caption = (
+            f"{V.ICON} <b>Website source.</b>\n\n"
+            f"<blockquote><b>{_esc(title)}</b>\n<code>{_esc(code)}</code></blockquote>\n\n"
+            "Pick the primary source. Levi keeps the other compatible websites behind it "
+            "as fallback for missing or dirty episodes."
+        )
+        kb = keyboard(
+            [(V.BTN_SRC_KICKASS,
+              cb("staff", "rsiteprio", code, "kickassanime", "miruro", "anikoto")),
+             (V.BTN_SRC_ANIKOTO,
+              cb("staff", "rsiteprio", code, "anikoto", "miruro", "kickassanime"))],
+            [("🅼 Miruro",
+              cb("staff", "rsiteprio", code, "miruro", "anikoto", "kickassanime")),
+             (V.BTN_SRC_ANIZONE, cb("levi", "anizone", code))],
+            [(V.BTN_BACK, cb("levi", "sources", code))],
+        )
+        await send_screen(
+            client,
+            chat_id,
+            Screen(caption=caption, image=await _anime_image(req), keyboard=kb),
+            old_msg=old_msg,
+        )
+
+    async def _render_anizone_card(
+        chat_id: int,
+        code: str,
+        old_msg: Message | None = None,
+    ) -> None:
+        req = await _load_request(code)
+        if req is None:
+            await _render_tasks(chat_id, 0, old_msg=old_msg)
+            return
+        title = (req.franchise_data or {}).get("title") or req.anime_title
+        search_url = f"https://anizone.to/anime?search={quote(title)}"
+        caption = (
+            f"{V.ICON} <b>AniZone needs hands.</b>\n\n"
+            f"<blockquote><b>{_esc(title)}</b>\n<code>{_esc(code)}</code></blockquote>\n\n"
+            f"<a href=\"{_esc(search_url)}\">Click here to view the search results</a>. "
+            "Try title variations, open the correct entry, then use the mapping prompt. "
+            "AniZone does not follow a clean pattern, so the bot waits for your verified slug."
+        )
+        kb = keyboard(
+            [("Map AniZone Entry", cb("staff", "rsource", code, "website"))],
+            [(V.BTN_BACK, cb("levi", "website", code))],
+        )
+        await send_screen(
+            client,
+            chat_id,
+            Screen(caption=caption, image=await _anime_image(req), keyboard=kb),
+            old_msg=old_msg,
+        )
+
+    async def _render_telegram_card(
+        chat_id: int,
+        code: str,
+        old_msg: Message | None = None,
+    ) -> None:
+        req = await _load_request(code)
+        if req is None:
+            await _render_tasks(chat_id, 0, old_msg=old_msg)
+            return
+        title = (req.franchise_data or {}).get("title") or req.anime_title
+        caption = (
+            f"{V.ICON} <b>Telegram manual.</b>\n\n"
+            f"<blockquote><b>{_esc(title)}</b>\n<code>{_esc(code)}</code></blockquote>\n\n"
+            f"{V.TELEGRAM_NOTE}\n\n"
+            "Send packs low to high. The 360 slot accepts 360, 480, or 540 without "
+            "forcing a second encode."
+        )
+        kb = keyboard(
+            [("Begin Manual Upload", cb("staff", "rtgmode", code, "manual"))],
+            [(V.BTN_BACK, cb("levi", "sources", code))],
+        )
+        await send_screen(
+            client,
+            chat_id,
+            Screen(caption=caption, image=await _anime_image(req), keyboard=kb),
+            old_msg=old_msg,
+        )
 
     async def _render_detail(
         chat_id: int,
@@ -207,11 +501,8 @@ def register(client: Client, container: Container) -> None:
             )
         else:
             kb = keyboard(
-                [(V.BTN_REPORT, cb("staff", "rsource", code, "website"))],
-                [(V.BTN_SRC_TELEGRAM, cb("staff", "rsource", code, "telegram"))],
-                [(V.BTN_SRC_TORRENT, cb("staff", "rsource", code, "torrent"))],
-                [("I can't take this", cb("levi", "decline", code))],
-                [("⇐ Tasks", cb("levi", "tasks"))],
+                [(V.BTN_REPORT, cb("levi", "report", code))],
+                [("▶ Begin Now", cb("levi", "sources", code))],
             )
         screen = Screen(
             caption=_request_card(req, offered=offered),
@@ -245,6 +536,63 @@ def register(client: Client, container: Container) -> None:
         offered = await _has_pending_offer(q.from_user.id, code)
         await q.answer()
         await _render_detail(q.message.chat.id, code, old_msg=q.message, offered=offered)
+
+    @client.on_callback_query(filters.regex(r"^levi\|report\|"))
+    async def _report_cb(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        code = (q.data or "").split("|", 2)[2]
+        req = await _load_request(code)
+        if req is None:
+            await q.answer("Request not found.", show_alert=True)
+            return
+        await q.answer("Reading sources.")
+        screen = Screen(
+            caption=await _build_report_caption(req),
+            image=await _anime_image(req),
+            keyboard=keyboard(
+                [("Pick Source", cb("levi", "sources", code))],
+                [(V.BTN_BACK, cb("levi", "task", code))],
+            ),
+        )
+        await send_screen(client, q.message.chat.id, screen, old_msg=q.message)
+
+    @client.on_callback_query(filters.regex(r"^levi\|sources\|"))
+    async def _sources_cb(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        code = (q.data or "").split("|", 2)[2]
+        await q.answer()
+        await _render_source_picker(q.message.chat.id, code, old_msg=q.message)
+
+    @client.on_callback_query(filters.regex(r"^levi\|website\|"))
+    async def _website_cb(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        code = (q.data or "").split("|", 2)[2]
+        await q.answer()
+        await _render_website_picker(q.message.chat.id, code, old_msg=q.message)
+
+    @client.on_callback_query(filters.regex(r"^levi\|telegram\|"))
+    async def _telegram_cb(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        code = (q.data or "").split("|", 2)[2]
+        await q.answer()
+        await _render_telegram_card(q.message.chat.id, code, old_msg=q.message)
+
+    @client.on_callback_query(filters.regex(r"^levi\|anizone\|"))
+    async def _anizone_cb(_: Client, q: CallbackQuery) -> None:
+        if q.message is None:
+            await q.answer()
+            return
+        code = (q.data or "").split("|", 2)[2]
+        await q.answer()
+        await _render_anizone_card(q.message.chat.id, code, old_msg=q.message)
 
     @client.on_callback_query(filters.regex(r"^levi\|offer\|"))
     async def _offer_cb(_: Client, q: CallbackQuery) -> None:

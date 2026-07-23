@@ -77,11 +77,11 @@ def pick_artwork(bot_name: str | None = None) -> Path | None:
 
 
 class _AnimeArtRotator:
-    """Rotates through one anime's backdrop URLs, avoiding back-to-back repeats."""
+    """Rotates through one anime's backdrop URLs in a stable circle."""
 
     def __init__(self) -> None:
         self._urls: list[str] = []
-        self._last: str | None = None
+        self._index = 0
 
     @property
     def seeded(self) -> bool:
@@ -95,12 +95,8 @@ class _AnimeArtRotator:
     def next(self) -> str | None:
         if not self._urls:
             return None
-        if len(self._urls) == 1:
-            self._last = self._urls[0]
-            return self._urls[0]
-        choices = [u for u in self._urls if u != self._last]
-        choice = random.choice(choices)
-        self._last = choice
+        choice = self._urls[self._index % len(self._urls)]
+        self._index += 1
         return choice
 
 

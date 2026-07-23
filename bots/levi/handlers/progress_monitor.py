@@ -287,11 +287,11 @@ def register(client: Client, container: Container) -> None:
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton(
                     "🌐 Website sources",
-                    callback_data=cb("staff", "rsource", code, "website"),
+                    callback_data=cb("levi", "website", code),
                 )],
                 [InlineKeyboardButton(
                     "✈️ Telegram manual",
-                    callback_data=cb("staff", "rsource", code, "telegram"),
+                    callback_data=cb("levi", "telegram", code),
                 )],
                 [InlineKeyboardButton(
                     "🧲 Torrent",
