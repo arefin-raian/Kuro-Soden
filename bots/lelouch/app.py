@@ -32,6 +32,7 @@ LELOUCH_COMMANDS = [
     BotCommand("help", "How requests work"),
     BotCommand("admin", "Command panel (staff only)"),
     BotCommand("settings", "Configure the request bot"),
+    BotCommand("cleardatabase", "Clear operational database data"),
 ]
 
 log = get_logger(__name__)
@@ -61,8 +62,6 @@ def build_lelouch(container: Container, token: str) -> Client:
     register_all(client, container)
 
     # ── Shared imports for the dispatcher ─────────────────────────────────────
-    from nekofetch.domain.enums import Role
-    from nekofetch.ui.screens import send_screen
     from kurosoden.bots.lelouch import screens as S
     from kurosoden.shared import lelouch_voice as V
     from kurosoden.shared.request_gate import (
@@ -71,6 +70,8 @@ def build_lelouch(container: Container, token: str) -> Client:
         set_requests_open,
     )
     from kurosoden.shared.work_service import WorkService
+    from nekofetch.domain.enums import Role
+    from nekofetch.ui.screens import send_screen
 
     # ── Small role/state helpers ──────────────────────────────────────────────
     def _role(obj) -> Role:
@@ -181,7 +182,7 @@ def build_lelouch(container: Container, token: str) -> Client:
 
         # ── Admin management is OWNER-ONLY (pause requests, ranks, hours) ──
         owner = _is_owner(q)
-        _owner_only = {"admin", "reqtoggle", "manage", "avail", "hours"}
+        _owner_only = {"admin", "reqtoggle", "manage", "avail", "hours", "dbclear"}
         if action in _owner_only and not owner:
             await q.answer("🔒 That's the owner's console.", show_alert=True)
             return
@@ -224,6 +225,19 @@ def build_lelouch(container: Container, token: str) -> Client:
         if action == "hours":
             from kurosoden.bots.lelouch.handlers.management import render_hours
             await render_hours(client, container, chat_id, q.message)
+            await q.answer()
+            return
+
+        if action == "dbclear":
+            if arg == "confirm":
+                await _clear_database(q.message)
+                await q.answer("Database cleared.", show_alert=True)
+                return
+            if arg == "cancel":
+                await _render_admin(chat_id, old_msg=q.message)
+                await q.answer("Kept intact.")
+                return
+            await _render_clear_database_confirm(chat_id, q.message)
             await q.answer()
             return
 
@@ -291,8 +305,8 @@ def build_lelouch(container: Container, token: str) -> Client:
     # ── /start — theatrical welcome, our own Lelouch home card ────────────────
     @client.on_message(filters.command("start"))
     async def _start(_: Client, message: Message) -> None:
-        from kurosoden.shared.ui_helpers import send_rich_welcome
         from kurosoden.shared.command_menu import apply_for_user
+        from kurosoden.shared.ui_helpers import send_rich_welcome
 
         # Tailor the ☰ command menu to who's opening the bot.
         if message.from_user:
@@ -382,6 +396,66 @@ def build_lelouch(container: Container, token: str) -> Client:
                                 parse_mode=ParseMode.HTML)
             return
         await _render_admin(message.chat.id)
+
+    async def _render_clear_database_confirm(
+        chat_id: int,
+        old_msg: Message | None = None,
+    ) -> None:
+        from nekofetch.ui.components import cb
+        from nekofetch.ui.screens import card, send_screen
+
+        caption = (
+            f"{V.ICON} <b>Clear Database</b>\n\n"
+            "<blockquote>"
+            "This removes operational state: requests, jobs, files, bots, posts, "
+            "work items, assignments, anime metadata, artwork, templates, source "
+            "cache, Mongo runtime data, and Redis runtime keys.\n\n"
+            "<b>Preserved:</b> users, owner/admin user rows, admin profiles, "
+            "availability, timezone, slots, and onboarding/profile information."
+            "</blockquote>\n\n"
+            "<i>This is irreversible. Confirm only when the board needs a full reset.</i>"
+        )
+        screen = card(
+            caption,
+            bot_name="lelouch",
+            buttons=[
+                [(V.BTN_CLEAR_DATABASE_CONFIRM, cb("lelouch", "dbclear", "confirm"))],
+                [(V.BTN_CLEAR_DATABASE_CANCEL, cb("lelouch", "dbclear", "cancel"))],
+            ],
+        )
+        await send_screen(client, chat_id, screen, old_msg=old_msg)
+
+    async def _clear_database(message: Message) -> None:
+        from kurosoden.shared.database_clear import DatabaseClearService
+        from nekofetch.ui.components import cb
+        from nekofetch.ui.screens import card, send_screen
+
+        result = await DatabaseClearService(container).clear_operational_state()
+        caption = (
+            f"{V.ICON} <b>Database cleared.</b>\n\n"
+            f"<blockquote>"
+            f"<b>Postgres:</b> {result.postgres_truncated} table(s) truncated\n"
+            f"<b>Kept:</b> {', '.join(result.postgres_kept)}\n"
+            f"<b>Mongo:</b> {result.mongo_cleared} collection(s) emptied\n"
+            f"<b>Redis:</b> {'flushed' if result.redis_flushed else 'not configured'}"
+            f"</blockquote>\n\n"
+            "<i>Users and admin profiles stayed intact. The board is clean.</i>"
+        )
+        await send_screen(
+            client,
+            message.chat.id,
+            card(caption, bot_name="lelouch",
+                 buttons=[[(V.BTN_BACK_ADMIN, cb("lelouch", "admin"))]]),
+            old_msg=message,
+        )
+
+    @client.on_message(filters.command("cleardatabase"))
+    async def _clear_database_cmd(_: Client, message: Message) -> None:
+        if not _is_owner(message):
+            await message.reply("🔒 <b>That command belongs to the owner.</b>",
+                                parse_mode=ParseMode.HTML)
+            return
+        await _render_clear_database_confirm(message.chat.id)
 
     # ── /settings ── owned by the shared human-friendly settings engine
     # (register_settings in handlers/__init__.py), under lelouch|set|….

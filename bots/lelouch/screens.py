@@ -10,9 +10,9 @@ request handler), and a callback keyboard.
 
 from __future__ import annotations
 
+from kurosoden.shared import lelouch_voice as V
 from nekofetch.ui.components import cb
 from nekofetch.ui.screens import Screen, card
-from kurosoden.shared import lelouch_voice as V
 
 BOT = "lelouch"
 
@@ -59,6 +59,7 @@ def admin_panel(*, mode: str, requests_open: bool, total: int,
          (V.BTN_AVAIL, cb(BOT, "avail"))],
         [(V.BTN_HOURS, cb(BOT, "hours")),
          (V.BTN_SETTINGS, cb(BOT, "settings"))],
+        [(V.BTN_CLEAR_DATABASE, cb(BOT, "dbclear"))],
         [(V.BTN_HOME, cb(BOT, "home"))],
     ]
     return card(caption, bot_name=BOT, buttons=rows)

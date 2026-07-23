@@ -22,7 +22,6 @@ from pyrogram.handlers import CallbackQueryHandler
 from pyrogram.handlers.conversation_handler import ConversationHandler
 from pyrogram.types import CallbackQuery
 
-
 # ── Minimal fake container (only what registration touches) ─────────────────────
 
 class _Sec:
@@ -99,6 +98,7 @@ EMITTED_CALLBACKS = [
     "lelouch|home", "lelouch|admin", "lelouch|settings", "lelouch|set|source",
     "lelouch|reqtoggle", "lelouch|queue", "lelouch|manage",
     "lelouch|avail", "lelouch|hours", "lelouch|pending",
+    "lelouch|dbclear", "lelouch|dbclear|confirm", "lelouch|dbclear|cancel",
     # admin self-service profile
     "lelouch|profile", "lelouch|pr|home", "lelouch|pr|country",
     "lelouch|pr|hours", "lelouch|pr|slots|weekday", "lelouch|pr|slots|weekend",

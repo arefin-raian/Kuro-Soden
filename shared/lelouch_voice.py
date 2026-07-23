@@ -76,7 +76,7 @@ REQUESTS_PAUSED = (
 
 def limit_reached(active_title: str | None = None) -> str:
     line = (
-        f"You already hold a piece in play"
+        "You already hold a piece in play"
         + (f" — <b>{esc(active_title)}</b>" if active_title else "")
         + ". One move at a time; that's how a strategist wins."
     )
@@ -486,6 +486,9 @@ BTN_PENDING = "📋 Pending Requests"
 BTN_MANAGE = "👥 Manage Ranks"
 BTN_AVAIL = "📊 Availability"
 BTN_HOURS = "🕰 Working Hours"
+BTN_CLEAR_DATABASE = "🧨 Clear Database"
+BTN_CLEAR_DATABASE_CONFIRM = "Yes — clear operational data"
+BTN_CLEAR_DATABASE_CANCEL = "No — keep it"
 
 # ── Management controls ──────────────────────────────────────────────────────
 BTN_ADD_ADMIN = "➕ Muster a rank"

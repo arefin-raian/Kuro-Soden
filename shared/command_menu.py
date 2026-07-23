@@ -41,6 +41,7 @@ _LELOUCH_STAFF = _LELOUCH_USER + [_c("batch", "Batch work (staff)")]
 _LELOUCH_OWNER = _LELOUCH_STAFF + [
     _c("admin", "Command console (owner)"),
     _c("settings", "Configure the request bot (owner)"),
+    _c("cleardatabase", "Clear operational database data (owner)"),
 ]
 
 # ── Levi / Senku / Gojo — staff tools, no user commands at all ────────────────
